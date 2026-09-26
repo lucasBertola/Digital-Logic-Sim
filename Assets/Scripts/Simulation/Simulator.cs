@@ -361,7 +361,21 @@ namespace DLS.Simulation
 					SimPin outputPin = chip.OutputPins[0];
 
 					if (PinState.FirstBitHigh(enablePin.State)) outputPin.State = dataPin.State;
-					else PinState.SetAllDisconnected(ref outputPin.State);
+					else
+					{
+						// Disabled: the output floats (tristate flag set, value flipping every step)...
+						PinState.SetAllDisconnected(ref outputPin.State);
+						// ...unless the net it sits on is driven by something else: a floating output takes the
+						// voltage of its net, so it (and everything wired to it) reads that value.
+						foreach (SimPin target in outputPin.ConnectedTargetPins)
+						{
+							ushort targetTri = PinState.GetTristateFlags(target.State);
+							if (targetTri == ushort.MaxValue) continue; // that pin is floating too
+							ushort bits = (ushort)((PinState.GetBitStates(target.State) & ~targetTri) | (PinState.GetBitStates(outputPin.State) & targetTri));
+							PinState.Set(ref outputPin.State, bits, ushort.MaxValue);
+							break;
+						}
+					}
 
 					break;
 				}
