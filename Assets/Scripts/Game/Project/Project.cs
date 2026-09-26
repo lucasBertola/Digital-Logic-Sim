@@ -251,9 +251,7 @@ namespace DLS.Game
 			if (previous == null || editModeChip == null) return;
 			if (editModeChip.LastSavedDescription != null || editModeChip.Elements.Count > 0) return;
 
-			suppressUndoRecording = true; // the blank chip never existed as far as the undo timeline is concerned
 			ActivateEditChip(previous);
-			suppressUndoRecording = false;
 		}
 
 		public void LoadDevChipOrCreateNewIfDoesntExist(string chipName)
@@ -282,12 +280,10 @@ namespace DLS.Game
 		// unsaved edits — in itself and (via SimOverride) in its sub-chips.
 		void ActivateEditChip(DevChipInstance devChip)
 		{
-			// Record the chip switch on the GLOBAL undo timeline (Ctrl+Z can step back across tabs).
-			if (editModeChip != null && editModeChip != devChip && !suppressUndoRecording)
-			{
-				globalUndo.Add(new UndoStep { isSwitch = true, from = editModeChip, to = devChip });
-				globalRedo.Clear();
-			}
+			// A fresh controller has an empty selection: elements still flagged as selected from a previous
+			// visit would be skipped by the renderer (they are drawn from the selection list), i.e. invisible.
+			ClearSelectionFlags(editModeChip);
+			ClearSelectionFlags(devChip);
 
 			controller = new ChipInteractionController(this);
 			editModeChip = devChip;
@@ -331,60 +327,20 @@ namespace DLS.Game
 			}
 		}
 
-		// ---- Global undo/redo across chip switches ----
-		class UndoStep { public bool isSwitch; public DevChipInstance chip; public DevChipInstance from; public DevChipInstance to; }
-		readonly List<UndoStep> globalUndo = new();
-		readonly List<UndoStep> globalRedo = new();
-		bool suppressUndoRecording;
+		// ---- Undo / redo: always on the chip being edited. Ctrl+Z never changes chip (the mouse back /
+		// forward buttons are the only way to move through the chip history).
+		public void GlobalUndo() => editModeChip?.UndoController.TryUndo();
+		public void GlobalRedo() => editModeChip?.UndoController.TryRedo();
 
-		// Called by UndoController each time an edit is recorded, to keep the global timeline in order.
-		public void NotifyEditRecorded(DevChipInstance chip)
+		static void ClearSelectionFlags(DevChipInstance devChip)
 		{
-			if (suppressUndoRecording) return;
-			globalUndo.Add(new UndoStep { isSwitch = false, chip = chip });
-			globalRedo.Clear();
-		}
-
-		public void GlobalUndo()
-		{
-			if (globalUndo.Count == 0) { UnityEngine.Debug.Log("Undo: global timeline empty"); return; }
-			UndoStep e = globalUndo[^1];
-			globalUndo.RemoveAt(globalUndo.Count - 1);
-			suppressUndoRecording = true;
-			if (e.isSwitch)
-			{
-				if (e.from != null) ActivateEditChip(e.from);
-			}
-			else
-			{
-				if (editModeChip != e.chip && e.chip != null) ActivateEditChip(e.chip);
-				e.chip?.UndoController.TryUndo();
-			}
-			suppressUndoRecording = false;
-			globalRedo.Add(e);
-		}
-
-		public void GlobalRedo()
-		{
-			if (globalRedo.Count == 0) return;
-			UndoStep e = globalRedo[^1];
-			globalRedo.RemoveAt(globalRedo.Count - 1);
-			suppressUndoRecording = true;
-			if (e.isSwitch)
-			{
-				if (e.to != null) ActivateEditChip(e.to);
-			}
-			else
-			{
-				if (editModeChip != e.chip && e.chip != null) ActivateEditChip(e.chip);
-				e.chip?.UndoController.TryRedo();
-			}
-			suppressUndoRecording = false;
-			globalUndo.Add(e);
+			if (devChip == null) return;
+			foreach (IMoveable element in devChip.Elements) element.IsSelected = false;
 		}
 
 		void SetNewActiveDevChip(DevChipInstance devChip)
 		{
+			ClearSelectionFlags(editModeChip);
 			editModeChip = devChip;
 			chipViewStack.Clear();
 			chipViewStack.Push(devChip);
