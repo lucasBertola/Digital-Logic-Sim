@@ -248,7 +248,7 @@ namespace DLS.Game
 
         const string QuickModeNote = "[COMMANDE RAPIDE, arriere-plan] L'utilisateur a tape ceci dans la barre de commande : il ne lira PAS ta reponse (aucun panneau ouvert). " +
                                      "N'ecris AUCUN texte : pas de recit, pas d'explication, pas de question, pas de bilan. Execute la demande avec les outils, teste comme " +
-                                     "d'habitude, corrige si besoin, puis ARRETE-TOI simplement (tour sans message). Si la demande est ambigue, prends l'interpretation la plus probable.\n\n";
+                                     "d'habitude, corrige si besoin, puis ARRETE-TOI simplement (tour sans message). Si la demande est ambigue, prends l'interpretation la plus probable, et surtout la plus ETROITE : ne fais rien qui ne soit pas explicitement demande.\n\n";
 
         static bool quickTurn;
         static bool quickTurnFinished;
@@ -826,6 +826,8 @@ A chaque message, l'utilisateur te joint un bloc ""[Contexte Digital Logic Sim]"
 Protocole incremental : le PREMIER message contient tous les circuits ; les suivants ne renvoient QUE les circuits modifies, precedes de ""MODIFICATION, nouvelle forme :"".
 
 Le cablage fourni est la SOURCE DE VERITE ABSOLUE de ce qui est reellement connecte : ne redemande JAMAIS a l'utilisateur de decrire le cablage. Mais l'utilisateur a pu faire des erreurs de branchement : ce cablage decrit CE QUI EST connecte, pas forcement ce qui est CORRECT. C'est a toi de reperer les erreurs.
+
+PERIMETRE (regle absolue) : tu fais EXACTEMENT ce qui est demande, RIEN DE PLUS. ""Relie les reset"" = tu relies les reset, et tu ne touches a aucun autre fil, composant ou nom, meme s'il te parait evident que les data devraient l'etre aussi, meme si tu vois une erreur ailleurs, meme ""tant qu'a faire"". Pas d'initiative, pas de correction non demandee, pas de reorganisation, pas de nettoyage. Si tu remarques autre chose (un branchement manquant, une erreur), tu le SIGNALES en une ligne a la fin et tu attends que l'utilisateur te le demande. Avant chaque appel d'outil qui modifie le circuit, verifie que la modification est couverte par la demande ; sinon ne la fais pas. Une demande vague (""corrige"", ""finis"") ne t'autorise a agir que sur ce que la demande vise clairement.
 
 OUTILS (ils fonctionnent par LOT) : view_module, create_module, delete_module(name), add_inputs(names[]), add_outputs(names[]), add_components(components[]), remove_elements(elements[]), connect(links[{from,to}]), disconnect(links[]), rename_pins(renames[{current,new}]), bind_keys(binds[{component,key}]), set_layout(items[{element,col,row}]), truth_table, test_sequence(steps[]). Regles imperatives :
 - Chaque action porte sur un MODULE precis : parametre ""module"" obligatoire.
