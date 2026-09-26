@@ -32,7 +32,7 @@ what the fork adds on top.
   - **IN/OUT** — the IN/OUT collection popup at the cursor (same popup as the bottom bar, shift-click to
     place several at once; it stays until you click elsewhere).
   - **Clean Up** — automatic layout: components in columns by signal depth, each column ordered to
-    minimise wire crossings, pins sorted naturally (A2 before A10), grid snapping, and wires routed
+    minimise wire crossings, pins sorted by name with the highest number on top (D4 above D3), grid snapping, and wires routed
     with as few bends as possible (a pin feeding many chips gets a shared vertical trunk instead of a
     fan of diagonals). Wires may cross but never run on top of each other. Ctrl+Z restores the
     previous layout exactly.

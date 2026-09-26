@@ -111,14 +111,15 @@ namespace DLS.Game
             float GapAfter(int c) => Mathf.Max(HorizontalGap, Lead * 2f + channelCount[c] * TrackStep + 0.5f);
 
             // ---- 3) Initial order of each column ----
-            // Dev-pin columns (inputs / outputs) are ordered alphabetically (natural order, so A1..A10 sort
-            // correctly); other columns start from their current top-to-bottom order.
+            // Dev-pin columns (inputs / outputs) are ordered by name: groups alphabetically (A.. before D..),
+            // and inside a numbered group the biggest number on top (D4, D3, D2, D1, D0 — the way a bus is
+            // read); other columns start from their current top-to-bottom order.
             var placedCols = new Dictionary<int, List<IMoveable>>();
             foreach (int c in sortedCols)
             {
                 var elems = new List<IMoveable>(columns[c]);
                 if (elems.TrueForAll(e => e is DevPinInstance))
-                    elems.Sort((x, y) => NaturalCompare(((DevPinInstance)x).Pin.Name, ((DevPinInstance)y).Pin.Name));
+                    elems.Sort((x, y) => PinOrderCompare(((DevPinInstance)x).Pin.Name, ((DevPinInstance)y).Pin.Name));
                 else
                     elems.Sort((x, y) => y.Position.y.CompareTo(x.Position.y));
                 placedCols[c] = elems;
@@ -502,6 +503,26 @@ namespace DLS.Game
             if (p < 0f) { if (r > t1) return false; if (r > t0) t0 = r; }
             else { if (r < t0) return false; if (r < t1) t1 = r; }
             return true;
+        }
+
+        // Order of dev pins in a column: by text part (natural, case-insensitive), and within one numbered
+        // group the biggest number FIRST (= highest on screen): D4, D3, D2, D1, D0.
+        static int PinOrderCompare(string a, string b)
+        {
+            SplitTrailingNumber(a, out string pa, out long na);
+            SplitTrailingNumber(b, out string pb, out long nb);
+            if (na >= 0 && nb >= 0 && string.Equals(pa, pb, System.StringComparison.OrdinalIgnoreCase)) return nb.CompareTo(na);
+            return NaturalCompare(a, b);
+        }
+
+        // "D12" -> ("D", 12); "CLK" -> ("CLK", -1)
+        static void SplitTrailingNumber(string name, out string prefix, out long number)
+        {
+            name ??= "";
+            int i = name.Length;
+            while (i > 0 && char.IsDigit(name[i - 1])) i--;
+            prefix = name.Substring(0, i);
+            number = i < name.Length && long.TryParse(name.Substring(i), out long n) ? n : -1;
         }
 
         // Natural (human) string comparison: "A2" < "A10", case-insensitive.
