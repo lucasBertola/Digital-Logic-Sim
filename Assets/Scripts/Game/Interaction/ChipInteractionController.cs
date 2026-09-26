@@ -443,7 +443,7 @@ namespace DLS.Game
 
 			// Right-clicking one of the selected elements keeps the selection (so the context menu can act on
 			// all of them, e.g. rename several pins at once); anywhere else clears it.
-			IInteractable hovered = InteractionState.ElementUnderMouse;
+			IInteractable hovered = InteractionState.ElementForContextMenu;
 			IMoveable hoveredElement = hovered as IMoveable ?? (hovered as PinInstance)?.parent;
 			if (hoveredElement == null || !hoveredElement.IsSelected) ClearSelection();
 		}

@@ -185,7 +185,7 @@ namespace DLS.Graphics
 			if (InputHelper.IsMouseDownThisFrame(MouseButton.Right) && !KeyboardShortcuts.CameraActionKeyHeld && !InteractionState.MouseIsOverUI)
 			{
 				bool inCustomizeMenu = UIDrawer.ActiveMenu == UIDrawer.MenuType.ChipCustomization;
-				IInteractable hoverElement = InteractionState.ElementUnderMouse;
+				IInteractable hoverElement = InteractionState.ElementForContextMenu;
 
 				bool openSubChipContextMenu = hoverElement is SubChipInstance && !inCustomizeMenu;
 				bool openDevPinContextMenu = (hoverElement is PinInstance pin && pin.parent is DevPinInstance) || hoverElement is DevPinInstance;

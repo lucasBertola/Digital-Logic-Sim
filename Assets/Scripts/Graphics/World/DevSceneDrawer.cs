@@ -676,6 +676,7 @@ namespace DLS.Graphics
 			// Toggle state on mouse down
 			bool mouseOverStateIndicator = devPin.PointIsInStateIndicatorBounds(InputHelper.MousePosWorld);
 			bool interactingWithStateDisplay = mouseOverStateIndicator && devPin.IsInputPin && controller.CanInteractWithPinStateDisplay;
+			if (mouseOverStateIndicator) InteractionState.NotifyContextElementUnderMouse(devPin); // right-click here = right-click on the pin
 			Color stateCol = devPin.Pin.GetStateCol(0, interactingWithStateDisplay, canEditViewedChip);
 
 			// Highlight on hover and toggle on mouse down
@@ -720,6 +721,7 @@ namespace DLS.Graphics
 			// If mouse over state grid, register it so that player can't draw selection box here (annoying when trying to toggle states)
 			// (individual toggles are tested for mouse input below, but this is a catch-all for when mouse is in gap in between)
 			if (mouseOverStateGrid && isInteractable) InteractionState.NotifyUnspecifiedElementUnderMouse();
+			if (mouseOverStateGrid) InteractionState.NotifyContextElementUnderMouse(devPin); // right-click here = right-click on the pin
 
 			for (int y = 0; y < stateGridDim.y; y++)
 			{
