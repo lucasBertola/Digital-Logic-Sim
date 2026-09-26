@@ -146,7 +146,8 @@ namespace DLS.Graphics
 		static readonly MenuEntry[] entries_emptySpace =
 		{
 			new(Format("IN/OUT"), OpenInOutPopup, CanEditCurrentChip),
-			new(Format("CLEAN UP"), BottomBarUI.CleanUp, CanEditCurrentChip)
+			new(Format("CLEAN UP"), BottomBarUI.CleanUp, CanEditCurrentChip),
+			new(Format("ASK CLAUDE"), QuickAskBar.Open, CanEditCurrentChip)
 		};
 
 		public static bool IsOpen { get; private set; }

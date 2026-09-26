@@ -37,6 +37,7 @@ namespace DLS.Game
             errorLog.Add(msg);
             Messages.Add(new Msg { role = "error", text = "⚠ " + msg });
             Waiting = false;
+            NotifyTurnEnded();
 
             // Don't silently swallow a message that was waiting to be injected.
             if (pendingUserText != null)
@@ -225,17 +226,61 @@ namespace DLS.Game
 
         // Main thread. Appends the user turn (with circuit context) and fires the request. While Claude is
         // working, the message is queued instead (see pendingUserText).
-        public static void Send(string userText)
+        public static void Send(string userText) => Send(userText, false);
+
+        // quick = typed in the one-line command bar: Claude runs in the background and the user does not read
+        // the answer, so the request is prefixed with a note asking for execution only, and the end of the
+        // turn is reported through ConsumeQuickTurnFinished (toast).
+        public static void Send(string userText, bool quick)
         {
             if (string.IsNullOrWhiteSpace(userText)) return;
+            if (quick) quickTurn = true;
+            string text = quick ? QuickModeNote + userText.Trim() : userText.Trim();
 
             if (Waiting)
             {
-                Queue(userText.Trim());
+                Queue(text);
                 return;
             }
 
-            SendNow(userText.Trim(), false);
+            SendNow(text, false);
+        }
+
+        const string QuickModeNote = "[COMMANDE RAPIDE, arriere-plan] L'utilisateur a tape ceci dans la barre de commande : il ne lira PAS ta reponse (aucun panneau ouvert). " +
+                                     "Ne raconte rien, n'explique pas ta demarche, ne pose aucune question : execute la demande avec les outils, teste comme d'habitude, " +
+                                     "et termine par UNE seule ligne de bilan (fait / pas fait et pourquoi). Si la demande est ambigue, prends l'interpretation la plus probable.\n\n";
+
+        static bool quickTurn;
+        static bool quickTurnFinished;
+
+        // True once, when a turn started from the command bar has just ended; summary = Claude's last line
+        // (or the error), for the toast.
+        public static bool ConsumeQuickTurnFinished(out string summary)
+        {
+            summary = null;
+            if (!quickTurnFinished) return false;
+            quickTurnFinished = false;
+            for (int i = Messages.Count - 1; i >= 0; i--)
+            {
+                if (Messages[i].role == "assistant" || Messages[i].role == "error")
+                {
+                    string t = (Messages[i].text ?? "").Trim();
+                    int nlIdx = t.LastIndexOf('\n');
+                    if (nlIdx >= 0) t = t.Substring(nlIdx + 1).Trim();
+                    if (t.Length > 140) t = t.Substring(0, 140) + "...";
+                    summary = (Messages[i].role == "error" ? "" : "Claude : ") + t;
+                    break;
+                }
+            }
+            summary ??= "Claude a termine.";
+            return true;
+        }
+
+        static void NotifyTurnEnded()
+        {
+            if (!quickTurn) return;
+            quickTurn = false;
+            quickTurnFinished = true;
         }
 
         static void Queue(string text)
@@ -373,6 +418,7 @@ namespace DLS.Game
                 }
 
                 Waiting = false;
+                NotifyTurnEnded();
 
                 // Claude finished its turn before the queued message could ride along: send it now as a
                 // normal follow-up (same conversation, so the thread is intact).

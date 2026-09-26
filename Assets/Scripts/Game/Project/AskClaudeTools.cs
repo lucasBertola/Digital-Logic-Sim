@@ -761,9 +761,9 @@ namespace DLS.Game
             return false;
         }
 
+        // No automatic Clean Up here (it used to run after every edit; the user prefers to trigger it himself).
         static void AfterMutation(Project p)
         {
-            CircuitAutoLayout.CleanUp(p.ViewedChip);
             AskClaudeMenu.NotifyViewportDirty();
         }
     }

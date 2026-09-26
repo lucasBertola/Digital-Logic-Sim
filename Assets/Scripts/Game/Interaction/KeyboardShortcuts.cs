@@ -40,6 +40,7 @@ namespace DLS.Game
 		public static bool DeleteShortcutTriggered => !TextInputActive && (InputHelper.IsKeyDownThisFrame(KeyCode.Backspace) || InputHelper.IsKeyDownThisFrame(KeyCode.Delete));
 		public static bool SimNextStepShortcutTriggered => !TextInputActive && InputHelper.IsKeyDownThisFrame(KeyCode.Space) && !InputHelper.CtrlIsHeld;
 		public static bool SimPauseToggleShortcutTriggered => CtrlShortcutTriggered(KeyCode.Space);
+		public static bool QuickAskShortcutTriggered => !TextInputActive && InputHelper.IsKeyDownThisFrame(KeyCode.Space) && !(InputHelper.CtrlIsHeld || InputHelper.AltIsHeld || InputHelper.ShiftIsHeld);
 
 		// ---- Dev shortcuts ----
 		public static bool OpenSaveDataFolderShortcutTriggered => InputHelper.IsKeyDownThisFrame(Physical(KeyCode.O)) && InputHelper.CtrlIsHeld && InputHelper.ShiftIsHeld && InputHelper.AltIsHeld;

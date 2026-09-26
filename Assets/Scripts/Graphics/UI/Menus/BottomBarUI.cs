@@ -69,6 +69,8 @@ namespace DLS.Graphics
 			DrawBottomBar(project);
 			TruthTableView.Draw();
 			AskClaudeMenu.Draw();
+			if (AskClaude.ConsumeQuickTurnFinished(out string quickSummary)) ShowToast(quickSummary);
+			DrawClaudeBusyIndicator();
 			DrawToast();
 
 			if (UIDrawer.ActiveMenu == UIDrawer.MenuType.BottomBarMenuPopup)
@@ -510,6 +512,32 @@ namespace DLS.Graphics
 			toastEndTime = Time.time + 4f;
 		}
 
+		// Small "Claude is working" pill at the top of the screen while a request runs and the chat panel is
+		// closed (i.e. a command typed in the quick bar).
+		static void DrawClaudeBusyIndicator()
+		{
+			if (!AskClaude.Waiting || AskClaudeMenu.IsOpen) return;
+			DrawSettings.UIThemeDLS theme = DrawSettings.ActiveUITheme;
+
+			const float w = 15f, h = 2.2f;
+			Vector2 centre = new(UI.Width / 2f, UI.Height - 0.5f - h / 2f);
+			UI.DrawPanel(centre, new Vector2(w, h), new Color(0.08f, 0.08f, 0.1f, 0.9f));
+
+			// spinner: 8 dots, one lit after the other
+			Vector2 spin = centre + Vector2.left * (w / 2f - 1.4f);
+			float t = Time.time * 8f;
+			for (int i = 0; i < 8; i++)
+			{
+				float a = i * Mathf.PI * 2f / 8f;
+				float k = ((i - t) % 8f + 8f) % 8f / 8f; // 0 = lit, 1 = faded
+				Color c = Color.Lerp(new Color(0.55f, 0.8f, 1f), new Color(0.25f, 0.3f, 0.38f), k);
+				UI.DrawPanel(spin + new Vector2(Mathf.Cos(a), Mathf.Sin(a)) * 0.6f, Vector2.one * 0.28f, c);
+			}
+
+			int dots = (int)(Time.time * 2f) % 4;
+			UI.DrawText("Claude travaille" + new string('.', dots), theme.FontRegular, theme.FontSizeRegular, spin + Vector2.right * 1.4f, Anchor.TextCentreLeft, Color.white);
+		}
+
 		static void DrawToast()
 		{
 			if (string.IsNullOrEmpty(toastMsg) || Time.time > toastEndTime) return;
@@ -531,6 +559,8 @@ namespace DLS.Graphics
 		{
 			if (MenuButtonsAndShortcutsEnabled)
 			{
+				// Space = Claude command bar (when the sim is paused, Space keeps stepping the simulation)
+				if (KeyboardShortcuts.QuickAskShortcutTriggered && UIDrawer.ActiveMenu == UIDrawer.MenuType.None && !Project.ActiveProject.simPaused) QuickAskBar.Open();
 				if (KeyboardShortcuts.CreateNewChipShortcutTriggered) CreateNewChip();
 				if (KeyboardShortcuts.SaveShortcutTriggered) SaveChip();
 				if (KeyboardShortcuts.LibraryShortcutTriggered) OpenLibraryMenu();
