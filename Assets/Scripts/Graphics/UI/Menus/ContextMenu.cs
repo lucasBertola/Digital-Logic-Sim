@@ -26,15 +26,18 @@ namespace DLS.Graphics
 		static Vector2 mouseOpenMenuPos;
 
 		static MenuEntry[] activeContextMenuEntries;
-		static readonly MenuEntry dividerMenuEntry = new(menuDividerString, null, null);
+		static readonly MenuEntry dividerMenuEntry = new(menuDividerString, (Action)null, null);
 		static bool wasMouseOverMenu;
 		static string contextMenuHeader;
+		static int openSubmenuIndex = -1;  // entry whose sub-menu is shown (hover opens it, hovering another entry closes it)
+		static Bounds2D openSubmenuAnchor; // bounds of that entry's button
 
 		static readonly MenuEntry[] pinColEntries = ((PinColour[])Enum.GetValues(typeof(PinColour))).Select(col =>
 			new MenuEntry(Format(Enum.GetName(typeof(PinColour), col)), () => SetCol(col), CanSetCol)
 		).ToArray();
 
 
+		static readonly MenuEntry setColourEntry = new(Format("SET COLOUR"), pinColEntries, CanSetCol);
 		static readonly MenuEntry deleteEntry = new(Format("DELETE"), Delete, CanDelete);
 		static readonly MenuEntry openChipEntry = new(Format("OPEN"), OpenChip, CanOpenChip);
 		static readonly MenuEntry labelChipEntry = new(Format("LABEL"), OpenChipLabelPopup, CanLabelChip);
@@ -53,7 +56,7 @@ namespace DLS.Graphics
 			deleteEntry
 		};
 
-		static readonly MenuEntry[] entries_builtinLED = entries_builtinSubchip.Concat(new[] { dividerMenuEntry }).Concat(pinColEntries).ToArray();
+		static readonly MenuEntry[] entries_builtinLED = entries_builtinSubchip.Concat(new[] { setColourEntry }).ToArray();
 
 		static readonly MenuEntry[] entries_builtinBus =
 		{
@@ -84,14 +87,14 @@ namespace DLS.Graphics
 		};
 
 
-		static readonly MenuEntry[] entries_subChipOutput = pinColEntries;
+		static readonly MenuEntry[] entries_subChipOutput = { setColourEntry };
 
-		static readonly MenuEntry[] entries_inputDevPin = new[]
+		static readonly MenuEntry[] entries_inputDevPin =
 		{
 			new(Format("RENAME"), OpenPinEditMenu, CanEditCurrentChip),
 			new(Format("DELETE"), Delete, CanDelete),
-			dividerMenuEntry
-		}.Concat(pinColEntries).ToArray();
+			setColourEntry
+		};
 
 		static readonly MenuEntry[] entries_outputDevPin =
 		{
@@ -312,6 +315,7 @@ namespace DLS.Graphics
 		{
 			mouseOpenMenuPos = UI.ScreenToUISpace(InputHelper.MousePos);
 			contextMenuHeader = header.PadRight(pad);
+			openSubmenuIndex = -1;
 			IsOpen = true;
 		}
 
@@ -330,7 +334,7 @@ namespace DLS.Graphics
 			foreach (MenuEntry entry in menuEntries)
 			{
 				if (entry.Text == menuDividerString) continue;
-				menuWidth = Mathf.Max(menuWidth, Draw.CalculateTextBoundsSize(entry.Text, theme.fontSize, theme.font).x + 1);
+				menuWidth = Mathf.Max(menuWidth, Draw.CalculateTextBoundsSize(EntryLabel(entry), theme.fontSize, theme.font).x + 1);
 			}
 
 			Draw.ID panelID = UI.ReservePanel();
@@ -364,9 +368,21 @@ namespace DLS.Graphics
 					}
 					else
 					{
-						if (UI.Button(entry.Text, theme, pos, buttonSize, entry.IsEnabled(), false, false, anchor, true, textOffsetX))
+						bool enabled = entry.IsEnabled();
+						if (UI.Button(EntryLabel(entry), theme, pos, buttonSize, enabled, false, false, anchor, true, textOffsetX))
 						{
-							entry.OnPress();
+							entry.OnPress?.Invoke();
+						}
+
+						// Hovering an entry with a sub-menu opens it; hovering any other entry closes it
+						if (UI.MouseInsideBounds(UI.PrevBounds))
+						{
+							if (entry.SubEntries != null && enabled)
+							{
+								openSubmenuIndex = index;
+								openSubmenuAnchor = UI.PrevBounds;
+							}
+							else openSubmenuIndex = -1;
 						}
 
 						pos.y += buttonSize.y * dirY;
@@ -381,6 +397,46 @@ namespace DLS.Graphics
 			}
 
 			wasMouseOverMenu = UI.MouseInsideBounds(UI.PrevBounds);
+
+			if (openSubmenuIndex >= 0 && openSubmenuIndex < menuEntries.Length && menuEntries[openSubmenuIndex].SubEntries != null)
+			{
+				DrawSubMenu(menuEntries[openSubmenuIndex].SubEntries, theme, textOffsetX);
+			}
+
+			// Second menu, beside the hovered entry (to its right, or to its left when there is no room)
+			static void DrawSubMenu(MenuEntry[] subEntries, ButtonTheme theme, float textOffsetX)
+			{
+				float width = 0;
+				foreach (MenuEntry e in subEntries) width = Mathf.Max(width, Draw.CalculateTextBoundsSize(e.Text, theme.fontSize, theme.font).x + 1);
+
+				Vector2 buttonSize = new(width, 2);
+				float totalHeight = buttonSize.y * subEntries.Length;
+				bool right = openSubmenuAnchor.Right + 0.25f + width <= UI.Width;
+				float x = right ? openSubmenuAnchor.Right + 0.25f : openSubmenuAnchor.Left - 0.25f - width;
+				float top = Mathf.Clamp(openSubmenuAnchor.Top, totalHeight, UI.Height);
+				Vector2 pos = new(x, top);
+
+				Draw.ID panelID = UI.ReservePanel();
+				using (UI.BeginBoundsScope(true))
+				{
+					foreach (MenuEntry e in subEntries)
+					{
+						if (UI.Button(e.Text, theme, pos, buttonSize, e.IsEnabled(), false, false, Anchor.TopLeft, true, textOffsetX))
+						{
+							e.OnPress?.Invoke();
+						}
+
+						pos.y -= buttonSize.y;
+					}
+
+					Bounds2D bounds = UI.GetCurrentBoundsScope();
+					UI.ModifyPanel(panelID, bounds.Centre, new Vector2(width, bounds.Height) + Vector2.one * 0.5f, ColHelper.MakeCol(0.91f));
+				}
+
+				wasMouseOverMenu |= UI.MouseInsideBounds(UI.PrevBounds);
+			}
+
+			static string EntryLabel(MenuEntry entry) => entry.SubEntries == null ? entry.Text : entry.Text + "  >";
 
 			void DrawHeader()
 			{
@@ -634,12 +690,22 @@ namespace DLS.Graphics
 			public readonly string Text;
 			public readonly Action OnPress;
 			public readonly Func<bool> IsEnabled;
+			public readonly MenuEntry[] SubEntries; // when set: hovering the entry opens these in a second menu beside it
 
 			public MenuEntry(string text, Action onPress, Func<bool> isEnabled)
 			{
 				Text = text;
 				OnPress = onPress;
 				IsEnabled = isEnabled;
+				SubEntries = null;
+			}
+
+			public MenuEntry(string text, MenuEntry[] subEntries, Func<bool> isEnabled)
+			{
+				Text = text;
+				OnPress = null;
+				IsEnabled = isEnabled;
+				SubEntries = subEntries;
 			}
 		}
 	}
