@@ -125,7 +125,7 @@ namespace DLS.Graphics
 					// always / on hover (mouse over the chip or one of its pins) / tab toggle.
 					bool hoverThisChip = InteractionState.ElementUnderMouse == subchip || (InteractionState.ElementUnderMouse is PinInstance hp && hp.parent == subchip);
 					bool labelOnHover = Project.ActiveProject.description.Prefs_ChipPinNamesDisplayMode == PreferencesMenu.DisplayMode_OnHover && hoverThisChip;
-					if (drawAllSubchipPinNames || labelOnHover) DrawSubChipLabel(subchip);
+					if ((drawAllSubchipPinNames || labelOnHover) && !subchip.ShowLabelOnChip) DrawSubChipLabel(subchip);
 				}
 			}
 
@@ -388,8 +388,12 @@ namespace DLS.Graphics
 				}
 			}
 
-			// Draw name
-			if (isKeyChip || desc.NameLocation != NameDisplayLocation.Hidden)
+			// Draw name (or the label, when DISPLAY NAME is on: wrapped and shrunk to fit inside the chip)
+			if (!isKeyChip && subchip.ShowLabelOnChip && !string.IsNullOrWhiteSpace(subchip.Label))
+			{
+				DrawFittedLabel(subchip, nameTextCol);
+			}
+			else if (isKeyChip || desc.NameLocation != NameDisplayLocation.Hidden)
 			{
 				// Display on single line if name fits comfortably, otherwise use 'formatted' version (split across multiple lines)
 				string displayName = isKeyChip ? subchip.activationKeyString : subchip.MultiLineName;
@@ -417,6 +421,48 @@ namespace DLS.Graphics
 
 				Draw.Text(FontBold, displayName, FontSizeChipName, textPos, textAnchor, nameTextCol, ChipNameLineSpacing);
 			}
+		}
+
+		// The label centred on the chip body: word-wrapped to the chip's width, font shrunk (down to a floor)
+		// until the block fits both the width and the height, so it never spills out of the chip.
+		static void DrawFittedLabel(SubChipInstance subchip, Color textCol)
+		{
+			string label = subchip.Label.Trim();
+			float maxW = subchip.Size.x - PinRadius * 2.5f;
+			float maxH = subchip.Size.y - 0.12f;
+			float size = FontSizeChipName;
+			string text = label;
+
+			for (int iter = 0; iter < 14; iter++)
+			{
+				text = WrapWords(label, maxW, size, FontBold);
+				Vector2 bounds = Draw.CalculateTextBoundsSize(text, size, FontBold);
+				if (bounds.x <= maxW && bounds.y <= maxH) break;
+				if (size <= FontSizeChipName * 0.3f) break;
+				size *= 0.88f;
+			}
+
+			Draw.Text(FontBold, text, size, subchip.Position, Anchor.TextCentre, textCol, ChipNameLineSpacing);
+		}
+
+		// Greedy word wrap for a given font size (a word wider than the width stays alone on its line;
+		// the caller shrinks the font until it fits).
+		static string WrapWords(string s, float maxWidth, float fontSize, FontType font)
+		{
+			var lines = new List<string>();
+			foreach (string paragraph in s.Split('\n'))
+			{
+				string current = "";
+				foreach (string word in paragraph.Split(' '))
+				{
+					if (word.Length == 0) continue;
+					string candidate = current.Length == 0 ? word : current + " " + word;
+					if (current.Length == 0 || Draw.CalculateTextBoundsSize(candidate, fontSize, font).x <= maxWidth) current = candidate;
+					else { lines.Add(current); current = word; }
+				}
+				lines.Add(current);
+			}
+			return string.Join("\n", lines);
 		}
 
 		public static void DrawSubchipDisplays(SubChipInstance subchip, SimChip sim = null, bool outOfBoundsDisplay = false)

@@ -29,6 +29,7 @@ namespace DLS.Game
 		public readonly PinInstance[] OutputPins;
 		public string activationKeyString; // input char for the 'key chip' type (stored as string to avoid allocating when drawing)
 		public string Label;
+		public bool ShowLabelOnChip; // DISPLAY NAME: label drawn on the chip body instead of the type name
 
 		public SubChipInstance(ChipDescription description, SubChipDescription subChipDesc)
 		{
@@ -40,6 +41,7 @@ namespace DLS.Game
 			Label = subChipDesc.Label;
 			LayoutCol = subChipDesc.LayoutCol;
 			LayoutRow = subChipDesc.LayoutRow;
+			ShowLabelOnChip = subChipDesc.ShowLabel;
 			IsBus = ChipTypeHelper.IsBusType(ChipType);
 			MultiLineName = CreateMultiLineName(description.Name);
 			MinSize = CalculateMinChipSize(description.InputPins, description.OutputPins, description.Name);

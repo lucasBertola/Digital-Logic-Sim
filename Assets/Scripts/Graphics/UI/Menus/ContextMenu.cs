@@ -41,17 +41,20 @@ namespace DLS.Graphics
 		static readonly MenuEntry deleteEntry = new(Format("DELETE"), Delete, CanDelete);
 		static readonly MenuEntry openChipEntry = new(Format("OPEN"), OpenChip, CanOpenChip);
 		static readonly MenuEntry labelChipEntry = new(Format("RENAME"), OpenChipLabelPopup, CanLabelChip);
+		static readonly MenuEntry displayNameEntry = new(Format("DISPLAY NAME"), ToggleDisplayName, CanLabelChip);
 
 		static readonly MenuEntry[] entries_customSubchip =
 		{
 			openChipEntry,
 			labelChipEntry,
+			displayNameEntry,
 			deleteEntry
 		};
 
 		static readonly MenuEntry[] entries_builtinSubchip =
 		{
 			labelChipEntry,
+			displayNameEntry,
 			deleteEntry
 		};
 
@@ -68,6 +71,7 @@ namespace DLS.Graphics
 		{
 			new(Format("REBIND"), OpenKeyBindMenu, CanEditCurrentChip),
 			labelChipEntry,
+			displayNameEntry,
 			deleteEntry
 		};
 
@@ -75,6 +79,7 @@ namespace DLS.Graphics
 		{
 			new(Format("EDIT"), OpenRomEditMenu, CanEditCurrentChip),
 			labelChipEntry,
+			displayNameEntry,
 			deleteEntry
 		};
 
@@ -82,6 +87,7 @@ namespace DLS.Graphics
 		{
 			new(Format("EDIT"), OpenPulseEditMenu, CanEditCurrentChip),
 			labelChipEntry,
+			displayNameEntry,
 			deleteEntry
 		};
 
@@ -498,6 +504,19 @@ namespace DLS.Graphics
 
 		// Anchored where the menu was opened, so the popup appears where the user right-clicked
 		static void OpenInOutPopup() => BottomBarUI.OpenInOutPopupAt(mouseOpenMenuPos);
+
+		// DISPLAY NAME: show the chip's label on its body, all the time, instead of its type name. Toggles;
+		// a chip with no label yet gets the rename popup first.
+		static void ToggleDisplayName()
+		{
+			if (interactionContext is not SubChipInstance subChip) return;
+			if (string.IsNullOrWhiteSpace(subChip.Label))
+			{
+				subChip.ShowLabelOnChip = true;
+				OpenChipLabelPopup();
+			}
+			else subChip.ShowLabelOnChip = !subChip.ShowLabelOnChip;
+		}
 
 		static void RenameSelectedPins()
 		{

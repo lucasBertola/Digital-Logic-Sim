@@ -23,7 +23,10 @@ namespace DLS.Description
 		public int LayoutCol;
 		public int LayoutRow;
 
-		public SubChipDescription(string name, int id, string label, Vector2 position, OutputPinColourInfo[] outputPinColInfo, uint[] internalData = null, int layoutCol = 0, int layoutRow = 0)
+		// DISPLAY NAME (right-click): the label is drawn ON the chip, in place of its type name, all the time.
+		public bool ShowLabel;
+
+		public SubChipDescription(string name, int id, string label, Vector2 position, OutputPinColourInfo[] outputPinColInfo, uint[] internalData = null, int layoutCol = 0, int layoutRow = 0, bool showLabel = false)
 		{
 			Name = name;
 			ID = id;
@@ -33,6 +36,7 @@ namespace DLS.Description
 			InternalData = internalData;
 			LayoutCol = layoutCol;
 			LayoutRow = layoutRow;
+			ShowLabel = showLabel;
 		}
 	}
 

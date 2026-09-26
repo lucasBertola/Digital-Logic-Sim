@@ -43,6 +43,8 @@ what the fork adds on top.
   up its wires and the components they lead to.
 - **Mouse back / forward buttons** step through the chips you visited, like a browser (the upstream
   "view" mode was removed; OPEN on a chip opens it for editing).
+- **DISPLAY NAME** (right-click a chip): shows the chip's label on the chip itself, in place of its type name,
+  wrapped and shrunk to fit.
 - **Rename several pins or chips at once** — select several inputs/outputs (or several chips), right-click one
   of them, RENAME, type a prefix such as `D`: they become D4, D3, D2, D1, D0 from top to bottom. Clean Up also leaves a wider
   gap between such groups (D4..D1 vs A3..A0) so each bus reads as a block.

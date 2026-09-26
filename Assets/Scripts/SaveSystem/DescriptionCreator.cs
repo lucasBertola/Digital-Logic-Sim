@@ -65,7 +65,8 @@ namespace DLS.SaveSystem
 				subChip.IsBus ? null : subChip.OutputPins.Select(p => new OutputPinColourInfo(p.Colour, p.Address.PinID)).ToArray(),
 				(uint[])subChip.InternalData?.Clone(),
 				subChip.LayoutCol,
-				subChip.LayoutRow
+				subChip.LayoutRow,
+				subChip.ShowLabelOnChip
 			);
 		}
 
