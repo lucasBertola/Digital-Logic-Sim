@@ -106,7 +106,7 @@ namespace DLS.Game
 			RecordUndoAction(new LayoutUndoAction { before = before, after = new LayoutSnapshot(devChip) });
 		}
 
-		// Pin rename(s) (single pin edit menu, or several pins renamed at once): Ctrl+Z restores the old names.
+		// Rename(s) of pins (name) or sub-chips (label), single or in bulk: Ctrl+Z restores the old ones.
 		public void RecordPinRenames(List<(int pinID, string oldName, string newName)> renames)
 		{
 			var changed = renames.Where(r => r.oldName != r.newName).ToList();
@@ -131,7 +131,10 @@ namespace DLS.Game
 				{
 					foreach (IMoveable element in devChip.Elements)
 					{
-						if (element is DevPinInstance pin && pin.ID == pinIDs[i]) pin.Pin.Name = undo ? oldNames[i] : newNames[i];
+						if (element.ID != pinIDs[i]) continue;
+						string value = undo ? oldNames[i] : newNames[i];
+						if (element is DevPinInstance pin) pin.Pin.Name = value;
+						else if (element is SubChipInstance chip) chip.Label = value;
 					}
 				}
 			}

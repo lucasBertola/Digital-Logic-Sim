@@ -63,7 +63,9 @@ namespace DLS.Graphics
 
 		static void Confirm(string newName)
 		{
+			string old = subChip.Label;
 			subChip.Label = newName;
+			Project.ActiveProject.ViewedChip.UndoController.RecordPinRenames(new System.Collections.Generic.List<(int, string, string)> { (subChip.ID, old, newName) });
 			UIDrawer.SetActiveMenu(UIDrawer.MenuType.None);
 		}
 

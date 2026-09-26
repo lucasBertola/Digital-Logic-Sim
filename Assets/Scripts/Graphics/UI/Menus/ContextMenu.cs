@@ -108,6 +108,13 @@ namespace DLS.Graphics
 			new(Format("DELETE"), DeleteSelectedElements, CanDelete)
 		};
 
+		// Several sub-chips selected, right-click on one of them (RENAME = their labels)
+		static readonly MenuEntry[] entries_multiSubchip =
+		{
+			new(Format("RENAME"), RenameSelectedChips, CanEditCurrentChip),
+			new(Format("DELETE"), DeleteSelectedElements, CanDelete)
+		};
+
 		static readonly MenuEntry[] entries_wire =
 		{
 			new(Format("EDIT"), EditWire, CanEditWire),
@@ -201,7 +208,18 @@ namespace DLS.Graphics
 					interactionContext = hoverElement;
 					string headerName = string.Empty;
 
-					if (openSubChipContextMenu)
+					List<IMoveable> currentSelection = Project.ActiveProject.controller.SelectedElements;
+					int selectedChipCount = currentSelection.Count(e => e is SubChipInstance);
+
+					if (openSubChipContextMenu && ((SubChipInstance)hoverElement).IsSelected && selectedChipCount >= 2)
+					{
+						// Keep the multi-selection: the menu acts on all selected chips
+						SubChipInstance subChip = (SubChipInstance)hoverElement;
+						interactionContextName = subChip.Description.Name;
+						headerName = $"{selectedChipCount} CHIPS";
+						activeContextMenuEntries = entries_multiSubchip;
+					}
+					else if (openSubChipContextMenu)
 					{
 						SubChipInstance subChip = (SubChipInstance)hoverElement;
 						interactionContextName = subChip.Description.Name;
@@ -484,6 +502,11 @@ namespace DLS.Graphics
 		static void RenameSelectedPins()
 		{
 			BulkRenamePinsPopup.Open(Project.ActiveProject.controller.SelectedElements.OfType<DevPinInstance>());
+		}
+
+		static void RenameSelectedChips()
+		{
+			BulkRenamePinsPopup.OpenChips(Project.ActiveProject.controller.SelectedElements.OfType<SubChipInstance>());
 		}
 
 		static void DeleteSelectedElements() => Project.ActiveProject.controller.DeleteSelected();

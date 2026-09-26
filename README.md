@@ -43,8 +43,8 @@ what the fork adds on top.
   up its wires and the components they lead to.
 - **Mouse back / forward buttons** step through the chips you visited, like a browser (the upstream
   "view" mode was removed; OPEN on a chip opens it for editing).
-- **Rename several pins at once** — select several inputs or outputs, right-click one of them, RENAME, type a
-  prefix such as `D`: the pins become D4, D3, D2, D1, D0 from top to bottom. Clean Up also leaves a wider
+- **Rename several pins or chips at once** — select several inputs/outputs (or several chips), right-click one
+  of them, RENAME, type a prefix such as `D`: they become D4, D3, D2, D1, D0 from top to bottom. Clean Up also leaves a wider
   gap between such groups (D4..D1 vs A3..A0) so each bus reads as a block.
 - **VCC / GND** builtin chips: constant HIGH / LOW sources that don't add inputs to your chip.
 - **Keyboard shortcuts work on AZERTY as well as QWERTY** (Ctrl+Z, Ctrl+Q… follow the letter printed on

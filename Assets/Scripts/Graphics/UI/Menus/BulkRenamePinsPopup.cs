@@ -8,26 +8,39 @@ using UnityEngine;
 
 namespace DLS.Graphics
 {
-    // Rename several selected input/output pins at once: a prefix, numbered from the top down
-    // (prefix "D" on 5 pins -> D4, D3, D2, D1, D0, the highest pin getting the biggest number).
-    // Opened from the right-click menu of a selected pin when several pins are selected.
+    // Rename several selected elements at once: a prefix, numbered from the top down (prefix "D" on 5
+    // elements -> D4, D3, D2, D1, D0, the highest one getting the biggest number). Works on input/output
+    // pins (their name) and on sub-chips (their label). Opened from the right-click menu of a selected
+    // element when several of the same kind are selected.
     public static class BulkRenamePinsPopup
     {
         const string MaxLen = "MY LONG PIN NAME"; // same limit as the single-pin edit menu
         static readonly UIHandle ID_PrefixField = new("BulkRenamePins_PrefixField");
         static readonly string[] CancelConfirmButtonNames = { "CANCEL", "CONFIRM" };
         static readonly bool[] interactStates = { true, true };
-        static List<DevPinInstance> pins = new();
+        static List<IMoveable> pins = new(); // the elements being renamed (pins or sub-chips), top first
+        static bool renamingChips;
 
-        public static void Open(IEnumerable<DevPinInstance> selectedPins)
+        static string NameOf(IMoveable e) => e is DevPinInstance p ? p.Pin.Name : e is SubChipInstance c ? c.Label : "";
+        static void SetName(IMoveable e, string name)
         {
-            // Top pin first: it gets the highest number
-            pins = selectedPins.OrderByDescending(p => p.Position.y).ToList();
+            if (e is DevPinInstance p) p.Pin.Name = name;
+            else if (e is SubChipInstance c) c.Label = name;
+        }
+
+        public static void Open(IEnumerable<DevPinInstance> selectedPins) => OpenFor(selectedPins, false);
+        public static void OpenChips(IEnumerable<SubChipInstance> selectedChips) => OpenFor(selectedChips, true);
+
+        static void OpenFor(IEnumerable<IMoveable> selected, bool chips)
+        {
+            // Top element first: it gets the highest number
+            pins = selected.OrderByDescending(p => p.Position.y).ToList();
+            renamingChips = chips;
             if (pins.Count == 0) return;
 
             UIDrawer.SetActiveMenu(UIDrawer.MenuType.BulkRenamePins);
             InputFieldState s = UI.GetInputFieldState(ID_PrefixField);
-            s.SetText(CommonPrefix(pins.Select(p => p.Pin.Name)));
+            s.SetText(CommonPrefix(pins.Select(NameOf)));
             s.SelectAll();
         }
 
@@ -47,7 +60,7 @@ namespace DLS.Graphics
                 Vector2 inputFieldSize = unpaddedSize + new Vector2(padX, 2.25f);
                 Vector2 pos = UI.Centre + Vector2.up * 5;
 
-                UI.DrawText($"Renommer {pins.Count} broches (prefixe)", theme.FontRegular, theme.FontSizeRegular, pos + Vector2.up * 3.2f, Anchor.TextCentre, Color.white);
+                UI.DrawText($"Rename {pins.Count} {(renamingChips ? "chips (label)" : "pins")}: prefix", theme.FontRegular, theme.FontSizeRegular, pos + Vector2.up * 3.2f, Anchor.TextCentre, Color.white);
 
                 InputFieldState field = UI.InputField(ID_PrefixField, inputTheme, pos, inputFieldSize, "", Anchor.Centre, padX / 2, ValidateInput, true);
                 Bounds2D inputFieldBounds = UI.PrevBounds;
@@ -73,8 +86,8 @@ namespace DLS.Graphics
                     for (int i = 0; i < pins.Count; i++)
                     {
                         string newName = NameFor(prefix, i);
-                        renames.Add((pins[i].ID, pins[i].Pin.Name, newName));
-                        pins[i].Pin.Name = newName;
+                        renames.Add((pins[i].ID, NameOf(pins[i]), newName));
+                        SetName(pins[i], newName);
                     }
                     Project.ActiveProject.ViewedChip.UndoController.RecordPinRenames(renames);
                     UIDrawer.SetActiveMenu(UIDrawer.MenuType.None);
