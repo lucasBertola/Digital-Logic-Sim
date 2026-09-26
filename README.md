@@ -28,11 +28,12 @@ what the fork adds on top.
 - Both reports also show the circuit depth (longest gate chain from an input to an output).
 
 ### Editor quality of life
-- **Clean Up** — automatic layout: components in columns by signal depth, pins sorted naturally
-  (A2 before A10), grid snapping, and wires only detoured when they would cross a component.
+- **Right-click on empty space** opens a small menu with two entries:
+  - **IN/OUT** — the IN/OUT collection popup at the cursor (same popup as the bottom bar, shift-click to
+    place several at once; it stays until you click elsewhere).
+  - **Clean Up** — automatic layout: components in columns by signal depth, pins sorted naturally
+    (A2 before A10), grid snapping, and wires only detoured when they would cross a component.
 - **VCC / GND** builtin chips: constant HIGH / LOW sources that don't add inputs to your chip.
-- **Right-click on empty space** opens the IN/OUT collection at the cursor (same popup as the bottom bar,
-  shift-click to place several at once; it stays until you click elsewhere).
 - Confirmation popup before deleting a chip, and a prompt on quit when there are unsaved changes.
 - Editor and standalone build share the same save location.
 

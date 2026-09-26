@@ -28,7 +28,6 @@ namespace DLS.Graphics
 			$"PREFS        {shortcutTextCol}Ctrl+P",
 			$"EXPORT (LLM)",
 			$"TRUTH TABLE",
-			$"CLEAN UP",
 			$"ASK CLAUDE",
 			$"QUIT         {shortcutTextCol}Ctrl+Q"
 		};
@@ -40,9 +39,8 @@ namespace DLS.Graphics
 		const int OptionsButtonIndex = 4;
 		const int ExportButtonIndex = 5;
 		const int TruthTableButtonIndex = 6;
-		const int CleanUpButtonIndex = 7;
-		const int AskClaudeButtonIndex = 8;
-		const int QuitButtonIndex = 9;
+		const int AskClaudeButtonIndex = 7;
+		const int QuitButtonIndex = 8;
 
 		// ---- Export confirmation toast ----
 		static string toastMsg;
@@ -133,7 +131,6 @@ namespace DLS.Graphics
 				else if (i == OptionsButtonIndex) OpenPreferencesMenu();
 				else if (i == ExportButtonIndex) ExportForLLM();
 				else if (i == TruthTableButtonIndex) TruthTableView.Toggle();
-				else if (i == CleanUpButtonIndex) CleanUp();
 				else if (i == AskClaudeButtonIndex) AskClaudeMenu.Open();
 				else if (i == QuitButtonIndex) ExitToMainMenu();
 			}
@@ -275,28 +272,22 @@ namespace DLS.Graphics
 			}
 
 
-			HandleSceneRightClick(project);
 			DrawCollectionsPopup();
 		}
 
-		// Right-click on empty space opens the IN/OUT collection at the mouse. It is the very same popup as the one
-		// opened from the bottom bar (same drawing, same shift-click multi-placement, same closing rules).
-		static void HandleSceneRightClick(Project project)
+		// Opens the IN/OUT collection at a point of the screen (used by the empty-space context menu). It is the very
+		// same popup as the one opened from the bottom bar: same drawing, same shift-click multi-placement, same closing rules.
+		public static void OpenInOutPopupAt(Vector2 uiPos)
 		{
-			if (UIDrawer.ActiveMenu != UIDrawer.MenuType.None || !project.CanEditViewedChip) return;
-			// The event is consumed when the right-click cancelled a placement/move, so nothing opens in that case
-			if (!InputHelper.IsMouseDownThisFrame(MouseButton.Right)) return;
-			if (InteractionState.MouseIsOverUI || InteractionState.ElementUnderMouse != null) return;
-			if (KeyboardShortcuts.CameraActionKeyHeld || ContextMenu.HasFocus()) return;
+			if (!Project.ActiveProject.CanEditViewedChip) return;
 			if (!TryGetChipCollectionByName(SceneRightClickCollectionName, out ChipCollection collection) || collection.Chips.Count == 0) return;
 
 			// Keep the whole list on screen when possible (it grows upward from the anchor)
 			int n = collection.Chips.Count;
 			float totalHeight = n * buttonHeight + (n + 1) * buttonSpacing;
 			float minY = barHeight + buttonSpacing * 2;
-			Vector2 mouseUI = UI.ScreenToUISpace(InputHelper.MousePos);
-			float y = Mathf.Clamp(mouseUI.y, minY, Mathf.Max(minY, UI.Height - totalHeight));
-			OpenCollectionPopup(collection, new Vector2(mouseUI.x, y), anchoredToBar: false);
+			float y = Mathf.Clamp(uiPos.y, minY, Mathf.Max(minY, UI.Height - totalHeight));
+			OpenCollectionPopup(collection, new Vector2(uiPos.x, y), anchoredToBar: false);
 		}
 
 		static void OpenCollectionPopup(ChipCollection collection, Vector2 bottomLeft, bool anchoredToBar)
@@ -501,7 +492,7 @@ namespace DLS.Graphics
 			UIDrawer.SetActiveMenu(UIDrawer.MenuType.None);
 		}
 
-		static void CleanUp()
+		public static void CleanUp()
 		{
 			Project p = Project.ActiveProject;
 			if (p.CanEditViewedChip)

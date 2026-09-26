@@ -133,6 +133,13 @@ namespace DLS.Graphics
 			new(Format("UN-STAR"), UnstarBottomBarEntry, () => true)
 		};
 
+		// Right-click on empty space in the scene
+		static readonly MenuEntry[] entries_emptySpace =
+		{
+			new(Format("IN/OUT"), OpenInOutPopup, CanEditCurrentChip),
+			new(Format("CLEAN UP"), BottomBarUI.CleanUp, CanEditCurrentChip)
+		};
+
 		public static bool IsOpen { get; private set; }
 		public static IInteractable interactionContext { get; private set; }
 
@@ -233,6 +240,14 @@ namespace DLS.Graphics
 					}
 
 					SetContextMenuOpen(headerName);
+				}
+				else if (hoverElement == null && UIDrawer.ActiveMenu == UIDrawer.MenuType.None && Project.ActiveProject.CanEditViewedChip)
+				{
+					interactionContextName = string.Empty;
+					interactionContext = null;
+					activeContextMenuEntries = entries_emptySpace;
+					string chipName = Project.ActiveProject.ViewedChip.ChipName;
+					SetContextMenuOpen(string.IsNullOrEmpty(chipName) ? "CHIP" : chipName);
 				}
 				else
 				{
@@ -389,6 +404,9 @@ namespace DLS.Graphics
 			}
 			
 		}
+
+		// Anchored where the menu was opened, so the popup appears where the user right-clicked
+		static void OpenInOutPopup() => BottomBarUI.OpenInOutPopupAt(mouseOpenMenuPos);
 
 		static void OpenChipLabelPopup()
 		{
