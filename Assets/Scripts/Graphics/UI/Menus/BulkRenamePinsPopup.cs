@@ -69,7 +69,14 @@ namespace DLS.Graphics
                 }
                 else if ((KeyboardShortcuts.ConfirmShortcutTriggered || buttonIndex == 1) && CanConfirm(prefix))
                 {
-                    for (int i = 0; i < pins.Count; i++) pins[i].Pin.Name = NameFor(prefix, i);
+                    var renames = new List<(int, string, string)>();
+                    for (int i = 0; i < pins.Count; i++)
+                    {
+                        string newName = NameFor(prefix, i);
+                        renames.Add((pins[i].ID, pins[i].Pin.Name, newName));
+                        pins[i].Pin.Name = newName;
+                    }
+                    Project.ActiveProject.ViewedChip.UndoController.RecordPinRenames(renames);
                     UIDrawer.SetActiveMenu(UIDrawer.MenuType.None);
                 }
             }

@@ -106,6 +106,37 @@ namespace DLS.Game
 			RecordUndoAction(new LayoutUndoAction { before = before, after = new LayoutSnapshot(devChip) });
 		}
 
+		// Pin rename(s) (single pin edit menu, or several pins renamed at once): Ctrl+Z restores the old names.
+		public void RecordPinRenames(List<(int pinID, string oldName, string newName)> renames)
+		{
+			var changed = renames.Where(r => r.oldName != r.newName).ToList();
+			if (changed.Count == 0) return;
+			RecordUndoAction(new PinRenameAction
+			{
+				pinIDs = changed.Select(r => r.pinID).ToArray(),
+				oldNames = changed.Select(r => r.oldName).ToArray(),
+				newNames = changed.Select(r => r.newName).ToArray()
+			});
+		}
+
+		class PinRenameAction : UndoAction
+		{
+			public int[] pinIDs;
+			public string[] oldNames;
+			public string[] newNames;
+
+			public void Trigger(bool undo, DevChipInstance devChip)
+			{
+				for (int i = 0; i < pinIDs.Length; i++)
+				{
+					foreach (IMoveable element in devChip.Elements)
+					{
+						if (element is DevPinInstance pin && pin.ID == pinIDs[i]) pin.Pin.Name = undo ? oldNames[i] : newNames[i];
+					}
+				}
+			}
+		}
+
 		public class LayoutSnapshot
 		{
 			readonly Dictionary<int, Vector2> positions = new();
@@ -226,6 +257,10 @@ namespace DLS.Game
 				else if (action is WireExistenceAction wireExistence)
 				{
 					wireExistence.Trigger(undo, devChip);
+				}
+				else if (action is PinRenameAction rename)
+				{
+					rename.Trigger(undo, devChip);
 				}
 				else if (action is LayoutUndoAction layout)
 				{

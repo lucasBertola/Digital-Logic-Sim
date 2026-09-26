@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using DLS.Description;
 using DLS.Game;
 using Seb.Types;
@@ -82,7 +83,9 @@ namespace DLS.Graphics
 
 		static void Confirm(string newName)
 		{
+			string oldName = devPin.Pin.Name;
 			devPin.Pin.Name = newName;
+			Project.ActiveProject.ViewedChip.UndoController.RecordPinRenames(new List<(int, string, string)> { (devPin.ID, oldName, newName) });
 
 			if (devPin.BitCount != PinBitCount.Bit1)
 			{
