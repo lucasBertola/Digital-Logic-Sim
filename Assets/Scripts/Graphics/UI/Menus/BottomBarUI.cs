@@ -69,6 +69,8 @@ namespace DLS.Graphics
 			DrawBottomBar(project);
 			TruthTableView.Draw();
 			AskClaudeMenu.Draw();
+			if (AskClaude.Waiting && KeyboardShortcuts.CancelShortcutTriggered) AskClaude.Cancel();
+			if (AskClaude.ConsumeCancelled()) ShowToast("Claude: cancelled, changes reverted");
 			if (AskClaude.ConsumeQuickTurnFinished(out string quickSummary)) ShowToast(quickSummary);
 			DrawClaudeBusyIndicator();
 			DrawToast();

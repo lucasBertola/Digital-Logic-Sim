@@ -745,8 +745,35 @@ namespace DLS.Game
         // touched during a turn its full state is snapshotted; when the turn ends, each touched chip gets one
         // undo action (before -> after), so a single Ctrl+Z on that chip reverts everything Claude did to it.
         static readonly Dictionary<DevChipInstance, UndoController.ChipSnapshot> turnSnapshots = new();
+        static string turnStartChipName;
 
-        public static void BeginTurn() => turnSnapshots.Clear();
+        public static void BeginTurn()
+        {
+            turnSnapshots.Clear();
+            turnStartChipName = Project.ActiveProject?.ViewedChip?.ChipName;
+        }
+
+        // Esc while Claude works: every chip touched during the request is put back exactly as it was, the
+        // user is returned to the chip they were on, and nothing is recorded in the undo history.
+        public static void CancelTurn()
+        {
+            Project p = Project.ActiveProject;
+            foreach ((DevChipInstance chip, UndoController.ChipSnapshot before) in turnSnapshots)
+            {
+                try
+                {
+                    if (!before.SameAs(new UndoController.ChipSnapshot(chip))) before.Apply(chip);
+                }
+                catch (Exception e) { UnityEngine.Debug.LogWarning("Claude turn revert failed: " + e.Message); }
+            }
+            turnSnapshots.Clear();
+
+            if (p != null && !string.IsNullOrEmpty(turnStartChipName) && !ChipDescription.NameMatch(p.ViewedChip.ChipName ?? "", turnStartChipName) && p.chipLibrary.HasChip(turnStartChipName))
+            {
+                p.LoadDevChipOrCreateNewIfDoesntExist(turnStartChipName);
+                AskClaudeMenu.NotifyViewportDirty();
+            }
+        }
 
         static void Touch(DevChipInstance chip)
         {

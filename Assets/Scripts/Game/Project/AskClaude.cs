@@ -264,6 +264,36 @@ namespace DLS.Game
             return true;
         }
 
+        // Esc while Claude is working: abort the HTTP request, stop the tool loop, revert everything this
+        // request did (CancelTurn), and trim the conversation so the next message starts from a clean state.
+        public static void Cancel()
+        {
+            if (!Waiting && activeRequest == null) return;
+
+            try { activeRequest?.Abort(); activeRequest?.Dispose(); } catch { }
+            activeRequest = null;
+            streamingHandler = null;
+            pendingUserText = null;
+            if (pendingMsg != null) { Messages.Remove(pendingMsg); pendingMsg = null; }
+
+            AskClaudeTools.CancelTurn();
+            DropIncompleteTail();
+            Messages.Add(new Msg { role = "error", text = "⛔ Annule par l'utilisateur (Echap) : les modifications de cette requete ont ete annulees." });
+
+            Waiting = false;
+            Error = null;
+            quickTurn = false;
+            cancelledFlag = true;
+        }
+
+        static bool cancelledFlag;
+        public static bool ConsumeCancelled()
+        {
+            bool c = cancelledFlag;
+            cancelledFlag = false;
+            return c;
+        }
+
         static void NotifyTurnEnded()
         {
             AskClaudeTools.EndTurn(); // one undo step per chip Claude touched during this request
