@@ -51,8 +51,12 @@ namespace DLS.Game
 
 		public bool ChipHasBeenSavedBefore => ViewedChip.LastSavedDescription != null;
 
-		// String representation of the viewed chips stack for display purposes
-		public string viewedChipsString = string.Empty;
+		// ---- Navigation history (mouse back / forward buttons) ----
+		// Every chip the user lands on (bottom bar, OPEN, search, a new chip once named) is appended; the
+		// mouse "back" button steps to the previous one, "forward" to the next, like a browser.
+		readonly List<string> navHistory = new();
+		int navIndex = -1;
+		bool navigating;
 
 		// The chip currently being edited. (This is not necessarily the currently viewed chip)
 		DevChipInstance editModeChip;
@@ -124,32 +128,6 @@ namespace DLS.Game
 			simThread.Start();
 		}
 
-		public void EnterViewMode(SubChipInstance subchip)
-		{
-			ChipDescription description = chipLibrary.GetChipDescriptionForSim(subchip.Description.Name); // live (unsaved) structure
-			if (description != null)
-			{
-				SimChip simChipToView = ViewedChip.SimChip.GetSubChipFromID(subchip.ID);
-
-				DevChipInstance viewChip = DevChipInstance.LoadFromDescriptionTest(description, chipLibrary, true).devChip;
-				viewChip.SetSimChip(simChipToView);
-
-				controller.CancelEverything();
-				chipViewStack.Push(viewChip);
-				UpdateViewedChipsString();
-			}
-		}
-
-		public void ReturnToPreviousViewedChip()
-		{
-			if (chipViewStack.Count > 1)
-			{
-				chipViewStack.Pop();
-				controller.CancelEverything();
-				UpdateViewedChipsString();
-			}
-		}
-
 		public bool AlwaysDrawDevPinNames => AlwaysDrawPinNames(description.Prefs_MainPinNamesDisplayMode);
 		public bool AlwaysDrawSubChipPinNames => AlwaysDrawPinNames(description.Prefs_ChipPinNamesDisplayMode);
 
@@ -169,16 +147,14 @@ namespace DLS.Game
 				{
 					PinNameDisplayIsTabToggledOn = !PinNameDisplayIsTabToggledOn;
 				}
+
+				// Mouse back / forward buttons: previous / next chip in the navigation history
+				if (InputHelper.IsKeyDownThisFrame(KeyCode.Mouse3)) NavigateHistory(-1);
+				if (InputHelper.IsKeyDownThisFrame(KeyCode.Mouse4)) NavigateHistory(+1);
 			}
 
 
 			PreferencesMenu.HandleKeyboardShortcuts();
-		}
-
-		void UpdateViewedChipsString()
-		{
-			string[] viewedChipNames = chipViewStack.Select(c => c.ChipName).SkipLast(1).Reverse().ToArray();
-			viewedChipsString = "Viewing: " + string.Join(" > ", viewedChipNames);
 		}
 
 
@@ -228,6 +204,7 @@ namespace DLS.Game
 			{
 				foreach (string k in openChips.Where(kv => kv.Value == editModeChip).Select(kv => kv.Key).ToArray()) openChips.Remove(k);
 				openChips[saveChipDescription.Name] = editModeChip;
+				RecordVisit(saveChipDescription.Name);
 			}
 
 			ReconcileOpenChipsAfterSave(saveChipDescription.Name, oldSavedBaseline, saveChipDescription);
@@ -316,13 +293,42 @@ namespace DLS.Game
 			editModeChip = devChip;
 			chipViewStack.Clear();
 			chipViewStack.Push(devChip);
-			viewedChipsString = string.Empty;
 
 			// Rebuild only the SIM from the live description (sub-chips resolved live) — the DevChipInstance
 			// itself is reused so its undo history survives the switch.
 			devChip.SetSimChip(Simulator.BuildSimChip(DescriptionCreator.CreateChipDescription(devChip), chipLibrary));
 
-			if (devChip.LastSavedDescription != null) SearchPopup.AddRecentChip(devChip.LastSavedDescription.Name);
+			if (devChip.LastSavedDescription != null)
+			{
+				SearchPopup.AddRecentChip(devChip.LastSavedDescription.Name);
+				RecordVisit(devChip.LastSavedDescription.Name);
+			}
+		}
+
+		void RecordVisit(string chipName)
+		{
+			if (navigating || string.IsNullOrEmpty(chipName)) return;
+			if (navIndex >= 0 && navIndex < navHistory.Count && ChipDescription.NameMatch(navHistory[navIndex], chipName)) return;
+			if (navIndex < navHistory.Count - 1) navHistory.RemoveRange(navIndex + 1, navHistory.Count - navIndex - 1); // a new visit drops the "forward" branch
+			navHistory.Add(chipName);
+			navIndex = navHistory.Count - 1;
+		}
+
+		// dir = -1 (back) / +1 (forward). Entries whose chip no longer exists are skipped.
+		void NavigateHistory(int dir)
+		{
+			for (int i = navIndex + dir; i >= 0 && i < navHistory.Count; i += dir)
+			{
+				string name = navHistory[i];
+				if (!openChips.ContainsKey(name) && !chipLibrary.HasChip(name)) continue;
+				if (editModeChip != null && editModeChip.LastSavedDescription != null && ChipDescription.NameMatch(editModeChip.LastSavedDescription.Name, name)) { navIndex = i; continue; }
+
+				navIndex = i;
+				navigating = true;
+				try { LoadDevChipOrCreateNewIfDoesntExist(name); }
+				finally { navigating = false; }
+				return;
+			}
 		}
 
 		// ---- Global undo/redo across chip switches ----
@@ -382,7 +388,6 @@ namespace DLS.Game
 			editModeChip = devChip;
 			chipViewStack.Clear();
 			chipViewStack.Push(devChip);
-			viewedChipsString = string.Empty;
 
 			if (devChip.LastSavedDescription != null) SearchPopup.AddRecentChip(devChip.LastSavedDescription.Name);
 		}
@@ -464,6 +469,7 @@ namespace DLS.Game
 		public void RenameChip(string oldName, string newName)
 		{
 			if (string.IsNullOrWhiteSpace(newName)) return;
+			for (int i = 0; i < navHistory.Count; i++) if (ChipDescription.NameMatch(navHistory[i], oldName)) navHistory[i] = newName;
 			if (!chipLibrary.HasChip(oldName) || chipLibrary.IsBuiltinChip(oldName)) return;
 			if (chipLibrary.HasChip(newName) && !ChipDescription.NameMatch(oldName, newName)) return; // name taken
 

@@ -44,7 +44,6 @@ namespace DLS.Graphics
 
 		static readonly MenuEntry[] entries_customSubchip =
 		{
-			new(Format("VIEW"), EnterViewMode, CanEnterViewMode),
 			openChipEntry,
 			labelChipEntry,
 			deleteEntry
@@ -446,9 +445,7 @@ namespace DLS.Graphics
 		}
 
 		static bool IsCustomChip() => !Project.ActiveProject.chipLibrary.IsBuiltinChip(interactionContextName);
-		static bool CanEnterViewMode() => IsCustomChip();
 		static bool CanLabelChip() => Project.ActiveProject.CanEditViewedChip;
-		static void EnterViewMode() => Project.ActiveProject.EnterViewMode(interactionContext as SubChipInstance);
 
 		static bool CanDelete() => Project.ActiveProject.CanEditViewedChip;
 		static bool CanFlipBus() => Project.ActiveProject.CanEditViewedChip;

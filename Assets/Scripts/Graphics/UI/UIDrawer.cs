@@ -80,9 +80,7 @@ namespace DLS.Graphics
 			else if (menuToDraw == MenuType.GatePalette) GatePaletteMenu.DrawMenu();
 			else
 			{
-				bool showSimPausedBanner = project.simPaused;
-				if (showSimPausedBanner) SimPausedUI.DrawPausedBanner();
-				if (project.chipViewStack.Count > 1) ViewedChipsBar.DrawViewedChipsBanner(project, showSimPausedBanner);
+				if (project.simPaused) SimPausedUI.DrawPausedBanner();
 			}
 
 			ContextMenu.Update();
