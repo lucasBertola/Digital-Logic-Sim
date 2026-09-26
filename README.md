@@ -9,16 +9,23 @@ what the fork adds on top.
 ### Ask Claude — an AI assistant inside the editor
 - A resizable chat panel (right side of the screen) where you describe the circuit you want and Claude
   builds it in the open project: it creates modules, adds inputs/outputs and components, wires them,
-  renames pins, binds keys and lays everything out.
+  renames pins and binds keys.
+- **Quick command box**: press Space (or right-click > ASK CLAUDE), type a request (multi-line), Enter.
+  Claude works in the background with a busy indicator at the top of the screen and a "done" toast;
+  it writes no answer in that mode.
 - Claude **tests its own work** with the real simulator before calling a module done: a truth table
   for combinational circuits, a step-by-step sequence (inputs, clock cycles, key presses) for
   sequential ones, reporting outputs, LEDs, 7-segment and pixel displays.
-- Nothing is auto-saved: Claude's edits sit in memory exactly like your own until you save.
-- The conversation is stored with the project and restored when you reopen it.
-- **Quick command box**: press Space (or right-click > ASK CLAUDE), type a request (multi-line), Enter. Claude
-  works in the background with a small busy indicator at the top of the screen and a "done" toast; on each
-  chip it edited, one Ctrl+Z reverts everything it did.
-- You can keep typing while Claude is working; your message is taken into account mid-task.
+- Claude does **exactly what you asked and nothing more**; anything else it notices is reported, not
+  changed.
+- What Claude adds is laid out once, at the end of the request: a new module gets a full Clean Up, an
+  existing chip keeps its layout and the new parts are slotted into the matching column next to what
+  they connect to.
+- **One Ctrl+Z reverts a whole request** on each chip it touched; **Esc while Claude works** cancels it
+  and reverts everything it did.
+- Nothing is auto-saved: Claude's edits sit in memory exactly like your own until you save. The
+  conversation is stored with the project and restored when you reopen it. You can keep typing while
+  Claude is working; your message is taken into account mid-task.
 - Requires an Anthropic API key in the `ANTHROPIC_API_KEY` environment variable.
 
 ### Circuit optimisation tools (right-click a custom chip in the bottom bar)
@@ -31,27 +38,34 @@ what the fork adds on top.
 - Both reports also show the circuit depth (longest gate chain from an input to an output).
 
 ### Editor quality of life
-- **Right-click on empty space** opens a small menu with two entries:
-  - **IN/OUT** — the IN/OUT collection popup at the cursor (same popup as the bottom bar, shift-click to
-    place several at once; it stays until you click elsewhere).
-  - **Clean Up** — automatic layout: components in columns by signal depth, each column ordered to
-    minimise wire crossings, pins sorted by name with the highest number on top (D4 above D3), grid snapping, and wires routed
-    with as few bends as possible (a pin feeding many chips gets a shared vertical trunk instead of a
-    fan of diagonals). Wires may cross but never run on top of each other. Ctrl+Z restores the
-    previous layout exactly.
-- **Hover highlighting** — hover a wire to light up everything attached to it; hover a component to light
-  up its wires and the components they lead to.
-- **Mouse back / forward buttons** step through the chips you visited, like a browser (the upstream
-  "view" mode was removed; OPEN on a chip opens it for editing).
-- **DISPLAY NAME** (right-click a chip): shows the chip's label on the chip itself, in place of its type name,
-  wrapped and shrunk to fit.
-- **Rename several pins or chips at once** — select several inputs/outputs (or several chips), right-click one
-  of them, RENAME, type a prefix such as `D`: they become D4, D3, D2, D1, D0 from top to bottom. Clean Up also leaves a wider
-  gap between such groups (D4..D1 vs A3..A0) so each bus reads as a block.
+- **Right-click on empty space** opens a menu with three entries: **IN/OUT** (the collection popup at
+  the cursor, same as the bottom bar, shift-click to place several), **CLEAN UP** and **ASK CLAUDE**.
+- The IN/OUT popup ends with **MERGE/SPLIT** and **BUS** rows that open those collections in a sub-menu
+  on hover; the library shows them nested under IN/OUT the same way.
+- **Clean Up** — automatic layout: components in columns by signal depth, each column ordered to
+  minimise wire crossings, pins sorted by name with the highest number on top (D4 above D3) and a
+  gap between groups (D.. vs A..), grid snapping, and wires routed with as few bends as possible (a
+  pin feeding many chips gets a shared vertical trunk instead of a fan of diagonals). Wires may cross
+  but never run on top of each other. Ctrl+Z restores the previous layout exactly.
+- **Hover highlighting** — hover a wire to light up everything attached to it; hover a component to
+  light up its wires and the components they lead to.
+- **Mouse back / forward buttons** step through the chips you visited, like a browser. Ctrl+Z never
+  changes chip: undo is per chip. (The upstream "view" mode was removed; OPEN edits the chip.)
+- **RENAME** on a chip sets its label; **DISPLAY NAME** shows that label on the chip itself, in place
+  of its type name, wrapped and shrunk to fit (HIDE NAME to go back). Otherwise the label follows the
+  "chip pin names" setting (always / on hover / tab). **SET COLOUR** is a sub-menu.
+- **Rename several pins or chips at once** — select several, right-click one of them, RENAME, type a
+  prefix such as `D`: they become D4, D3, D2, D1, D0 from top to bottom. DELETE works on the
+  selection too. Renames are undoable.
+- **High impedance**: a floating line (disabled 3-state buffer) carries a random value at every
+  simulation step, so anything fed by it sees noise; on a shared line any driven source wins, and the
+  buffer's output then takes the value of its net. Wires show the real value of their net.
 - **VCC / GND** builtin chips: constant HIGH / LOW sources that don't add inputs to your chip.
-- **Keyboard shortcuts work on AZERTY as well as QWERTY** (Ctrl+Z, Ctrl+Q… follow the letter printed on
-  the key, not its US position), and KEY chips react to the key you actually bound them to.
-- Confirmation popup before deleting a chip, and a prompt on quit when there are unsaved changes.
+- **Keyboard shortcuts work on AZERTY as well as QWERTY** (Ctrl+Z, Ctrl+Q… follow the letter printed
+  on the key, not its US position), and KEY chips react to the key you actually bound them to.
+- Cancelling the name prompt of a new chip brings you back to the chip you were on. Confirmation
+  popup before deleting a chip, and a prompt on quit when there are unsaved changes. No ABOUT entry in
+  the main menu.
 - Editor and standalone build share the same save location.
 
 ### Running it (Windows, no Unity needed)
