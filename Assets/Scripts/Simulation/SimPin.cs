@@ -63,14 +63,19 @@ namespace DLS.Simulation
 				// Note: for multi-bit pins, this choice is made identically for all bits, rather than individually.
 				// Todo: maybe consider changing to per-bit in the future...)
 
-				uint OR = source.State | State;
-				uint AND = source.State & State;
-				ushort bitsNew = (ushort)(Simulator.RandomBool() ? OR : AND); // randomly accept or reject conflicting state
+				// Per bit: a driven source always beats a high-impedance one (a floating line takes the voltage of
+				// whatever drives it); two driven sources in conflict are resolved at random; two floating sources
+				// stay floating.
+				ushort srcBits = (ushort)source.State, curBits = (ushort)State;
+				ushort srcTri = (ushort)(source.State >> 16), curTri = (ushort)(State >> 16);
+				ushort bothTri = (ushort)(srcTri & curTri);
+				ushort onlySrcTri = (ushort)(srcTri & ~curTri);
+				ushort onlyCurTri = (ushort)(curTri & ~srcTri);
+				ushort noneTri = (ushort)~(srcTri | curTri);
+				ushort conflict = (ushort)(Simulator.RandomBool() ? (srcBits | curBits) : (srcBits & curBits)); // randomly accept or reject conflicting state
+				ushort bitsNew = (ushort)((curBits & onlySrcTri) | (srcBits & onlyCurTri) | (srcBits & bothTri) | (conflict & noneTri));
 
-				ushort mask = (ushort)(OR >> 16); // tristate flags
-				bitsNew = (ushort)((bitsNew & ~mask) | ((ushort)OR & mask)); // can always accept input for tristated bits
-
-				ushort tristateNew = (ushort)(AND >> 16);
+				ushort tristateNew = bothTri;
 				uint stateNew = (uint)(bitsNew | (tristateNew << 16));
 				set = stateNew != State;
 				State = stateNew;
