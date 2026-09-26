@@ -6,10 +6,11 @@ using UnityEngine;
 namespace DLS.Game
 {
     // "Clean Up": tidies the current chip — subchips in columns by signal-propagation depth, rows
-    // aligned and grid-snapped, dev pins on the left/right, wires straightened. Records undo.
+    // ordered to minimise wire crossings, grid-snapped, dev pins on the left/right, wires straight
+    // (with minimal detours; wires may cross but never overlap). Records undo.
     public static class CircuitAutoLayout
     {
-        const float HorizontalGap = 1.0f;   // between columns (room for wire routing)
+        const float HorizontalGap = 1.5f;   // between columns (room for wire routing tracks)
         const float VerticalGap = 0.375f;   // between elements in a column
         const float DevPinWidth = 1.0f;
         const float MinRowHeight = 0.375f;
@@ -66,9 +67,28 @@ namespace DLS.Game
             foreach (var s in subchips) AddToCol(s.LayoutCol > 0 ? s.LayoutCol : level[s.ID], s);
             foreach (var p in outputPins) AddToCol(p.LayoutCol > 0 ? p.LayoutCol : outputCol, p);
 
-            // ---- 3) Place columns left→right, elements top→bottom (keep relative vertical order) ----
-            var moved = new List<IMoveable>();
+            // ---- 3) Initial order of each column ----
+            // Dev-pin columns (inputs / outputs) are ordered alphabetically (natural order, so A1..A10 sort
+            // correctly); other columns start from their current top-to-bottom order.
             var sortedCols = columns.Keys.OrderBy(c => c).ToList();
+            var placedCols = new Dictionary<int, List<IMoveable>>();
+            foreach (int c in sortedCols)
+            {
+                var elems = new List<IMoveable>(columns[c]);
+                if (elems.TrueForAll(e => e is DevPinInstance))
+                    elems.Sort((x, y) => NaturalCompare(((DevPinInstance)x).Pin.Name, ((DevPinInstance)y).Pin.Name));
+                else
+                    elems.Sort((x, y) => y.Position.y.CompareTo(x.Position.y));
+                placedCols[c] = elems;
+            }
+
+            var moved = new List<IMoveable>();
+            foreach (int c in sortedCols)
+                foreach (IMoveable e in placedCols[c])
+                {
+                    e.MoveStartPosition = e.Position; // for undo
+                    moved.Add(e);
+                }
 
             // Column x positions (centered around 0)
             var colWidth = new Dictionary<int, float>();
@@ -82,38 +102,78 @@ namespace DLS.Game
                 runningX += colWidth[c] + HorizontalGap;
             }
 
-            var placedCols = new Dictionary<int, List<IMoveable>>();
-
-            foreach (int c in sortedCols)
+            // Stacks a column's elements top→bottom (centred on y = 0), grid-snapped.
+            void PlaceColumn(int c, List<IMoveable> elems)
             {
-                // Dev-pin columns (inputs / outputs) are ordered alphabetically (natural order, so A1..A10
-                // sort correctly); other columns keep their top-to-bottom order.
-                var elems = new List<IMoveable>(columns[c]);
-                if (elems.TrueForAll(e => e is DevPinInstance))
-                    elems.Sort((x, y) => NaturalCompare(((DevPinInstance)x).Pin.Name, ((DevPinInstance)y).Pin.Name));
-                else
-                    elems.Sort((x, y) => y.Position.y.CompareTo(x.Position.y));
-
-                // Explicit LayoutRow constraints (bigger = higher) override that order.
-                if (elems.Exists(e => e.LayoutRow != 0)) elems = ApplyRowConstraints(elems);
-                placedCols[c] = elems;
-
                 float colHeight = elems.Sum(ElementHeight) + VerticalGap * (elems.Count - 1);
                 float y = colHeight / 2f;
                 foreach (IMoveable e in elems)
                 {
                     float h = ElementHeight(e);
                     Vector2 target = new(colCentreX[c], y - h / 2f);
-                    target = new Vector2(GridHelper.SnapToGrid(target.x), GridHelper.SnapToGrid(target.y));
-
-                    e.MoveStartPosition = e.Position; // for undo
-                    e.Position = target;
-                    moved.Add(e);
+                    e.Position = new Vector2(GridHelper.SnapToGrid(target.x), GridHelper.SnapToGrid(target.y));
                     y -= h + VerticalGap;
                 }
             }
 
-            // ---- 3b) Same-line constraint: elements of different columns sharing a LayoutRow value must
+            foreach (int c in sortedCols) PlaceColumn(c, placedCols[c]);
+
+            // ---- 3a) Crossing reduction (barycenter sweeps) ----
+            // Each subchip column is reordered so that every element sits at the average height of the pins
+            // it is wired to in the columns already swept (left→right, then right→left, a few times). This is
+            // the classic layered-graph heuristic: it removes most wire crossings and, just as importantly,
+            // spreads the unavoidable ones out instead of piling them up in one spot. Dev-pin columns keep
+            // their alphabetical order.
+            var colOf = new Dictionary<IMoveable, int>();
+            foreach (int c in sortedCols) foreach (IMoveable e in placedCols[c]) colOf[e] = c;
+
+            var links = new List<(IMoveable a, PinInstance pa, IMoveable b, PinInstance pb)>();
+            foreach (WireInstance w in chip.Wires)
+            {
+                if (!w.IsFullyConnected) continue;
+                IMoveable a = w.SourcePin.parent, b = w.TargetPin.parent;
+                if (colOf.TryGetValue(a, out int ca) && colOf.TryGetValue(b, out int cb) && ca != cb) links.Add((a, w.SourcePin, b, w.TargetPin));
+            }
+
+            if (links.Count > 0)
+            {
+                var key = new Dictionary<IMoveable, float>();
+                for (int iter = 0; iter < 4; iter++)
+                {
+                    bool forward = iter % 2 == 0;
+                    IEnumerable<int> sweep = forward ? sortedCols : Enumerable.Reverse(sortedCols);
+                    foreach (int c in sweep)
+                    {
+                        List<IMoveable> elems = placedCols[c];
+                        if (elems.TrueForAll(e => e is DevPinInstance)) continue;
+
+                        key.Clear();
+                        foreach (IMoveable e in elems)
+                        {
+                            float sum = 0; int n = 0;
+                            foreach (var l in links)
+                            {
+                                if (l.a == e && (forward ? colOf[l.b] < c : colOf[l.b] > c)) { sum += l.pb.GetWorldPos().y; n++; }
+                                else if (l.b == e && (forward ? colOf[l.a] < c : colOf[l.a] > c)) { sum += l.pa.GetWorldPos().y; n++; }
+                            }
+                            key[e] = n > 0 ? sum / n : e.Position.y; // unconnected on that side: stay where it is
+                        }
+
+                        placedCols[c] = elems.OrderByDescending(e => key[e]).ToList(); // stable: ties keep their order
+                        PlaceColumn(c, placedCols[c]);
+                    }
+                }
+            }
+
+            // ---- 3b) Explicit LayoutRow constraints (bigger = higher) override the computed order ----
+            foreach (int c in sortedCols)
+            {
+                if (!placedCols[c].Exists(e => e.LayoutRow != 0)) continue;
+                placedCols[c] = ApplyRowConstraints(placedCols[c]);
+                PlaceColumn(c, placedCols[c]);
+            }
+
+            // ---- 3c) Same-line constraint: elements of different columns sharing a LayoutRow value must
             // end up on the same horizontal line. Columns are shifted as a whole (left→right, first match
             // wins) so within-column spacing — and therefore the absence of overlaps — is preserved.
             var rowLineY = new Dictionary<int, float>();
@@ -136,9 +196,14 @@ namespace DLS.Game
                     if (e.LayoutRow != 0 && !rowLineY.ContainsKey(e.LayoutRow)) rowLineY[e.LayoutRow] = e.Position.y;
             }
 
-            // ---- 4) Wire routing: keep every wire straight, and ONLY for the few that would actually
-            // clip a component, add a minimal orthogonal detour that hugs just above/below the obstacle
-            // (whichever side is the shorter detour). Wires that don't hit anything stay perfectly straight.
+            // ---- 4) Wire routing ----
+            // Every wire stays a straight line unless it would clip a component (or run backwards, or lie on
+            // top of another wire). Those get a minimal orthogonal detour: a short stub out of the pin, a
+            // vertical run, a horizontal run just above/below the obstacles, and the mirror image into the
+            // target. Wires may CROSS but never OVERLAP: each segment is checked against every segment already
+            // laid down, and a detour picks the nearest free "track" (vertical tracks step away from the pin,
+            // horizontal tracks step away from the obstacles). When a stub would lie on another wire leaving
+            // the same pin, the stub is dropped and the wire leaves the pin diagonally instead.
             // Skip wires that connect to another wire, or that another wire branches from.
             var branchedWires = new HashSet<WireInstance>();
             foreach (WireInstance w in chip.Wires)
@@ -147,8 +212,42 @@ namespace DLS.Game
                 if (w.TargetConnectionInfo.connectedWire != null) branchedWires.Add(w.TargetConnectionInfo.connectedWire);
             }
 
-            const float ClearPad = 0.22f; // clearance kept between a wire and a component
+            const float ClearPad = 0.22f;  // clearance kept between a wire and a component
+            const float StubLen = 0.375f;  // first track: distance from the pin
+            const float TrackStep = 0.25f; // spacing between parallel tracks
+            const int MaxTracks = 4;
 
+            var obstacles = moved.Select(e => (el: e, c: e.Position, half: new Vector2(ElementWidth(e) / 2f + ClearPad, ElementHeight(e) / 2f + ClearPad))).ToList();
+            var used = new List<(Vector2 a, Vector2 b)>(); // wire segments already laid down
+
+            bool ClipsAny(Vector2 a, Vector2 b, IMoveable ignore1, IMoveable ignore2)
+            {
+                foreach (var o in obstacles)
+                    if (o.el != ignore1 && o.el != ignore2 && SegIntersectsBox(a, b, o.c, o.half)) return true;
+                return false;
+            }
+
+            bool OverlapsUsed(Vector2 a, Vector2 b)
+            {
+                foreach (var u in used)
+                    if (CollinearOverlap(a, b, u.a, u.b)) return true;
+                return false;
+            }
+
+            bool PathOk(List<Vector2> pts, IMoveable srcEl, IMoveable tgtEl)
+            {
+                for (int i = 0; i < pts.Count - 1; i++)
+                    if (ClipsAny(pts[i], pts[i + 1], srcEl, tgtEl) || OverlapsUsed(pts[i], pts[i + 1])) return false;
+                return true;
+            }
+
+            void Register(List<Vector2> pts)
+            {
+                for (int i = 0; i < pts.Count - 1; i++) used.Add((pts[i], pts[i + 1]));
+            }
+
+            // Pass 1: straighten everything; wires whose straight line is clear are final and claim their segment.
+            var pending = new List<WireInstance>();
             foreach (WireInstance w in chip.Wires)
             {
                 if (!w.IsFullyConnected) continue;
@@ -158,47 +257,81 @@ namespace DLS.Game
                 while (w.WirePointCount > 2) w.DeleteWirePoint(1); // straighten
 
                 Vector2 s = w.GetWirePoint(0);
-                Vector2 t = w.GetWirePoint(w.WirePointCount - 1);
+                Vector2 t = w.GetWirePoint(1);
+                bool backwards = t.x - s.x < StubLen * 2f; // an output pin faces right, an input pin faces left
+                if (backwards || ClipsAny(s, t, w.SourcePin.parent, w.TargetPin.parent) || OverlapsUsed(s, t)) pending.Add(w);
+                else used.Add((s, t));
+            }
+
+            // Pass 2: detours, on the nearest free tracks.
+            foreach (WireInstance w in pending)
+            {
+                Vector2 s = w.GetWirePoint(0);
+                Vector2 t = w.GetWirePoint(1);
                 IMoveable srcEl = w.SourcePin.parent;
                 IMoveable tgtEl = w.TargetPin.parent;
+                bool backwards = t.x - s.x < StubLen * 2f;
 
-                float spanMinX = Mathf.Min(s.x, t.x);
-                float spanMaxX = Mathf.Max(s.x, t.x);
-                bool hit = false;
+                // Obstacle band across the wire's horizontal span (stubs included). A backwards wire has to go
+                // around its own source/target, so those count too in that case.
+                float spanMinX = Mathf.Min(s.x, t.x - StubLen);
+                float spanMaxX = Mathf.Max(s.x + StubLen, t.x);
                 float bandTop = float.NegativeInfinity, bandBot = float.PositiveInfinity;
-
-                foreach (IMoveable e in moved)
+                foreach (var o in obstacles)
                 {
-                    if (e == srcEl || e == tgtEl) continue;
-                    Vector2 c = e.Position;
-                    Vector2 half = new(ElementWidth(e) / 2f + ClearPad, ElementHeight(e) / 2f + ClearPad);
+                    if (!backwards && (o.el == srcEl || o.el == tgtEl)) continue;
+                    if (o.c.x + o.half.x < spanMinX || o.c.x - o.half.x > spanMaxX) continue;
+                    bandTop = Mathf.Max(bandTop, o.c.y + o.half.y);
+                    bandBot = Mathf.Min(bandBot, o.c.y - o.half.y);
+                }
+                if (float.IsInfinity(bandTop)) { bandTop = Mathf.Max(s.y, t.y); bandBot = Mathf.Min(s.y, t.y); }
+                float topBase = Mathf.Ceil(bandTop / DrawSettings.GridSize) * DrawSettings.GridSize;
+                float botBase = Mathf.Floor(bandBot / DrawSettings.GridSize) * DrawSettings.GridSize;
 
-                    if (SegIntersectsBox(s, t, c, half)) hit = true;
+                float costAbove = Mathf.Abs(topBase - s.y) + Mathf.Abs(topBase - t.y);
+                float costBelow = Mathf.Abs(botBase - s.y) + Mathf.Abs(botBase - t.y);
+                bool[] sides = costAbove <= costBelow ? new[] { true, false } : new[] { false, true };
 
-                    // Track the obstacle band across the wire's horizontal span (for a clean over/under route).
-                    if (c.x + half.x >= spanMinX && c.x - half.x <= spanMaxX)
+                List<Vector2> best = null;
+                foreach (bool above in sides)
+                {
+                    // Nearest tracks first: iterate by total track index.
+                    for (int sum = 0; sum <= MaxTracks * 3 && best == null; sum++)
+                    for (int ky = 0; ky <= sum && best == null; ky++)
+                    for (int kx = 0; kx <= sum - ky && best == null; kx++)
                     {
-                        bandTop = Mathf.Max(bandTop, c.y + half.y);
-                        bandBot = Mathf.Min(bandBot, c.y - half.y);
+                        int ke = sum - ky - kx;
+                        if (kx >= MaxTracks || ke >= MaxTracks || ky > MaxTracks * 2) continue;
+
+                        float routeY = above ? topBase + ky * TrackStep : botBase - ky * TrackStep;
+                        float exitX = s.x + StubLen + kx * TrackStep;
+                        float entryX = t.x - StubLen - ke * TrackStep;
+
+                        // Full detour, then the variants without the exit stub / entry stub (when a stub would
+                        // lie on another wire leaving or reaching the same pin).
+                        var full = new List<Vector2> { s, new(exitX, s.y), new(exitX, routeY), new(entryX, routeY), new(entryX, t.y), t };
+                        if (PathOk(full, srcEl, tgtEl)) { best = full; break; }
+                        var noExit = new List<Vector2> { s, new(exitX, routeY), new(entryX, routeY), new(entryX, t.y), t };
+                        if (PathOk(noExit, srcEl, tgtEl)) { best = noExit; break; }
+                        var noEntry = new List<Vector2> { s, new(exitX, s.y), new(exitX, routeY), new(entryX, routeY), t };
+                        if (PathOk(noEntry, srcEl, tgtEl)) { best = noEntry; break; }
+                        var neither = new List<Vector2> { s, new(exitX, routeY), new(entryX, routeY), t };
+                        if (PathOk(neither, srcEl, tgtEl)) { best = neither; break; }
                     }
+                    if (best != null) break;
                 }
 
-                if (!hit) continue; // straight line is already clear — leave it perfectly straight
+                // Nothing free within reach: take the nearest track anyway (may overlap — the crossing gaps
+                // in the renderer still keep it readable).
+                if (best == null)
+                {
+                    bool above = sides[0];
+                    float routeY = above ? topBase : botBase;
+                    best = new List<Vector2> { s, new(s.x + StubLen, s.y), new(s.x + StubLen, routeY), new(t.x - StubLen, routeY), new(t.x - StubLen, t.y), t };
+                }
 
-                float dir = Mathf.Sign(t.x - s.x);
-                if (dir == 0) dir = 1;
-                float exitX = s.x + dir * 0.45f;
-                float entryX = t.x - dir * 0.45f;
-
-                float costAbove = Mathf.Abs(bandTop - s.y) + Mathf.Abs(bandTop - t.y);
-                float costBelow = Mathf.Abs(bandBot - s.y) + Mathf.Abs(bandBot - t.y);
-                float routeY = costAbove <= costBelow ? bandTop : bandBot;
-
-                // source → (exitX, s.y) → (exitX, routeY) → (entryX, routeY) → (entryX, t.y) → target
-                w.InsertPoint(new Vector2(exitX, s.y), 0);
-                w.InsertPoint(new Vector2(exitX, routeY), 1);
-                w.InsertPoint(new Vector2(entryX, routeY), 2);
-                w.InsertPoint(new Vector2(entryX, t.y), 3);
+                for (int i = 1; i < best.Count - 1; i++) w.InsertPoint(best[i], i - 1);
+                Register(best);
             }
 
             // ---- 5) Record undo ----
@@ -246,6 +379,28 @@ namespace DLS.Game
                 && Clip(dx, (c.x + h.x) - a.x, ref t0, ref t1)
                 && Clip(-dy, a.y - (c.y - h.y), ref t0, ref t1)
                 && Clip(dy, (c.y + h.y) - a.y, ref t0, ref t1);
+        }
+
+        // Do segments a1→a2 and b1→b2 lie on the same line and share more than a sliver of it?
+        // (Crossing wires are fine — this only catches wires running on top of each other.)
+        static bool CollinearOverlap(Vector2 a1, Vector2 a2, Vector2 b1, Vector2 b2)
+        {
+            const float lineEps = 0.02f;   // max distance from the line to count as "on" it
+            const float minShared = 0.05f; // shared length below this is just a touching corner
+
+            Vector2 d = a2 - a1;
+            float len = d.magnitude;
+            if (len < 1e-4f) return false;
+            d /= len;
+
+            Vector2 r1 = b1 - a1, r2 = b2 - a1;
+            if (Mathf.Abs(d.x * r1.y - d.y * r1.x) > lineEps) return false;
+            if (Mathf.Abs(d.x * r2.y - d.y * r2.x) > lineEps) return false;
+
+            float p1 = Vector2.Dot(r1, d), p2 = Vector2.Dot(r2, d);
+            float lo = Mathf.Max(0f, Mathf.Min(p1, p2));
+            float hi = Mathf.Min(len, Mathf.Max(p1, p2));
+            return hi - lo > minShared;
         }
 
         static bool Clip(float p, float q, ref float t0, ref float t1)

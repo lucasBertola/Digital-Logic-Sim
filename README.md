@@ -31,8 +31,10 @@ what the fork adds on top.
 - **Right-click on empty space** opens a small menu with two entries:
   - **IN/OUT** — the IN/OUT collection popup at the cursor (same popup as the bottom bar, shift-click to
     place several at once; it stays until you click elsewhere).
-  - **Clean Up** — automatic layout: components in columns by signal depth, pins sorted naturally
-    (A2 before A10), grid snapping, and wires only detoured when they would cross a component.
+  - **Clean Up** — automatic layout: components in columns by signal depth, each column ordered to
+    minimise wire crossings, pins sorted naturally (A2 before A10), grid snapping, and wires only
+    detoured when they would cross a component. Wires may cross but never run on top of each other.
+- **Wire crossings** are drawn with a small gap, so it is always clear which wire passes over the other.
 - **VCC / GND** builtin chips: constant HIGH / LOW sources that don't add inputs to your chip.
 - Confirmation popup before deleting a chip, and a prompt on quit when there are unsaved changes.
 - Editor and standalone build share the same save location.

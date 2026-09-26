@@ -85,6 +85,22 @@ namespace DLS.Graphics
 			{
 				DrawWire(wire);
 			}
+
+			// Junction dots (wire branching off another wire) go on top of every wire, so that the crossing
+			// gap of a wire drawn later can't cut through them.
+			foreach (WireInstance wire in orderedWires) DrawWireJunction(wire);
+			foreach (WireInstance wire in controller.DuplicatedWires) DrawWireJunction(wire);
+		}
+
+		static void DrawWireJunction(WireInstance wire)
+		{
+			if (wire.ConnectedWire == null || wire.bitCount != PinBitCount.Bit1) return;
+			Vector2[] points = wire.BitWires[0].Points;
+			if (points == null || points.Length == 0) return;
+
+			Vector2 connectionPoint = wire.SourceConnectionInfo.IsConnectedAtWire ? points[0] : points[^1];
+			float radius = ShouldHighlightWire(wire) ? 0.07f : 0.06f;
+			Draw.Point(connectionPoint, radius, wire.GetColour(0));
 		}
 
 		static void DrawAllPinNamesAndChipLabels()
@@ -756,18 +772,10 @@ namespace DLS.Graphics
 			}
 
 
-			// Draw
+			// Draw (halo first: see WireDrawer.DrawWireHalo)
 			Color col = wire.GetColour(0);
+			WireDrawer.DrawWireHalo(wire.BitWires[0].Points, thickness, WireCrossingGap, ActiveTheme.BackgroundCol);
 			float interactSqrDst = WireDrawer.DrawWireStraight(wire.BitWires[0].Points, thickness, col, mousePos);
-
-			// Draw connection point (if connects to wire)
-			if (wire.ConnectedWire != null)
-			{
-				Vector2 connectionPoint = wire.SourceConnectionInfo.IsConnectedAtWire ? wire.BitWires[0].Points[0] : wire.BitWires[0].Points[^1];
-
-				float radius = highlightWire ? 0.07f : 0.06f;
-				Draw.Point(connectionPoint, radius, col);
-			}
 
 			if (canInteract && interactSqrDst < sqrDstThreshold)
 			{
@@ -786,7 +794,12 @@ namespace DLS.Graphics
 
 			WireLayoutHelper.CreateMultiBitWireLayout(wire.BitWires, wire, WireThickness);
 
-			// Draw
+			// Draw (all halos first so the bit lines of the bundle don't cut each other)
+			foreach (WireInstance.BitWire bitWire in wire.BitWires)
+			{
+				WireDrawer.DrawWireHalo(bitWire.Points, thickness, WireCrossingGap, ActiveTheme.BackgroundCol);
+			}
+
 			for (int bitIndex = 0; bitIndex < wire.BitWires.Length; bitIndex++)
 			{
 				WireInstance.BitWire bitWire = wire.BitWires[bitIndex];

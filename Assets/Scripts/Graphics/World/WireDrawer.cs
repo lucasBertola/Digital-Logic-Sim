@@ -21,6 +21,18 @@ namespace DLS.Graphics
 			return interactSqrDst;
 		}
 
+		// Draws the wire's path in the background colour, slightly wider than the wire itself. Drawn just
+		// before the wire, it cuts a gap into every wire drawn earlier that this one crosses, which makes it
+		// clear that this wire passes over the other. All segments are drawn first so a wire never cuts itself.
+		public static void DrawWireHalo(Vector2[] points, float wireThickness, float gap, Color backgroundCol)
+		{
+			float thickness = wireThickness + gap * 2;
+			for (int i = 1; i < points.Length; i++)
+			{
+				Draw.Line(points[i - 1], points[i], thickness, backgroundCol);
+			}
+		}
+
 		static void WireSegmentDraw(Vector2 start, Vector2 end, float thickness, Color col, Vector2 interactPos, ref float minSqrDst)
 		{
 			Draw.Line(start, end, thickness, col);
