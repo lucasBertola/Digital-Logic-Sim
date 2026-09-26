@@ -299,6 +299,8 @@ namespace DLS.Game
 				SearchPopup.AddRecentChip(devChip.LastSavedDescription.Name);
 				RecordVisit(devChip.LastSavedDescription.Name);
 			}
+
+			if (ActiveProject == this) CameraController.SyncToViewedChip();
 		}
 
 		void RecordVisit(string chipName)
@@ -346,6 +348,7 @@ namespace DLS.Game
 			chipViewStack.Push(devChip);
 
 			if (devChip.LastSavedDescription != null) SearchPopup.AddRecentChip(devChip.LastSavedDescription.Name);
+			if (ActiveProject == this) CameraController.SyncToViewedChip();
 		}
 
 		// Live description of an open chip (for the simulation to resolve unsaved sub-chips).
