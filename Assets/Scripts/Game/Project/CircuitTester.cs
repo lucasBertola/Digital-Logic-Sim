@@ -127,6 +127,17 @@ namespace DLS.Game
 
                 bool hasClock = ContainsClock(target);
 
+                // An input pin named like a clock (CLOCK, CLK, Clock_in...) is driven by "clocks" too: a chip
+                // built from latches typically has such an input instead of a CLOCK component, and silently
+                // ignoring "clocks" there once made the assistant conclude the circuit was broken.
+                int clockInputIdx = Array.FindIndex(inNames, n => IsClockName(n));
+                if (clockInputIdx < 0)
+                {
+                    int[] candidates = Enumerable.Range(0, inNames.Length).Where(i => inBits[i] == 1 && LooksLikeClockName(inNames[i])).ToArray();
+                    if (candidates.Length == 1) clockInputIdx = candidates[0];
+                }
+                bool clocksDriveSomething = hasClock || clockInputIdx >= 0;
+
                 // Resolve every step's targets up front, so a typo fails before anything is simulated.
                 // kind 0 = input pin, 1 = KEY chip, 2 = the clock level
                 var plan = new List<List<(int kind, int index, ushort value, string label)>>();
@@ -158,7 +169,7 @@ namespace DLS.Game
 
                         // "CLOCK" (or any CLOCK component label) drives every clock of the circuit: they are
                         // all in phase in this simulator, so one level is faithful.
-                        if (hasClock && (string.Equals(name, ClockControlName, StringComparison.OrdinalIgnoreCase) ||
+                        if ((hasClock || clockInputIdx >= 0) && (string.Equals(name, ClockControlName, StringComparison.OrdinalIgnoreCase) ||
                                          name.StartsWith(ClockControlName + "#", StringComparison.OrdinalIgnoreCase)))
                         {
                             if (!TryParseValue(value, 1, out ushort v, out string verr))
@@ -195,6 +206,14 @@ namespace DLS.Game
                                   "elle reste a 0 tant que tu ne la pilotes pas. Mets \"clocks\": N dans une etape pour jouer N cycles complets " +
                                   "(front montant a chaque cycle), ou pilote-la a la main avec set {pin:\"CLOCK\", value:\"1\"/\"0\"}. " +
                                   "Ne modifie JAMAIS le circuit pour tester.");
+                if (anyClockDriving)
+                {
+                    if (hasClock && clockInputIdx >= 0) sb.AppendLine($"\"clocks\" pilote le composant CLOCK et l'entree \"{inNames[clockInputIdx]}\" (en phase).");
+                    else if (hasClock) sb.AppendLine("\"clocks\" pilote le composant CLOCK.");
+                    else if (clockInputIdx >= 0) sb.AppendLine($"\"clocks\" pilote l'entree \"{inNames[clockInputIdx]}\" (0 -> 1 -> 0 par cycle).");
+                    else sb.AppendLine("ATTENTION : \"clocks\" est IGNORE : ce circuit n'a ni composant CLOCK ni entree d'horloge (CLOCK/CLK). " +
+                                       "Pilote l'entree qui sert d'horloge a la main avec set {pin:\"<nom>\", value:\"0\"} puis \"1\" dans des etapes separees.");
+                }
                 if (probeErrors.Count > 0) sb.AppendLine("Watch ignore : " + string.Join(" ; ", probeErrors));
 
                 var prevGrids = new string[displays.Count];
@@ -220,6 +239,7 @@ namespace DLS.Game
                     void RunTicks(int n)
                     {
                         if (hasClock) Simulator.forcedClockState = clockLevel;
+                        if (clockInputIdx >= 0 && (cycles > 0 || plan[s].Exists(a => a.kind == 2))) inputStates[clockInputIdx] = (ushort)clockLevel;
                         for (int t = 0; t < n; t++)
                         {
                             for (int i = 0; i < inputStates.Length; i++) PinState.Set(ref root.InputPins[i].State, inputStates[i], 0);
@@ -227,10 +247,11 @@ namespace DLS.Game
                         }
                     }
 
-                    if (cycles > 0 && hasClock)
+                    if (cycles > 0 && clocksDriveSomething)
                     {
                         // One cycle = clock LOW then HIGH (the rising edge that latches), then back to LOW so
-                        // the state read at the end of the step is settled with the clock idle.
+                        // the state read at the end of the step is settled with the clock idle. The inputs set
+                        // in this step are already applied, so a data input settles BEFORE the edge.
                         for (int c = 0; c < cycles; c++)
                         {
                             clockLevel = 0;
@@ -252,7 +273,8 @@ namespace DLS.Game
                     line.Append('#').Append(s + 1);
                     if (!string.IsNullOrWhiteSpace(st.note)) line.Append(" (").Append(st.note.Trim()).Append(')');
                     if (ticks != DefaultTicksPerStep) line.Append(" [").Append(ticks).Append(" ticks]");
-                    if (cycles > 0 && hasClock) line.Append(" [").Append(cycles).Append(" cycle").Append(cycles > 1 ? "s" : "").Append(" CLOCK]");
+                    if (cycles > 0 && clocksDriveSomething) line.Append(" [").Append(cycles).Append(" cycle").Append(cycles > 1 ? "s" : "").Append(hasClock ? " CLOCK]" : $" {inNames[clockInputIdx]}]");
+                    else if (cycles > 0) line.Append(" [clocks IGNORE : pas d'horloge]");
 
                     if (inputStates.Length > 0)
                     {
@@ -447,6 +469,18 @@ namespace DLS.Game
 
         // Is there a CLOCK anywhere in the tested chip (possibly nested in a sub-brick)? The forced-clock
         // override is global, so a nested clock is driven too.
+        static bool IsClockName(string n)
+        {
+            string s = (n ?? "").Trim().ToUpperInvariant();
+            return s == "CLOCK" || s == "CLK" || s == "HORLOGE";
+        }
+
+        static bool LooksLikeClockName(string n)
+        {
+            string s = (n ?? "").Trim().ToUpperInvariant();
+            return s.Contains("CLOCK") || s.Contains("CLK") || s.Contains("HORLOGE");
+        }
+
         static bool ContainsClock(SimChip chip)
         {
             if (chip == null) return false;
