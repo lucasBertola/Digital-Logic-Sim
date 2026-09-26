@@ -1,3 +1,4 @@
+using DLS.Simulation;
 using System;
 using System.Collections.Generic;
 using DLS.Description;
@@ -312,7 +313,16 @@ namespace DLS.Game
 
 		public Color GetColour(int bitIndex)
 		{
-			Color col = IsFullyConnected ? SourcePin.GetStateCol(bitIndex, false, false) : DrawSettings.ActiveTheme.StateDisconnectedCol;
+			// A wire whose source is floating (high impedance) takes the voltage of whatever else drives the net:
+			// colour it from its TARGET pin, whose state is the merged one, instead of from the floating source.
+			Color col;
+			if (!IsFullyConnected) col = DrawSettings.ActiveTheme.StateDisconnectedCol;
+			else
+			{
+				bool sourceFloating = ((PinState.GetTristateFlags(SourcePin.State) >> bitIndex) & 1) == 1;
+				PinInstance colourPin = sourceFloating && TargetPin_BusCorrected != null ? TargetPin_BusCorrected : SourcePin;
+				col = colourPin.GetStateCol(bitIndex, false, false);
+			}
 
 			if (bitCount != PinBitCount.Bit1 && bitIndex % 2 == 0)
 			{

@@ -35,7 +35,7 @@ namespace DLS.Game
 
 			IsBusPin = parent is SubChipInstance subchip && subchip.IsBus;
 			faceRight = isSourcePin;
-			PinState.SetAllDisconnected(ref State);
+			PinState.SetAllDisconnectedLow(ref State);
 		}
 
 		public Vector2 ForwardDir => faceRight ? Vector2.right : Vector2.left;

@@ -31,7 +31,7 @@ namespace DLS.Simulation
 			latestSourceID = -1;
 			latestSourceParentChipID = -1;
 
-			PinState.SetAllDisconnected(ref State);
+			PinState.SetAllDisconnectedLow(ref State);
 		}
 
 		public bool FirstBitHigh => PinState.FirstBitHigh(State);

@@ -71,5 +71,9 @@ namespace DLS.Simulation
 		// toggles at each tick, and anything fed by it toggles too (user's choice: a floating input must not
 		// look like a quiet 0).
 		public static void SetAllDisconnected(ref uint state) => Set(ref state, (ushort)((Simulator.simulationFrame & 1) == 0 ? 0 : ushort.MaxValue), ushort.MaxValue);
+
+		// Initial state of a pin nobody has driven yet: floating, value LOW (an unconnected input reads 0 — the
+		// optimiser's Extract relies on it — whatever the simulation frame at construction time).
+		public static void SetAllDisconnectedLow(ref uint state) => Set(ref state, 0, ushort.MaxValue);
 	}
 }
