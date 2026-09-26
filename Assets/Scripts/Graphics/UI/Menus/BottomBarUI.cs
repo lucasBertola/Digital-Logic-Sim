@@ -523,7 +523,7 @@ namespace DLS.Graphics
 		{
 			// Free navigation: no prompt. Create a blank chip and immediately prompt for its name so it
 			// gets saved and appears in the bottom bar.
-			Project.ActiveProject.CreateBlankDevChip();
+			Project.ActiveProject.BeginNewChip();
 			UIDrawer.SetActiveMenu(UIDrawer.MenuType.ChipSave);
 		}
 

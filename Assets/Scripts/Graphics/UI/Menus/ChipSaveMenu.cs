@@ -172,6 +172,7 @@ namespace DLS.Graphics
 		static void Cancel()
 		{
 			CloseMenu();
+			Project.ActiveProject.CancelNewChip(); // no-op unless this was the name prompt of a still-blank new chip
 		}
 
 		static void CloseMenu()

@@ -255,6 +255,30 @@ namespace DLS.Game
 			SetNewActiveDevChip(devChip);
 		}
 
+		// "New chip": remembers where the user was, so that cancelling the name prompt brings them back there
+		// instead of leaving them on an empty, nameless chip.
+		DevChipInstance chipBeforeNewChip;
+
+		public void BeginNewChip()
+		{
+			chipBeforeNewChip = editModeChip != null && (editModeChip.LastSavedDescription != null || editModeChip.Elements.Count > 0) ? editModeChip : null;
+			CreateBlankDevChip();
+		}
+
+		// Called when the name prompt of a new chip is cancelled. Returns to the previous chip if the new one
+		// is still blank (nothing placed, never saved); otherwise leaves things as they are.
+		public void CancelNewChip()
+		{
+			DevChipInstance previous = chipBeforeNewChip;
+			chipBeforeNewChip = null;
+			if (previous == null || editModeChip == null) return;
+			if (editModeChip.LastSavedDescription != null || editModeChip.Elements.Count > 0) return;
+
+			suppressUndoRecording = true; // the blank chip never existed as far as the undo timeline is concerned
+			ActivateEditChip(previous);
+			suppressUndoRecording = false;
+		}
+
 		public void LoadDevChipOrCreateNewIfDoesntExist(string chipName)
 		{
 			// Already open in memory? Reuse it so unsaved edits are preserved (free navigation).
