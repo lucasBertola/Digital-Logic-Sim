@@ -442,7 +442,16 @@ namespace DLS.Graphics
 				size *= 0.88f;
 			}
 
-			Draw.Text(FontBold, text, size, subchip.Position, Anchor.TextCentre, textCol, ChipNameLineSpacing);
+			// Each line centred on its own (a multi-line Draw.Text keeps lines left-aligned to each other)
+			string[] lines = text.Split('\n');
+			float totalH = Draw.CalculateTextBoundsSize(text, size, FontBold).y;
+			float lineH = totalH / lines.Length;
+			float y = subchip.Position.y + totalH / 2f - lineH / 2f;
+			foreach (string line in lines)
+			{
+				Draw.Text(FontBold, line, size, new Vector2(subchip.Position.x, y), Anchor.TextCentre, textCol);
+				y -= lineH;
+			}
 		}
 
 		// Greedy word wrap for a given font size (a word wider than the width stays alone on its line;
