@@ -66,6 +66,10 @@ namespace DLS.Simulation
 			Set(ref state, bitStates, 0);
 		}
 
-		public static void SetAllDisconnected(ref uint state) => Set(ref state, 0, ushort.MaxValue);
+		// High impedance (Z): the tristate flags are set (so on a shared line any real driver wins), and the
+		// bit VALUE carried along flips every simulation step. A floating line therefore reads as a signal that
+		// toggles at each tick, and anything fed by it toggles too (user's choice: a floating input must not
+		// look like a quiet 0).
+		public static void SetAllDisconnected(ref uint state) => Set(ref state, (ushort)((Simulator.simulationFrame & 1) == 0 ? 0 : ushort.MaxValue), ushort.MaxValue);
 	}
 }
