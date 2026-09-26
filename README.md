@@ -44,11 +44,21 @@ what the fork adds on top.
 - Confirmation popup before deleting a chip, and a prompt on quit when there are unsaved changes.
 - Editor and standalone build share the same save location.
 
-### Building
+### Running it (Windows, no Unity needed)
+1. Clone the repository (or download it as a zip).
+2. Double-click `lancerApp.bat`. The first time, it downloads the latest
+   [Release](https://github.com/lucasBertola/Digital-Logic-Sim/releases) into `Builds\Windows` and
+   starts the app; afterwards it just starts it.
+3. For the Ask Claude assistant, set an `ANTHROPIC_API_KEY` environment variable before launching
+   (everything else works without it).
+
+### Building and publishing
 Unity `6000.0.46f1`. A build entry point is provided in `Assets/Editor/BuildTools.cs`
 (`Tools > Build Windows Player (fork)` in the editor, or `BuildTools.BuildWindows` from the command
-line); the output goes to `Builds/Windows/`. `lancerApp.bat` launches the last build with the API key
-injected. See `CLAUDE.md` for the architecture notes.
+line); the output goes to `Builds/Windows/`. When Unity is installed, `lancerApp.bat` rebuilds
+automatically if the code changed since the last build. `publierRelease.bat v0.2` zips the current
+build and publishes it as a GitHub Release (directly with the `gh` CLI, otherwise it opens the release
+page with the zip ready to attach). See `CLAUDE.md` for the architecture notes.
 
 ---
 
