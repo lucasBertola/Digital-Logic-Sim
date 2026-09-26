@@ -88,7 +88,7 @@ namespace DLS.Graphics
 
 		static readonly MenuEntry[] entries_inputDevPin = new[]
 		{
-			new(Format("EDIT"), OpenPinEditMenu, CanEditCurrentChip),
+			new(Format("RENAME"), OpenPinEditMenu, CanEditCurrentChip),
 			new(Format("DELETE"), Delete, CanDelete),
 			dividerMenuEntry
 		}.Concat(pinColEntries).ToArray();
