@@ -121,6 +121,11 @@ namespace DLS.Graphics
 						}
 					}
 
+					// The chip's label (set by RENAME) follows the "chip pin names" display setting:
+					// always / on hover (mouse over the chip or one of its pins) / tab toggle.
+					bool hoverThisChip = InteractionState.ElementUnderMouse == subchip || (InteractionState.ElementUnderMouse is PinInstance hp && hp.parent == subchip);
+					bool labelOnHover = Project.ActiveProject.description.Prefs_ChipPinNamesDisplayMode == PreferencesMenu.DisplayMode_OnHover && hoverThisChip;
+					if (drawAllSubchipPinNames || labelOnHover) DrawSubChipLabel(subchip);
 				}
 			}
 
@@ -387,13 +392,10 @@ namespace DLS.Graphics
 			if (isKeyChip || desc.NameLocation != NameDisplayLocation.Hidden)
 			{
 				// Display on single line if name fits comfortably, otherwise use 'formatted' version (split across multiple lines)
-				// A renamed chip (RENAME sets its Label) shows the label ON the chip, in place of its type name.
-				bool hasLabel = !isKeyChip && !string.IsNullOrWhiteSpace(subchip.Label);
-				string baseName = hasLabel ? subchip.Label.Trim() : subchip.Description.Name;
-				string displayName = isKeyChip ? subchip.activationKeyString : hasLabel ? baseName : subchip.MultiLineName;
-				if (Draw.CalculateTextBoundsSize(baseName, FontSizeChipName, FontBold).x < subchip.Size.x - PinRadius * 2.5f)
+				string displayName = isKeyChip ? subchip.activationKeyString : subchip.MultiLineName;
+				if (Draw.CalculateTextBoundsSize(subchip.Description.Name, FontSizeChipName, FontBold).x < subchip.Size.x - PinRadius * 2.5f)
 				{
-					displayName = baseName;
+					displayName = subchip.Description.Name;
 				}
 
 				bool nameCentre = desc.NameLocation == NameDisplayLocation.Centre || isKeyChip;
