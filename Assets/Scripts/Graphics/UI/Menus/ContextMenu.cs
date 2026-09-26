@@ -41,7 +41,8 @@ namespace DLS.Graphics
 		static readonly MenuEntry deleteEntry = new(Format("DELETE"), Delete, CanDelete);
 		static readonly MenuEntry openChipEntry = new(Format("OPEN"), OpenChip, CanOpenChip);
 		static readonly MenuEntry labelChipEntry = new(Format("RENAME"), OpenChipLabelPopup, CanLabelChip);
-		static readonly MenuEntry displayNameEntry = new(Format("DISPLAY NAME"), ToggleDisplayName, CanLabelChip);
+		static readonly MenuEntry displayNameEntry = new(() => Format(DisplayNameIsOn() ? "HIDE NAME" : "DISPLAY NAME"), ToggleDisplayName, CanLabelChip);
+		static bool DisplayNameIsOn() => interactionContext is SubChipInstance sc && sc.ShowLabelOnChip && !string.IsNullOrWhiteSpace(sc.Label);
 
 		static readonly MenuEntry[] entries_customSubchip =
 		{
@@ -727,14 +728,26 @@ namespace DLS.Graphics
 
 		public readonly struct MenuEntry
 		{
-			public readonly string Text;
+			readonly string text;
+			readonly Func<string> textFunc; // for entries whose label depends on the current state (DISPLAY NAME / HIDE NAME)
+			public string Text => textFunc != null ? textFunc() : text;
 			public readonly Action OnPress;
 			public readonly Func<bool> IsEnabled;
 			public readonly MenuEntry[] SubEntries; // when set: hovering the entry opens these in a second menu beside it
 
 			public MenuEntry(string text, Action onPress, Func<bool> isEnabled)
 			{
-				Text = text;
+				this.text = text;
+				textFunc = null;
+				OnPress = onPress;
+				IsEnabled = isEnabled;
+				SubEntries = null;
+			}
+
+			public MenuEntry(Func<string> textFunc, Action onPress, Func<bool> isEnabled)
+			{
+				text = null;
+				this.textFunc = textFunc;
 				OnPress = onPress;
 				IsEnabled = isEnabled;
 				SubEntries = null;
@@ -742,7 +755,8 @@ namespace DLS.Graphics
 
 			public MenuEntry(string text, MenuEntry[] subEntries, Func<bool> isEnabled)
 			{
-				Text = text;
+				this.text = text;
+				textFunc = null;
 				OnPress = null;
 				IsEnabled = isEnabled;
 				SubEntries = subEntries;
