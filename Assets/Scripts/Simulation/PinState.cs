@@ -67,10 +67,10 @@ namespace DLS.Simulation
 		}
 
 		// High impedance (Z): the tristate flags are set (so on a shared line any real driver wins), and the
-		// bit VALUE carried along flips every simulation step. A floating line therefore reads as a signal that
-		// toggles at each tick, and anything fed by it toggles too (user's choice: a floating input must not
-		// look like a quiet 0).
-		public static void SetAllDisconnected(ref uint state) => Set(ref state, (ushort)((Simulator.simulationFrame & 1) == 0 ? 0 : ushort.MaxValue), ushort.MaxValue);
+		// bit VALUE carried along is RANDOM at every simulation step (each bit independently). A floating line
+		// therefore reads as noise, and anything fed by it sees noise too (user's choice: a floating input must
+		// not look like a quiet 0, and must not be a predictable alternation either).
+		public static void SetAllDisconnected(ref uint state) => Set(ref state, Simulator.RandomBits16(), ushort.MaxValue);
 
 		// Initial state of a pin nobody has driven yet: floating, value LOW (an unconnected input reads 0 — the
 		// optimiser's Extract relies on it — whatever the simulation frame at construction time).

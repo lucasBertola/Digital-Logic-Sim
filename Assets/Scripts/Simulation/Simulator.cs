@@ -220,6 +220,15 @@ namespace DLS.Simulation
 			SimKeyboardHelper.RefreshInputState();
 		}
 
+		// 16 random bits (one PCG step), for the value carried by a floating (high-impedance) line
+		public static ushort RandomBits16()
+		{
+			pcg_rngState = pcg_rngState * 747796405 + 2891336453;
+			uint result = ((pcg_rngState >> (int)((pcg_rngState >> 28) + 4)) ^ pcg_rngState) * 277803737;
+			result = (result >> 22) ^ result;
+			return (ushort)result;
+		}
+
 		public static bool RandomBool()
 		{
 			pcg_rngState = pcg_rngState * 747796405 + 2891336453;
