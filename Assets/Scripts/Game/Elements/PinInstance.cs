@@ -73,7 +73,9 @@ namespace DLS.Game
 			uint pinState = (IsSourcePin && canUsePlayerState) ? PlayerInputState : State; // dev input pin uses player state (so it updates even when sim is paused)
 			uint state = PinState.GetBitTristatedValue(pinState, bitIndex);
 
-			if (state == PinState.LogicDisconnected) return DrawSettings.ActiveTheme.StateDisconnectedCol;
+			// High impedance (Z): the wire is driven by nobody. Shown as the HIGH and LOW colours alternating
+			// (a few times per second), so it is never mistaken for a plain 0 or 1.
+			if (state == PinState.LogicDisconnected) return DrawSettings.GetStateColour((int)(UnityEngine.Time.time * 4f) % 2 == 0, (uint)Colour, hover);
 			return DrawSettings.GetStateColour(state == PinState.LogicHigh, (uint)Colour, hover);
 			
 		}
