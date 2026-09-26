@@ -276,6 +276,12 @@ namespace DLS.Graphics
 
 			Draw.Quad(centre, size, ActiveTheme.PinLabelCol);
 			Draw.Text(font, text, FontSizePinLabel, centre, Anchor.TextFirstLineCentre, Color.white);
+
+			// Right-click on an input/output's name label = right-click on the pin itself
+			if (pin.parent is DevPinInstance devPin && InputHelper.MouseInsideBounds_World(centre, size))
+			{
+				InteractionState.NotifyContextElementUnderMouse(devPin);
+			}
 		}
 
 		public static void DrawSubChipLabel(SubChipInstance chip)
