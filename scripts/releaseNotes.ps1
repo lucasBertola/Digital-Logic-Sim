@@ -28,6 +28,7 @@ On te donne la liste des commits depuis la version precedente. Ecris des notes d
 - regroupe par theme (Nouveautes, Ameliorations, Corrections...) avec un titre de niveau ## par theme, seulement les themes utiles ;
 - une puce par changement visible par l'utilisateur, formulee du point de vue de l'utilisateur (ce que ca change pour lui), sans jargon de code, sans noms de fichiers, de classes ou de fonctions ;
 - fusionne les commits qui parlent de la meme chose ; si un commit annule ou retire ce qu'un commit precedent avait ajoute, ne mentionne ni l'un ni l'autre (l'utilisateur ne voit que le resultat final) ; ignore les commits purement internes (documentation de dev, refactoring, scripts de build) ou mentionne-les en une ligne a la fin ;
+- les libelles de l'interface (entrees de menu, boutons, noms d'outils comme RENAME, SET COLOUR, OPEN, Clean Up) sont en anglais dans le logiciel : cite-les tels quels, ne les traduis pas ;
 - reste concis : pas d'introduction, pas de conclusion, pas de formule de politesse.
 Tu choisis aussi le numero de la nouvelle version, au format V<majeur>.<mineur>.<correctif> :
 - s'il n'y a pas de version precedente : V1.0.0 ;

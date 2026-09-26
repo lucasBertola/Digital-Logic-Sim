@@ -35,7 +35,16 @@ if not defined NEXT set "NEXT=V1.0.0"
 
 REM --- Commits depuis la derniere Release (ou depuis le debut du fork) ---
 if defined LAST (
-  set "RANGE=%LAST%..HEAD"
+  REM le tag de la Release est cree sur GitHub : il faut le rapatrier pour que git connaisse la plage
+  git fetch -q --tags origin >nul 2>&1
+  git rev-parse --verify -q "%LAST%^{commit}" >nul 2>&1
+  if errorlevel 1 (
+    echo ^(tag %LAST% introuvable localement : notes depuis le debut du fork^)
+    set "RANGE=HEAD"
+    git rev-parse --verify -q upstream/main >nul 2>&1 && set "RANGE=upstream/main..HEAD"
+  ) else (
+    set "RANGE=%LAST%..HEAD"
+  )
   set "TITLE=Changements depuis %LAST%"
 ) else (
   set "RANGE=HEAD"
