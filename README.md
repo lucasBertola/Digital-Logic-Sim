@@ -61,8 +61,8 @@ what the fork adds on top.
   simulation step, so anything fed by it sees noise; on a shared line any driven source wins, and the
   buffer's output then takes the value of its net. Wires show the real value of their net.
 - **DUPLICATE** (right-click a custom chip): a copy of the chip under the name you choose.
-- **EXPORT (LLM)** asks whether to copy the current chip (with its sub-circuits) or all chips of the
-  project.
+- **EXPORT (LLM)** asks whether to copy the current chip only (its components and wiring) or all chips
+  of the project.
 - **VCC / GND** builtin chips: constant HIGH / LOW sources that don't add inputs to your chip.
 - **Keyboard shortcuts work on AZERTY as well as QWERTY** (Ctrl+Z, Ctrl+Q… follow the letter printed
   on the key, not its US position), and KEY chips react to the key you actually bound them to.

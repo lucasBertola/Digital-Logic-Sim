@@ -12,8 +12,8 @@ using UnityEngine;
 
 namespace DLS.Graphics
 {
-    // EXPORT (LLM): choose what goes to the clipboard — the current chip (with its sub-circuits) or every
-    // custom chip of the project.
+    // EXPORT (LLM): choose what goes to the clipboard — the current chip ONLY (its components and wiring,
+    // sub-chips as black boxes) or every custom chip of the project.
     public static class ExportChoicePopup
     {
         static readonly bool[] interactStates = { true, true, true };
@@ -78,9 +78,11 @@ namespace DLS.Graphics
                 }
                 else
                 {
+                    // Only the chip on screen: its interface, components and connections. Sub-chips appear as
+                    // components (with their pin interface), their insides are NOT exported.
                     ChipDescription desc = DescriptionCreator.CreateChipDescription(p.ViewedChip);
-                    text = CircuitExporter.ExportChipWithDeps(desc, p.chipLibrary, p.description.ProjectName);
-                    label = (string.IsNullOrEmpty(desc.Name) ? "le circuit courant" : $"\"{desc.Name}\"") + " + ses sous-circuits";
+                    text = CircuitExporter.ExportChip(desc, p.chipLibrary);
+                    label = string.IsNullOrEmpty(desc.Name) ? "the current chip" : $"\"{desc.Name}\"";
                 }
 
                 InputHelper.CopyToClipboard(text);
