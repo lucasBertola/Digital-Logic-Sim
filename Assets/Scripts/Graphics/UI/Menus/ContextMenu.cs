@@ -40,7 +40,7 @@ namespace DLS.Graphics
 		static readonly MenuEntry setColourEntry = new(Format("SET COLOUR"), pinColEntries, CanSetCol);
 		static readonly MenuEntry deleteEntry = new(Format("DELETE"), Delete, CanDelete);
 		static readonly MenuEntry openChipEntry = new(Format("OPEN"), OpenChip, CanOpenChip);
-		static readonly MenuEntry labelChipEntry = new(Format("LABEL"), OpenChipLabelPopup, CanLabelChip);
+		static readonly MenuEntry labelChipEntry = new(Format("RENAME"), OpenChipLabelPopup, CanLabelChip);
 
 		static readonly MenuEntry[] entries_customSubchip =
 		{
