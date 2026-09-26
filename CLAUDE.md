@@ -139,6 +139,8 @@ Lets the assistant (and the truth-table view) **run the real simulator on an iso
   optimisation tools to report their result. Both popups also show the circuit **depth** (longest chain of gates
   from an input to an output, `NandMinimizer.NetlistDepth` / `GateMapper.CoverDepth`) — measured only, never optimised.
 - Window-close guard: `UnityMain.OnWantsToQuit` (via `Application.wantsToQuit`) prompts on unsaved changes.
+- **Keyboard layout (AZERTY!)**: Unity's legacy input reports keys by *physical* position named after the US layout, so on the user's AZERTY keyboard Ctrl+Z arrived as `KeyCode.W` and undo never fired (Ctrl+N worked: same position). `KeyboardShortcuts.Physical(KeyCode)` maps the letter we mean to the KeyCode Unity will report under the current Windows layout (user32 `VkKeyScanExW` + `MapVirtualKeyExW` → US scan-code table); every letter shortcut goes through it, and so does `SimKeyboardHelper` (KEY chips are bound by typed character). Any new letter shortcut must use it too.
+- The Ask Claude input field drops focus on any click outside it (`AskClaudeMenu`): the field only sees unconsumed mouse downs and scene clicks are consumed by the controller first, so it used to stay focused forever and block every scene shortcut via `TextInputActive`.
 - `Seb/SebVis/UI/UI.cs` `InputField` was patched to horizontally scroll so the caret stays visible on long text (the only intentional edit inside vendored Seb).
 - `SavePaths.UseBuildPathInEditor = true` unifies editor + build save locations to `Application.persistentDataPath`; default I/O-pin-name display is `Always`.
 

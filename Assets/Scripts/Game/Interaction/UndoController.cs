@@ -26,7 +26,7 @@ namespace DLS.Game
 
 		public void TryUndo()
 		{
-			if (undoIndex == -1) return;
+			if (undoIndex == -1) { Debug.Log("Undo: nothing to undo on this chip"); return; }
 
 			UndoAction action = undoHistory[undoIndex];
 			undoIndex--;
@@ -229,12 +229,13 @@ namespace DLS.Game
 				}
 				else if (action is LayoutUndoAction layout)
 				{
+					Debug.Log($"Undo: restoring layout (undo={undo})");
 					(undo ? layout.before : layout.after).Apply(devChip);
 				}
 			}
 			catch (Exception e)
 			{
-				if (Application.isEditor) Debug.Log($"Undo/redo action failed. Reason: {e.Message} Stack trace: {e.StackTrace}");
+				Debug.LogWarning($"Undo/redo action ({action.GetType().Name}, undo={undo}) failed. Reason: {e.Message} Stack trace: {e.StackTrace}");
 			}
 		}
 

@@ -45,7 +45,9 @@ namespace DLS.Simulation
 
 				foreach (KeyCode key in ValidInputKeys)
 				{
-					if (InputHelper.IsKeyHeld(key))
+					// KEY chips are bound by the typed character, but Unity reports keys by physical (US) position:
+					// poll the key that produces this character under the current keyboard layout (AZERTY...).
+					if (InputHelper.IsKeyHeld(DLS.Game.KeyboardShortcuts.Physical(key)))
 					{
 						char keyChar = char.ToUpper((char)key);
 						KeyLookup.Add(keyChar);

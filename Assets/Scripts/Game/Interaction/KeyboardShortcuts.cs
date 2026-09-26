@@ -1,3 +1,6 @@
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using Seb.Helpers;
 using UnityEngine;
 
@@ -25,7 +28,7 @@ namespace DLS.Game
 
 
 		// ---- Misc shortcuts ----
-		public static bool DuplicateShortcutTriggered => !TextInputActive && MultiModeHeld && InputHelper.IsKeyDownThisFrame(KeyCode.D);
+		public static bool DuplicateShortcutTriggered => !TextInputActive && MultiModeHeld && InputHelper.IsKeyDownThisFrame(Physical(KeyCode.D));
 		public static bool ToggleGridShortcutTriggered => CtrlShortcutTriggered(KeyCode.G);
 		public static bool ResetCameraShortcutTriggered => CtrlShortcutTriggered(KeyCode.R);
 		public static bool UndoShortcutTriggered => CtrlShortcutTriggered(KeyCode.Z);
@@ -39,7 +42,7 @@ namespace DLS.Game
 		public static bool SimPauseToggleShortcutTriggered => CtrlShortcutTriggered(KeyCode.Space);
 
 		// ---- Dev shortcuts ----
-		public static bool OpenSaveDataFolderShortcutTriggered => InputHelper.IsKeyDownThisFrame(KeyCode.O) && InputHelper.CtrlIsHeld && InputHelper.ShiftIsHeld && InputHelper.AltIsHeld;
+		public static bool OpenSaveDataFolderShortcutTriggered => InputHelper.IsKeyDownThisFrame(Physical(KeyCode.O)) && InputHelper.CtrlIsHeld && InputHelper.ShiftIsHeld && InputHelper.AltIsHeld;
 
 		// ---- Modifiers ----
 		public static bool SnapModeHeld => InputHelper.CtrlIsHeld;
@@ -52,8 +55,66 @@ namespace DLS.Game
 		public static bool TakeFirstFromCollectionModifierHeld => InputHelper.CtrlIsHeld || InputHelper.AltIsHeld || InputHelper.ShiftIsHeld;
 
 		// ---- Helpers ----
-		static bool CtrlShortcutTriggered(KeyCode key) => !TextInputActive && InputHelper.IsKeyDownThisFrame(key) && InputHelper.CtrlIsHeld && !(InputHelper.AltIsHeld || InputHelper.ShiftIsHeld);
-		static bool CtrlShiftShortcutTriggered(KeyCode key) => !TextInputActive && InputHelper.IsKeyDownThisFrame(key) && InputHelper.CtrlIsHeld && InputHelper.ShiftIsHeld && !(InputHelper.AltIsHeld);
-		static bool ShiftShortcutTriggered(KeyCode key) => !TextInputActive && InputHelper.IsKeyDownThisFrame(key) && InputHelper.ShiftIsHeld && !(InputHelper.AltIsHeld || InputHelper.CtrlIsHeld);
+		static bool CtrlShortcutTriggered(KeyCode key) => !TextInputActive && InputHelper.IsKeyDownThisFrame(Physical(key)) && InputHelper.CtrlIsHeld && !(InputHelper.AltIsHeld || InputHelper.ShiftIsHeld);
+		static bool CtrlShiftShortcutTriggered(KeyCode key) => !TextInputActive && InputHelper.IsKeyDownThisFrame(Physical(key)) && InputHelper.CtrlIsHeld && InputHelper.ShiftIsHeld && !(InputHelper.AltIsHeld);
+		static bool ShiftShortcutTriggered(KeyCode key) => !TextInputActive && InputHelper.IsKeyDownThisFrame(Physical(key)) && InputHelper.ShiftIsHeld && !(InputHelper.AltIsHeld || InputHelper.CtrlIsHeld);
+
+		// ---- Keyboard-layout independence ----
+		// Unity's legacy input identifies keys by PHYSICAL position, named after the US layout: on an AZERTY
+		// keyboard the key labelled Z sits where the US W is, so pressing Ctrl+Z reports KeyCode.W and the
+		// undo shortcut never fired (Ctrl+N worked, N is in the same place on both). Physical() maps the
+		// letter we mean to the KeyCode Unity will actually report under the current Windows layout.
+		static readonly Dictionary<KeyCode, KeyCode> physicalCache = new();
+		static IntPtr physicalCacheLayout;
+
+		// US scan codes of the letter keys (what Unity names its KeyCodes after).
+		static readonly Dictionary<uint, KeyCode> scanCodeToUsKey = new()
+		{
+			{ 0x10, KeyCode.Q }, { 0x11, KeyCode.W }, { 0x12, KeyCode.E }, { 0x13, KeyCode.R }, { 0x14, KeyCode.T }, { 0x15, KeyCode.Y }, { 0x16, KeyCode.U }, { 0x17, KeyCode.I }, { 0x18, KeyCode.O }, { 0x19, KeyCode.P },
+			{ 0x1E, KeyCode.A }, { 0x1F, KeyCode.S }, { 0x20, KeyCode.D }, { 0x21, KeyCode.F }, { 0x22, KeyCode.G }, { 0x23, KeyCode.H }, { 0x24, KeyCode.J }, { 0x25, KeyCode.K }, { 0x26, KeyCode.L },
+			{ 0x2C, KeyCode.Z }, { 0x2D, KeyCode.X }, { 0x2E, KeyCode.C }, { 0x2F, KeyCode.V }, { 0x30, KeyCode.B }, { 0x31, KeyCode.N }, { 0x32, KeyCode.M }
+		};
+
+		public static KeyCode Physical(KeyCode logical)
+		{
+#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
+			if (logical < KeyCode.A || logical > KeyCode.Z) return logical;
+			try
+			{
+				IntPtr layout = GetKeyboardLayout(0);
+				if (layout != physicalCacheLayout)
+				{
+					physicalCache.Clear();
+					physicalCacheLayout = layout;
+				}
+
+				if (physicalCache.TryGetValue(logical, out KeyCode cached)) return cached;
+
+				KeyCode result = logical;
+				char ch = (char)('a' + (logical - KeyCode.A));
+				short vk = VkKeyScanExW(ch, layout);
+				if (vk != -1)
+				{
+					uint scanCode = MapVirtualKeyExW((uint)(vk & 0xFF), 0 /* MAPVK_VK_TO_VSC */, layout);
+					if (scanCodeToUsKey.TryGetValue(scanCode, out KeyCode physical)) result = physical;
+				}
+
+				physicalCache[logical] = result;
+				return result;
+			}
+			catch
+			{
+				return logical;
+			}
+#else
+			return logical;
+#endif
+		}
+
+#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
+		[DllImport("user32.dll")] static extern IntPtr GetKeyboardLayout(uint idThread);
+		[DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern short VkKeyScanExW(char ch, IntPtr dwhkl);
+		[DllImport("user32.dll")] static extern uint MapVirtualKeyExW(uint uCode, uint uMapType, IntPtr dwhkl);
+#endif
 	}
 }

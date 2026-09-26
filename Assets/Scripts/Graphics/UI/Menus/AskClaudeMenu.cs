@@ -162,6 +162,15 @@ namespace DLS.Graphics
             InputFieldState inputState = UI.InputField(ID_Input, inputTheme, inputPos, new Vector2(inputW, inputH), placeholder, Anchor.BottomLeft, 0.5f, null, focusNextFrame);
             focusNextFrame = false;
 
+            // A click anywhere outside the field drops its focus. The field itself only sees *unconsumed* mouse
+            // downs, and a click in the scene is usually consumed by the interaction controller before the UI
+            // draws, so without this the field would stay focused forever and keep every scene shortcut
+            // (Ctrl+Z, Delete, Space, Ctrl+S...) blocked.
+            if (inputState.focused && InputHelper.IsAnyMouseButtonDownThisFrame_IgnoreConsumed() && !UI.MouseInsideBounds(UI.PrevBounds))
+            {
+                inputState.SetFocus(false);
+            }
+
             // Capture the keyboard only while the field is focused (so typing does not trigger scene shortcuts).
             KeyboardShortcuts.TextInputActive = inputState.focused;
 

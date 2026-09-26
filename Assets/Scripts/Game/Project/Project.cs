@@ -317,7 +317,7 @@ namespace DLS.Game
 
 		public void GlobalUndo()
 		{
-			if (globalUndo.Count == 0) return;
+			if (globalUndo.Count == 0) { UnityEngine.Debug.Log("Undo: global timeline empty"); return; }
 			UndoStep e = globalUndo[^1];
 			globalUndo.RemoveAt(globalUndo.Count - 1);
 			suppressUndoRecording = true;
