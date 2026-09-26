@@ -16,6 +16,7 @@ namespace DLS.Game
         const float Lead = 0.375f;          // horizontal lead out of / into a pin (= first track / channel)
         const float TrackStep = 0.25f;      // spacing between parallel tracks / channels
         const int MaxTracks = 4;
+        const int TrunkFanOut = 3;          // a pin feeding at least this many wires gets a shared vertical channel (trunk)
         const float DevPinWidth = 1.0f;
         const float MinRowHeight = 0.375f;
 
@@ -78,8 +79,10 @@ namespace DLS.Game
             foreach (var kv in columns) foreach (IMoveable e in kv.Value) colOf[e] = kv.Key;
 
             // ---- 2b) Wires that will be routed, and how many vertical channels each column needs ----
-            // Every source pin gets its own vertical channel in the gap right after its column: the wires
-            // leaving that pin share it as a trunk and branch off horizontally at their target's height. Gaps
+            // A pin that feeds many wires (TrunkFanOut or more) gets its own vertical channel in the gap right
+            // after its column: its wires share it as a trunk and branch off horizontally at their target's
+            // height — a fan of diagonals from one pin to several stacked chips is unreadable, a trunk with
+            // right-angle branches is not. Every other wire goes as directly as it can (see step 4). Gaps
             // widen to fit the channels. (Wires connected to another wire, or branched from, are left alone.)
             var branchedWires = new HashSet<WireInstance>();
             foreach (WireInstance w in chip.Wires)
@@ -101,9 +104,10 @@ namespace DLS.Game
             var fanOut = new Dictionary<PinInstance, int>();
             foreach (WireInstance w in routable) fanOut[w.SourcePin] = fanOut.TryGetValue(w.SourcePin, out int n) ? n + 1 : 1;
 
+            var trunkPins = new HashSet<PinInstance>(fanOut.Where(kv => kv.Value >= TrunkFanOut).Select(kv => kv.Key));
             var channelCount = new Dictionary<int, int>();
             foreach (int c in sortedCols) channelCount[c] = 0;
-            foreach (PinInstance pin in fanOut.Keys) channelCount[colOf[pin.parent]]++;
+            foreach (PinInstance pin in trunkPins) channelCount[colOf[pin.parent]]++;
             float GapAfter(int c) => Mathf.Max(HorizontalGap, Lead * 2f + channelCount[c] * TrackStep + 0.5f);
 
             // ---- 3) Initial order of each column ----
@@ -232,26 +236,27 @@ namespace DLS.Game
                     if (e.LayoutRow != 0 && !rowLineY.ContainsKey(e.LayoutRow)) rowLineY[e.LayoutRow] = e.Position.y;
             }
 
-            // ---- 3d) Channel x of every source pin (positions are final now) ----
+            // ---- 3d) Channel x of every trunk pin (positions are final now) ----
             // Within a column the topmost pin takes the channel farthest from the column, so the leads nest
             // like brackets instead of crossing each other.
             var channelX = new Dictionary<PinInstance, float>();
             foreach (int c in sortedCols)
             {
-                List<PinInstance> pins = fanOut.Keys.Where(pin => colOf[pin.parent] == c).OrderByDescending(pin => pin.GetWorldPos().y).ToList();
+                List<PinInstance> pins = trunkPins.Where(pin => colOf[pin.parent] == c).OrderByDescending(pin => pin.GetWorldPos().y).ToList();
                 float baseX = colCentreX[c] + colWidth[c] / 2f + Lead;
                 for (int i = 0; i < pins.Count; i++) channelX[pins[i]] = baseX + (pins.Count - 1 - i) * TrackStep;
             }
 
             // ---- 4) Wire routing ----
-            // A wire leaves its pin horizontally to the pin's channel, runs vertically along it, and enters the
-            // target pin horizontally at the target's height (a wire at constant height is simply a straight
-            // line). Wires leaving the same pin share the channel as a trunk, which is the only overlap allowed.
-            // A wire whose horizontal branch would clip a component of a column it spans over (or that runs
-            // backwards) gets a minimal orthogonal detour instead: channel, horizontal run just above/below the
-            // obstacles, then the mirror image into the target. Wires may CROSS but never OVERLAP: every segment
-            // is checked against those already laid down, and a detour takes the nearest free track. Wires from
-            // the same column to the same component are routed as a group: same side, nested tracks.
+            // As few bends as possible. A wire tries, in order: a straight line; one bend (diagonal, then a
+            // horizontal lead into the target pin — or a lead out of the source pin, then the diagonal); two
+            // bends (lead, diagonal, lead). Each candidate must clip no component and lie on no other wire. A
+            // trunk pin's wires instead take lead → shared channel → horizontal branch at the target's height
+            // (the trunk is the only overlap allowed). Whatever is left (a wire that would clip a component of
+            // a column it spans over, or that runs backwards) gets a minimal orthogonal detour: lead, vertical
+            // run, horizontal run just above/below the obstacles, then the mirror image into the target, on
+            // the nearest free track. Wires may CROSS but never OVERLAP. Wires from the same column to the same
+            // component are routed as a group: same side, nested tracks, so they travel together.
             var obstacles = moved.Select(e => (el: e, c: e.Position, half: new Vector2(ElementWidth(e) / 2f + ClearPad, ElementHeight(e) / 2f + ClearPad))).ToList();
             var used = new List<(Vector2 a, Vector2 b, PinInstance srcPin)>(); // wire segments already laid down
 
@@ -285,7 +290,7 @@ namespace DLS.Game
 
             bool Backwards(Vector2 s, Vector2 t) => t.x - s.x < Lead * 2f + 0.05f; // an output pin faces right, an input pin faces left
 
-            // Pass 1: straighten everything; wires whose channel path is clear are final.
+            // Pass 1: straighten everything; wires with a clear direct path (or channel path) are final.
             var pending = new List<WireInstance>();
             foreach (WireInstance w in routable)
             {
@@ -295,11 +300,23 @@ namespace DLS.Game
                 Vector2 t = w.GetWirePoint(1);
                 if (Backwards(s, t)) { pending.Add(w); continue; }
 
-                float xk = channelX[w.SourcePin];
-                List<Vector2> path = Mathf.Abs(s.y - t.y) < 0.001f
-                    ? new List<Vector2> { s, t }
-                    : new List<Vector2> { s, new(xk, s.y), new(xk, t.y), t };
-                if (PathOk(path, w)) Apply(w, path);
+                var candidates = new List<List<Vector2>>();
+                if (Mathf.Abs(s.y - t.y) < 0.001f) candidates.Add(new List<Vector2> { s, t });
+                else if (trunkPins.Contains(w.SourcePin))
+                {
+                    float xk = channelX[w.SourcePin];
+                    candidates.Add(new List<Vector2> { s, new(xk, s.y), new(xk, t.y), t });
+                }
+                else
+                {
+                    candidates.Add(new List<Vector2> { s, t });                                             // 0 bends
+                    candidates.Add(new List<Vector2> { s, new(t.x - Lead, t.y), t });                       // 1 bend, lead into the target
+                    candidates.Add(new List<Vector2> { s, new(s.x + Lead, s.y), t });                       // 1 bend, lead out of the source
+                    candidates.Add(new List<Vector2> { s, new(s.x + Lead, s.y), new(t.x - Lead, t.y), t }); // 2 bends
+                }
+
+                List<Vector2> chosen = candidates.Find(path => PathOk(path, w));
+                if (chosen != null) Apply(w, chosen);
                 else pending.Add(w);
             }
 
@@ -317,7 +334,7 @@ namespace DLS.Game
                 // Obstacle band across the wire's horizontal span (channel and leads included). A backwards
                 // wire has to go around its own source/target, so those count too in that case.
                 float spanMinX = Mathf.Min(s.x, t.x - Lead);
-                float spanMaxX = Mathf.Max(channelX[w.SourcePin], t.x);
+                float spanMaxX = Mathf.Max(channelX.TryGetValue(w.SourcePin, out float cx) ? cx : s.x + Lead, t.x);
                 float bandTop = float.NegativeInfinity, bandBot = float.PositiveInfinity;
                 foreach (var o in obstacles)
                 {
@@ -351,24 +368,26 @@ namespace DLS.Game
                     Vector2 s = w.GetWirePoint(0);
                     Vector2 t = w.GetWirePoint(1);
                     var r = route[w];
-                    float xk = channelX[w.SourcePin];
+                    bool hasChannel = channelX.TryGetValue(w.SourcePin, out float xk); // a trunk pin's vertical run stays on its channel
                     bool[] sides = above ? new[] { true, false } : new[] { false, true };
 
                     List<Vector2> best = null;
                     foreach (bool side in sides)
                     {
-                        // Nearest tracks first: iterate by total track index (the vertical run stays on the
-                        // pin's own channel).
+                        // Nearest tracks first: iterate by total track index.
                         for (int sum = 0; sum <= MaxTracks * 3 && best == null; sum++)
                         for (int ky = 0; ky <= sum && best == null; ky++)
+                        for (int kx = 0; kx <= sum - ky && best == null; kx++)
                         {
-                            int ke = sum - ky;
-                            if (ke >= MaxTracks || ky > MaxTracks * 2) continue;
+                            int ke = sum - ky - kx;
+                            if (kx >= MaxTracks || ke >= MaxTracks || ky > MaxTracks * 2) continue;
+                            if (hasChannel && kx > 0) continue;
 
                             float routeY = side ? r.topBase + ky * TrackStep : r.botBase - ky * TrackStep;
+                            float exitX = hasChannel ? xk : s.x + Lead + kx * TrackStep;
                             float entryX = t.x - Lead - ke * TrackStep;
 
-                            var path = new List<Vector2> { s, new(xk, s.y), new(xk, routeY), new(entryX, routeY), new(entryX, t.y), t };
+                            var path = new List<Vector2> { s, new(exitX, s.y), new(exitX, routeY), new(entryX, routeY), new(entryX, t.y), t };
                             if (PathOk(path, w)) { best = path; break; }
                         }
                         if (best != null) break;
@@ -378,7 +397,8 @@ namespace DLS.Game
                     if (best == null)
                     {
                         float routeY = above ? r.topBase : r.botBase;
-                        best = new List<Vector2> { s, new(xk, s.y), new(xk, routeY), new(t.x - Lead, routeY), new(t.x - Lead, t.y), t };
+                        float exitX = hasChannel ? xk : s.x + Lead;
+                        best = new List<Vector2> { s, new(exitX, s.y), new(exitX, routeY), new(t.x - Lead, routeY), new(t.x - Lead, t.y), t };
                     }
 
                     Apply(w, best);

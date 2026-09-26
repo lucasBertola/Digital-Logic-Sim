@@ -32,9 +32,10 @@ what the fork adds on top.
   - **IN/OUT** — the IN/OUT collection popup at the cursor (same popup as the bottom bar, shift-click to
     place several at once; it stays until you click elsewhere).
   - **Clean Up** — automatic layout: components in columns by signal depth, each column ordered to
-    minimise wire crossings, pins sorted naturally (A2 before A10), grid snapping, and orthogonal
-    wiring on one vertical channel per source pin (wires from one pin share it as a trunk). Wires may
-    cross but never run on top of each other. Ctrl+Z restores the previous layout exactly.
+    minimise wire crossings, pins sorted naturally (A2 before A10), grid snapping, and wires routed
+    with as few bends as possible (a pin feeding many chips gets a shared vertical trunk instead of a
+    fan of diagonals). Wires may cross but never run on top of each other. Ctrl+Z restores the
+    previous layout exactly.
 - **Hover highlighting** — hover a wire to light up everything attached to it; hover a component to light
   up its wires and the components they lead to.
 - **VCC / GND** builtin chips: constant HIGH / LOW sources that don't add inputs to your chip.
