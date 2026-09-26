@@ -83,6 +83,8 @@ if "!TAG!"=="" set "TAG=!NEXT!"
 echo.
 echo ==== !TAG! ====
 
+REM l'app en cours d'execution verrouille des fichiers du build : on la ferme avant de zipper
+tasklist /FI "IMAGENAME eq DigitalLogicSim.exe" 2>nul | find /I "DigitalLogicSim.exe" >nul && ( echo Fermeture de l'application en cours... & taskkill /IM DigitalLogicSim.exe /F >nul 2>&1 & timeout /t 2 >nul )
 echo Creation du zip...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; if(Test-Path '%ZIP%'){Remove-Item '%ZIP%'}; Compress-Archive -Path '%SRC%\*' -DestinationPath '%ZIP%' -CompressionLevel Optimal"
 if not exist "%ZIP%" ( echo ECHEC de la creation du zip. & pause & exit /b 1 )
