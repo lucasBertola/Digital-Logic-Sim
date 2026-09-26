@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System;
 using DLS.Description;
 using DLS.Game;
@@ -60,6 +61,39 @@ namespace DLS.Graphics
 		// true: popup opened from the bottom bar (panel pinned to the bar); false: opened at the mouse by a right-click in the scene
 		static bool collectionPopupAnchoredToBar = true;
 		const string SceneRightClickCollectionName = "IN/OUT";
+
+		// Rows of the open collection popup: its chips, plus "linked" collections shown as sub-menus
+		// (the IN/OUT popup lists MERGE/SPLIT and BUS; hovering one opens its chips beside the popup).
+		struct PopupItem
+		{
+			public string chipName;      // a chip to place (null for a sub-menu row)
+			public ChipCollection sub;   // the linked collection (null for a chip row)
+			public string Label => sub != null ? sub.Name + "  >" : chipName;
+		}
+		static readonly List<PopupItem> popupItems = new();
+		static ChipCollection hoverSub;      // sub-menu currently open (hover)
+		static Bounds2D hoverSubAnchor;      // bounds of the row that opened it
+		static string subPressedChip;        // chip clicked in the sub-menu this frame
+
+		static readonly Dictionary<string, string[]> LinkedCollections = new(StringComparer.OrdinalIgnoreCase)
+		{
+			{ "IN/OUT", new[] { "MERGE/SPLIT", "BUS" } }
+		};
+
+		static void BuildPopupItems(ChipCollection collection)
+		{
+			popupItems.Clear();
+			if (LinkedCollections.TryGetValue(collection.Name, out string[] linked))
+			{
+				foreach (string name in linked)
+				{
+					if (TryGetChipCollectionByName(name, out ChipCollection sub) && sub.Chips.Count > 0 && sub != collection)
+						popupItems.Add(new PopupItem { sub = sub });
+				}
+			}
+			foreach (string chip in collection.Chips) popupItems.Add(new PopupItem { chipName = chip });
+			hoverSub = null;
+		}
 		static Bounds2D barBounds_ScreenSpace;
 
 		static bool MenuButtonsAndShortcutsEnabled => Project.ActiveProject.CanEditViewedChip;
@@ -299,6 +333,7 @@ namespace DLS.Graphics
 			collectionPopupBottomLeft = bottomLeft;
 			collectionPopupAnchoredToBar = anchoredToBar;
 			activeCollection = collection;
+			BuildPopupItems(collection);
 			collectionInteractFrame = Time.frameCount;
 			closeActiveCollectionMultiModeExit = false;
 		}
@@ -307,12 +342,14 @@ namespace DLS.Graphics
 		static void DrawCollectionsPopup()
 		{
 			if (activeCollection == null || activeCollection.Chips.Count <= 0) return;
+			if (popupItems.Count == 0) BuildPopupItems(activeCollection);
 
 			DrawSettings.UIThemeDLS theme = DrawSettings.ActiveUITheme;
 			Project project = Project.ActiveProject;
 
-			int firstButtonIndex = activeCollection.Chips.Count - 1;
+			int firstButtonIndex = popupItems.Count - 1;
 			int pressedIndex = -1;
+			subPressedChip = null;
 			Vector2 layoutOrigin = collectionPopupBottomLeft + new Vector2(0, 0);
 			bool expandLeft = layoutOrigin.x > UI.HalfWidth;
 			bool isFirstPartial = true;
@@ -330,7 +367,7 @@ namespace DLS.Graphics
 
 					for (int i = firstButtonIndex; i >= 0; i--)
 					{
-						string chipName = activeCollection.Chips[i];
+						string chipName = popupItems[i].Label;
 						UI.Button(chipName, DrawSettings.ActiveUITheme.ChipButton, buttonLayoutPos, new Vector2(0, buttonHeight), false, true, false, Anchor.BottomLeft, false, 0);
 						buttonLayoutPos = UI.PrevBounds.TopLeft + Vector2.up * buttonSpacing;
 
@@ -366,11 +403,15 @@ namespace DLS.Graphics
 				isFirstPartial = false;
 			}
 
+			// Sub-menu (MERGE/SPLIT, BUS...) beside the row being hovered
+			if (hoverSub != null) DrawSubCollectionPopup(ref openedContextMenu);
+
 			if (!openedContextMenu)
 			{
-				if (pressedIndex != -1)
+				string chosen = subPressedChip ?? (pressedIndex != -1 ? popupItems[pressedIndex].chipName : null);
+				if (chosen != null)
 				{
-					project.controller.StartPlacing(project.chipLibrary.GetChipDescriptionForSim(activeCollection.Chips[pressedIndex]));
+					project.controller.StartPlacing(project.chipLibrary.GetChipDescriptionForSim(chosen));
 					if (KeyboardShortcuts.MultiModeHeld)
 					{
 						closeActiveCollectionMultiModeExit = true;
@@ -399,22 +440,88 @@ namespace DLS.Graphics
 			for (int i = startIndex; i >= endIndex; i--)
 			{
 				const float offsetX = 0.55f;
-				string chipName = activeCollection.Chips[i];
-				bool enabled = viewedChip.CanAddSubchip(chipName);
-				if (UI.Button(chipName, theme, bottomLeftCurr, new Vector2(maxWidth, buttonHeight), enabled, false, false, Anchor.BottomLeft, true, offsetX, ignoreInputs))
+				PopupItem item = popupItems[i];
+
+				if (item.sub != null)
 				{
-					pressedIndex = i;
+					// Sub-menu row: hovering it opens the linked collection beside the popup
+					UI.Button(item.Label, theme, bottomLeftCurr, new Vector2(maxWidth, buttonHeight), true, false, false, Anchor.BottomLeft, true, offsetX, ignoreInputs);
+					if (UI.MouseInsideBounds(UI.PrevBounds))
+					{
+						hoverSub = item.sub;
+						hoverSubAnchor = UI.PrevBounds;
+					}
 				}
-				else if (InputHelper.IsMouseDownThisFrame(MouseButton.Right) && UI.MouseInsideBounds(UI.PrevBounds))
+				else
 				{
-					ContextMenu.OpenBottomBarContextMenu(chipName, false, true);
-					openedContextMenu = true;
+					string chipName = item.chipName;
+					bool enabled = viewedChip.CanAddSubchip(chipName);
+					if (UI.Button(chipName, theme, bottomLeftCurr, new Vector2(maxWidth, buttonHeight), enabled, false, false, Anchor.BottomLeft, true, offsetX, ignoreInputs))
+					{
+						pressedIndex = i;
+					}
+					else if (InputHelper.IsMouseDownThisFrame(MouseButton.Right) && UI.MouseInsideBounds(UI.PrevBounds))
+					{
+						ContextMenu.OpenBottomBarContextMenu(chipName, false, true);
+						openedContextMenu = true;
+					}
+
+					if (UI.MouseInsideBounds(UI.PrevBounds)) hoverSub = null; // hovering a chip row closes the sub-menu
 				}
 
 				bottomLeftCurr = UI.PrevBounds.TopLeft + Vector2.up * buttonSpacing;
 			}
 
 			return pressedIndex;
+		}
+
+		// The chips of a linked collection, in a column beside the hovered row (to its right, or to its left
+		// when there is no room). Same look and behaviour as the popup itself (click = place, shift-click =
+		// several, right-click = context menu).
+		static void DrawSubCollectionPopup(ref bool openedContextMenu)
+		{
+			DrawSettings.UIThemeDLS theme = DrawSettings.ActiveUITheme;
+			ButtonTheme btn = theme.ChipButton;
+			DevChipInstance viewedChip = Project.ActiveProject.ViewedChip;
+			bool ignoreInputs = ContextMenu.HasFocus();
+			const float offsetX = 0.55f;
+
+			// width = widest chip name
+			float width = 0;
+			using (UI.BeginBoundsScope(draw: false))
+			{
+				foreach (string chip in hoverSub.Chips)
+				{
+					UI.Button(chip, btn, Vector2.zero, new Vector2(0, buttonHeight), false, true, false, Anchor.BottomLeft, false, 0);
+					width = Mathf.Max(width, UI.PrevBounds.Width);
+				}
+			}
+
+			int n = hoverSub.Chips.Count;
+			float totalH = n * buttonHeight + (n - 1) * buttonSpacing;
+			bool right = hoverSubAnchor.Right + buttonSpacing * 3 + width <= UI.Width;
+			float x = right ? hoverSubAnchor.Right + buttonSpacing * 3 : hoverSubAnchor.Left - buttonSpacing * 3 - width;
+			float bottom = Mathf.Clamp(hoverSubAnchor.Bottom, buttonSpacing * 2, Mathf.Max(buttonSpacing * 2, UI.Height - totalH - buttonSpacing * 2));
+
+			Bounds2D colBounds = Bounds2D.CreateFromCentreAndSize(new Vector2(x + width / 2f, bottom + totalH / 2f), new Vector2(width, totalH));
+			UI.DrawPanel(Bounds2D.Grow(colBounds, buttonSpacing * 2), theme.StarredBarCol);
+
+			Vector2 pos = new(x, bottom);
+			for (int i = n - 1; i >= 0; i--)
+			{
+				string chipName = hoverSub.Chips[i];
+				bool enabled = viewedChip.CanAddSubchip(chipName);
+				if (UI.Button(chipName, btn, pos, new Vector2(width, buttonHeight), enabled, false, false, Anchor.BottomLeft, true, offsetX, ignoreInputs))
+				{
+					subPressedChip = chipName;
+				}
+				else if (InputHelper.IsMouseDownThisFrame(MouseButton.Right) && UI.MouseInsideBounds(UI.PrevBounds))
+				{
+					ContextMenu.OpenBottomBarContextMenu(chipName, false, true);
+					openedContextMenu = true;
+				}
+				pos = UI.PrevBounds.TopLeft + Vector2.up * buttonSpacing;
+			}
 		}
 
 		static ChipCollection GetChipCollectionByName(string name)
@@ -582,6 +689,8 @@ namespace DLS.Graphics
 			isDraggingChipBar = false;
 			activeCollection = null;
 			collectionPopupAnchoredToBar = true;
+			popupItems.Clear();
+			hoverSub = null;
 		}
 	}
 }
