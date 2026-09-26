@@ -26,12 +26,20 @@ namespace DLS.Graphics
 		static ChipInteractionController controller;
 		static bool canEditViewedChip;
 
+		// Hover highlighting: hovering a wire lights up everything attached to it (the wires it is joined to,
+		// and the components at their ends); hovering a component lights up its wires and the components at
+		// the other end of them.
+		static readonly HashSet<WireInstance> hoverWires = new();
+		static readonly HashSet<IMoveable> hoverElements = new();
+		static readonly Color hoverElementTint = new(1, 1, 1, 0.13f);
+
 		public static void DrawActiveScene()
 		{
 			WorldDrawer.DrawGridIfActive(ActiveTheme.GridCol);
 
 			controller = Project.ActiveProject.controller;
 			canEditViewedChip = Project.ActiveProject.CanEditViewedChip;
+			UpdateHoverHighlight();
 
 			DrawWires();
 			DrawWireEditPoints(controller.wireToEdit);
@@ -85,22 +93,6 @@ namespace DLS.Graphics
 			{
 				DrawWire(wire);
 			}
-
-			// Junction dots (wire branching off another wire) go on top of every wire, so that the crossing
-			// gap of a wire drawn later can't cut through them.
-			foreach (WireInstance wire in orderedWires) DrawWireJunction(wire);
-			foreach (WireInstance wire in controller.DuplicatedWires) DrawWireJunction(wire);
-		}
-
-		static void DrawWireJunction(WireInstance wire)
-		{
-			if (wire.ConnectedWire == null || wire.bitCount != PinBitCount.Bit1) return;
-			Vector2[] points = wire.BitWires[0].Points;
-			if (points == null || points.Length == 0) return;
-
-			Vector2 connectionPoint = wire.SourceConnectionInfo.IsConnectedAtWire ? points[0] : points[^1];
-			float radius = ShouldHighlightWire(wire) ? 0.07f : 0.06f;
-			Draw.Point(connectionPoint, radius, wire.GetColour(0));
 		}
 
 		static void DrawAllPinNamesAndChipLabels()
@@ -149,6 +141,60 @@ namespace DLS.Graphics
 		}
 
 		// Draw all moveable elements (either non-selected only, or selected only)
+		static void UpdateHoverHighlight()
+		{
+			hoverWires.Clear();
+			hoverElements.Clear();
+			if (InteractionState.MouseIsOverUI || controller.IsMovingSelection || controller.IsCreatingSelectionBox || controller.IsCreatingWire) return;
+
+			DevChipInstance chip = controller.ActiveDevChip;
+			IInteractable hovered = InteractionState.ElementUnderMousePrevFrame;
+			if (hovered is PinInstance pin) hovered = pin.parent;
+
+			if (hovered is WireInstance wire)
+			{
+				// The wire and every wire joined to it (branches, and what it branches from), transitively
+				hoverWires.Add(wire);
+				bool grew = true;
+				while (grew)
+				{
+					grew = false;
+					foreach (WireInstance w in chip.Wires)
+					{
+						if (hoverWires.Contains(w)) continue;
+						bool joined = w.ConnectedWire != null && hoverWires.Contains(w.ConnectedWire);
+						foreach (WireInstance h in hoverWires) if (h.ConnectedWire == w) { joined = true; break; }
+						if (joined)
+						{
+							hoverWires.Add(w);
+							grew = true;
+						}
+					}
+				}
+
+				foreach (WireInstance w in hoverWires)
+				{
+					if (w.SourcePin != null) hoverElements.Add(w.SourcePin.parent);
+					if (w.TargetPin != null) hoverElements.Add(w.TargetPin.parent);
+				}
+			}
+			else if (hovered is IMoveable element && (element is SubChipInstance || element is DevPinInstance))
+			{
+				chip.GetWiresAttachedToElement(element.ID, hoverWires);
+				foreach (WireInstance w in hoverWires)
+				{
+					if (w.SourcePin != null && w.SourcePin.parent != element) hoverElements.Add(w.SourcePin.parent);
+					if (w.TargetPin != null && w.TargetPin.parent != element) hoverElements.Add(w.TargetPin.parent);
+				}
+			}
+		}
+
+		static void DrawHoverTint(IMoveable element)
+		{
+			if (!hoverElements.Contains(element)) return;
+			Draw.Quad(element.SelectionBoundingBox.Centre, element.SelectionBoundingBox.Size, hoverElementTint);
+		}
+
 		static void DrawMoveableElements(bool drawSelectedOnly)
 		{
 			DevChipInstance chip = controller.ActiveDevChip;
@@ -189,6 +235,8 @@ namespace DLS.Graphics
 						SimChip sim = chip.SimChip.TryGetSubChipFromID(subchip.ID).chip;
 						DrawSubchipDisplays(subchip, sim);
 					}
+
+					DrawHoverTint(element);
 
 					if (element.IsSelected)
 					{
@@ -736,6 +784,7 @@ namespace DLS.Graphics
 		{
 			if (InteractionState.MouseIsOverUI) return false;
 			if (wire == controller.wireToEdit) return true;
+			if (hoverWires.Contains(wire)) return true;
 
 			if (InteractionState.ElementUnderMousePrevFrame is WireInstance wireUnderMouse && wire == wireUnderMouse)
 			{
@@ -772,10 +821,18 @@ namespace DLS.Graphics
 			}
 
 
-			// Draw (halo first: see WireDrawer.DrawWireHalo)
+			// Draw
 			Color col = wire.GetColour(0);
-			WireDrawer.DrawWireHalo(wire.BitWires[0].Points, thickness, WireCrossingGap, ActiveTheme.BackgroundCol);
 			float interactSqrDst = WireDrawer.DrawWireStraight(wire.BitWires[0].Points, thickness, col, mousePos);
+
+			// Draw connection point (if connects to wire)
+			if (wire.ConnectedWire != null)
+			{
+				Vector2 connectionPoint = wire.SourceConnectionInfo.IsConnectedAtWire ? wire.BitWires[0].Points[0] : wire.BitWires[0].Points[^1];
+
+				float radius = highlightWire ? 0.07f : 0.06f;
+				Draw.Point(connectionPoint, radius, col);
+			}
 
 			if (canInteract && interactSqrDst < sqrDstThreshold)
 			{
@@ -794,12 +851,7 @@ namespace DLS.Graphics
 
 			WireLayoutHelper.CreateMultiBitWireLayout(wire.BitWires, wire, WireThickness);
 
-			// Draw (all halos first so the bit lines of the bundle don't cut each other)
-			foreach (WireInstance.BitWire bitWire in wire.BitWires)
-			{
-				WireDrawer.DrawWireHalo(bitWire.Points, thickness, WireCrossingGap, ActiveTheme.BackgroundCol);
-			}
-
+			// Draw
 			for (int bitIndex = 0; bitIndex < wire.BitWires.Length; bitIndex++)
 			{
 				WireInstance.BitWire bitWire = wire.BitWires[bitIndex];

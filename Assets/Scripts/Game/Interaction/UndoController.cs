@@ -99,6 +99,36 @@ namespace DLS.Game
 			RecordUndoAction(moveUndoAction);
 		}
 
+		// Records a whole-layout change (Clean Up): every element position and every wire's points, before and
+		// after. Ctrl+Z then brings the previous layout back exactly, wires included.
+		public void RecordLayoutChange(LayoutSnapshot before)
+		{
+			RecordUndoAction(new LayoutUndoAction { before = before, after = new LayoutSnapshot(devChip) });
+		}
+
+		public class LayoutSnapshot
+		{
+			readonly Dictionary<int, Vector2> positions = new();
+			readonly FullWireState wires;
+
+			public LayoutSnapshot(DevChipInstance devChip)
+			{
+				foreach (IMoveable element in devChip.Elements) positions[element.ID] = element.Position;
+				wires = CreateFullWireState(devChip, new HashSet<WireInstance>()); // nothing to (re)create: only points
+			}
+
+			public void Apply(DevChipInstance devChip)
+			{
+				foreach (IMoveable element in devChip.Elements)
+				{
+					if (positions.TryGetValue(element.ID, out Vector2 pos)) element.Position = pos;
+				}
+
+				foreach (WireInstance wire in devChip.Wires) wire.MoveOffset = Vector2.zero;
+				if (wires.wireDescriptions.Length == devChip.Wires.Count) wires.Restore(devChip);
+			}
+		}
+
 		public void RecordDeleteElements(List<IMoveable> deletedElements)
 		{
 			bool hasConnectedWires = true; // Todo: test if true so don't backup wire state unnecessarily
@@ -197,6 +227,10 @@ namespace DLS.Game
 				{
 					wireExistence.Trigger(undo, devChip);
 				}
+				else if (action is LayoutUndoAction layout)
+				{
+					(undo ? layout.before : layout.after).Apply(devChip);
+				}
 			}
 			catch (Exception e)
 			{
@@ -229,6 +263,12 @@ namespace DLS.Game
 					devChip.Wires[i].ApplyMoveOffset();
 				}
 			}
+		}
+
+		class LayoutUndoAction : UndoAction
+		{
+			public LayoutSnapshot before;
+			public LayoutSnapshot after;
 		}
 
 		class WireExistenceAction : UndoAction

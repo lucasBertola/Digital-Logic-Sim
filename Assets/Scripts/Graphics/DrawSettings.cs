@@ -26,9 +26,6 @@ namespace DLS.Graphics
 		public const float ChipOutlineWidth = 0.05f;
 		public const float WireThickness = 0.025f;
 		public const float WireHighlightedThickness = WireThickness + 0.012f;
-		// Background-coloured margin drawn under each wire so that, where two wires cross, the one drawn
-		// last visibly passes OVER the other (the one underneath shows a small gap on each side).
-		public const float WireCrossingGap = 0.03f;
 		public const float GridThickness = 0.0035f;
 		public const float DevPinStateDisplayRadius = 0.2f;
 		public const float DevPinStateDisplayOutline = 0.0175f;

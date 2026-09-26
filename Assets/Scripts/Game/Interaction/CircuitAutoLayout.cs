@@ -10,8 +10,12 @@ namespace DLS.Game
     // (with minimal detours; wires may cross but never overlap). Records undo.
     public static class CircuitAutoLayout
     {
-        const float HorizontalGap = 1.5f;   // between columns (room for wire routing tracks)
+        const float HorizontalGap = 1.5f;   // minimum gap between columns (widened when a column needs many wire channels)
         const float VerticalGap = 0.375f;   // between elements in a column
+        const float ClearPad = 0.22f;       // clearance kept between a wire and a component
+        const float Lead = 0.375f;          // horizontal lead out of / into a pin (= first track / channel)
+        const float TrackStep = 0.25f;      // spacing between parallel tracks / channels
+        const int MaxTracks = 4;
         const float DevPinWidth = 1.0f;
         const float MinRowHeight = 0.375f;
 
@@ -21,6 +25,8 @@ namespace DLS.Game
             var inputPins = chip.Elements.OfType<DevPinInstance>().Where(d => d.IsInputPin).ToList();
             var outputPins = chip.Elements.OfType<DevPinInstance>().Where(d => !d.IsInputPin).ToList();
             if (subchips.Count == 0 && inputPins.Count == 0 && outputPins.Count == 0) return;
+
+            UndoController.LayoutSnapshot layoutBefore = new(chip); // Ctrl+Z restores positions AND wire points
 
             // ---- 1) Signal-propagation level of each subchip (dev inputs = level 0) ----
             var inputSources = new Dictionary<int, List<IMoveable>>();
@@ -67,10 +73,42 @@ namespace DLS.Game
             foreach (var s in subchips) AddToCol(s.LayoutCol > 0 ? s.LayoutCol : level[s.ID], s);
             foreach (var p in outputPins) AddToCol(p.LayoutCol > 0 ? p.LayoutCol : outputCol, p);
 
+            var sortedCols = columns.Keys.OrderBy(c => c).ToList();
+            var colOf = new Dictionary<IMoveable, int>();
+            foreach (var kv in columns) foreach (IMoveable e in kv.Value) colOf[e] = kv.Key;
+
+            // ---- 2b) Wires that will be routed, and how many vertical channels each column needs ----
+            // Every source pin gets its own vertical channel in the gap right after its column: the wires
+            // leaving that pin share it as a trunk and branch off horizontally at their target's height. Gaps
+            // widen to fit the channels. (Wires connected to another wire, or branched from, are left alone.)
+            var branchedWires = new HashSet<WireInstance>();
+            foreach (WireInstance w in chip.Wires)
+            {
+                if (w.SourceConnectionInfo.connectedWire != null) branchedWires.Add(w.SourceConnectionInfo.connectedWire);
+                if (w.TargetConnectionInfo.connectedWire != null) branchedWires.Add(w.TargetConnectionInfo.connectedWire);
+            }
+
+            var routable = new List<WireInstance>();
+            foreach (WireInstance w in chip.Wires)
+            {
+                if (!w.IsFullyConnected) continue;
+                if (w.SourceConnectionInfo.IsConnectedAtWire || w.TargetConnectionInfo.IsConnectedAtWire) continue;
+                if (branchedWires.Contains(w)) continue;
+                if (!colOf.ContainsKey(w.SourcePin.parent) || !colOf.ContainsKey(w.TargetPin.parent)) continue;
+                routable.Add(w);
+            }
+
+            var fanOut = new Dictionary<PinInstance, int>();
+            foreach (WireInstance w in routable) fanOut[w.SourcePin] = fanOut.TryGetValue(w.SourcePin, out int n) ? n + 1 : 1;
+
+            var channelCount = new Dictionary<int, int>();
+            foreach (int c in sortedCols) channelCount[c] = 0;
+            foreach (PinInstance pin in fanOut.Keys) channelCount[colOf[pin.parent]]++;
+            float GapAfter(int c) => Mathf.Max(HorizontalGap, Lead * 2f + channelCount[c] * TrackStep + 0.5f);
+
             // ---- 3) Initial order of each column ----
             // Dev-pin columns (inputs / outputs) are ordered alphabetically (natural order, so A1..A10 sort
             // correctly); other columns start from their current top-to-bottom order.
-            var sortedCols = columns.Keys.OrderBy(c => c).ToList();
             var placedCols = new Dictionary<int, List<IMoveable>>();
             foreach (int c in sortedCols)
             {
@@ -93,13 +131,14 @@ namespace DLS.Game
             // Column x positions (centered around 0)
             var colWidth = new Dictionary<int, float>();
             foreach (int c in sortedCols) colWidth[c] = columns[c].Max(ElementWidth);
-            float totalWidth = colWidth.Values.Sum() + HorizontalGap * (sortedCols.Count - 1);
+            float totalWidth = colWidth.Values.Sum();
+            for (int i = 0; i < sortedCols.Count - 1; i++) totalWidth += GapAfter(sortedCols[i]);
             float runningX = -totalWidth / 2f;
             var colCentreX = new Dictionary<int, float>();
             foreach (int c in sortedCols)
             {
                 colCentreX[c] = runningX + colWidth[c] / 2f;
-                runningX += colWidth[c] + HorizontalGap;
+                runningX += colWidth[c] + GapAfter(c);
             }
 
             // Stacks a column's elements top→bottom (centred on y = 0), grid-snapped.
@@ -124,9 +163,6 @@ namespace DLS.Game
             // the classic layered-graph heuristic: it removes most wire crossings and, just as importantly,
             // spreads the unavoidable ones out instead of piling them up in one spot. Dev-pin columns keep
             // their alphabetical order.
-            var colOf = new Dictionary<IMoveable, int>();
-            foreach (int c in sortedCols) foreach (IMoveable e in placedCols[c]) colOf[e] = c;
-
             var links = new List<(IMoveable a, PinInstance pa, IMoveable b, PinInstance pb)>();
             foreach (WireInstance w in chip.Wires)
             {
@@ -196,29 +232,28 @@ namespace DLS.Game
                     if (e.LayoutRow != 0 && !rowLineY.ContainsKey(e.LayoutRow)) rowLineY[e.LayoutRow] = e.Position.y;
             }
 
-            // ---- 4) Wire routing ----
-            // Every wire stays a straight line unless it would clip a component (or run backwards, or lie on
-            // top of another wire). Those get a minimal orthogonal detour: a short stub out of the pin, a
-            // vertical run, a horizontal run just above/below the obstacles, and the mirror image into the
-            // target. Wires may CROSS but never OVERLAP: each segment is checked against every segment already
-            // laid down, and a detour picks the nearest free "track" (vertical tracks step away from the pin,
-            // horizontal tracks step away from the obstacles). When a stub would lie on another wire leaving
-            // the same pin, the stub is dropped and the wire leaves the pin diagonally instead.
-            // Skip wires that connect to another wire, or that another wire branches from.
-            var branchedWires = new HashSet<WireInstance>();
-            foreach (WireInstance w in chip.Wires)
+            // ---- 3d) Channel x of every source pin (positions are final now) ----
+            // Within a column the topmost pin takes the channel farthest from the column, so the leads nest
+            // like brackets instead of crossing each other.
+            var channelX = new Dictionary<PinInstance, float>();
+            foreach (int c in sortedCols)
             {
-                if (w.SourceConnectionInfo.connectedWire != null) branchedWires.Add(w.SourceConnectionInfo.connectedWire);
-                if (w.TargetConnectionInfo.connectedWire != null) branchedWires.Add(w.TargetConnectionInfo.connectedWire);
+                List<PinInstance> pins = fanOut.Keys.Where(pin => colOf[pin.parent] == c).OrderByDescending(pin => pin.GetWorldPos().y).ToList();
+                float baseX = colCentreX[c] + colWidth[c] / 2f + Lead;
+                for (int i = 0; i < pins.Count; i++) channelX[pins[i]] = baseX + (pins.Count - 1 - i) * TrackStep;
             }
 
-            const float ClearPad = 0.22f;  // clearance kept between a wire and a component
-            const float StubLen = 0.375f;  // first track: distance from the pin
-            const float TrackStep = 0.25f; // spacing between parallel tracks
-            const int MaxTracks = 4;
-
+            // ---- 4) Wire routing ----
+            // A wire leaves its pin horizontally to the pin's channel, runs vertically along it, and enters the
+            // target pin horizontally at the target's height (a wire at constant height is simply a straight
+            // line). Wires leaving the same pin share the channel as a trunk, which is the only overlap allowed.
+            // A wire whose horizontal branch would clip a component of a column it spans over (or that runs
+            // backwards) gets a minimal orthogonal detour instead: channel, horizontal run just above/below the
+            // obstacles, then the mirror image into the target. Wires may CROSS but never OVERLAP: every segment
+            // is checked against those already laid down, and a detour takes the nearest free track. Wires from
+            // the same column to the same component are routed as a group: same side, nested tracks.
             var obstacles = moved.Select(e => (el: e, c: e.Position, half: new Vector2(ElementWidth(e) / 2f + ClearPad, ElementHeight(e) / 2f + ClearPad))).ToList();
-            var used = new List<(Vector2 a, Vector2 b)>(); // wire segments already laid down
+            var used = new List<(Vector2 a, Vector2 b, PinInstance srcPin)>(); // wire segments already laid down
 
             bool ClipsAny(Vector2 a, Vector2 b, IMoveable ignore1, IMoveable ignore2)
             {
@@ -227,55 +262,62 @@ namespace DLS.Game
                 return false;
             }
 
-            bool OverlapsUsed(Vector2 a, Vector2 b)
+            bool OverlapsUsed(Vector2 a, Vector2 b, PinInstance sharedPin)
             {
                 foreach (var u in used)
-                    if (CollinearOverlap(a, b, u.a, u.b)) return true;
+                    if (u.srcPin != sharedPin && CollinearOverlap(a, b, u.a, u.b)) return true;
                 return false;
             }
 
-            bool PathOk(List<Vector2> pts, IMoveable srcEl, IMoveable tgtEl)
+            bool PathOk(List<Vector2> pts, WireInstance w)
             {
+                IMoveable srcEl = w.SourcePin.parent, tgtEl = w.TargetPin.parent;
                 for (int i = 0; i < pts.Count - 1; i++)
-                    if (ClipsAny(pts[i], pts[i + 1], srcEl, tgtEl) || OverlapsUsed(pts[i], pts[i + 1])) return false;
+                    if (ClipsAny(pts[i], pts[i + 1], srcEl, tgtEl) || OverlapsUsed(pts[i], pts[i + 1], w.SourcePin)) return false;
                 return true;
             }
 
-            void Register(List<Vector2> pts)
+            void Apply(WireInstance w, List<Vector2> pts)
             {
-                for (int i = 0; i < pts.Count - 1; i++) used.Add((pts[i], pts[i + 1]));
+                for (int i = 1; i < pts.Count - 1; i++) w.InsertPoint(pts[i], i - 1);
+                for (int i = 0; i < pts.Count - 1; i++) used.Add((pts[i], pts[i + 1], w.SourcePin));
             }
 
-            // Pass 1: straighten everything; wires whose straight line is clear are final and claim their segment.
-            var pending = new List<WireInstance>();
-            foreach (WireInstance w in chip.Wires)
-            {
-                if (!w.IsFullyConnected) continue;
-                if (w.SourceConnectionInfo.IsConnectedAtWire || w.TargetConnectionInfo.IsConnectedAtWire) continue;
-                if (branchedWires.Contains(w)) continue;
+            bool Backwards(Vector2 s, Vector2 t) => t.x - s.x < Lead * 2f + 0.05f; // an output pin faces right, an input pin faces left
 
+            // Pass 1: straighten everything; wires whose channel path is clear are final.
+            var pending = new List<WireInstance>();
+            foreach (WireInstance w in routable)
+            {
                 while (w.WirePointCount > 2) w.DeleteWirePoint(1); // straighten
 
                 Vector2 s = w.GetWirePoint(0);
                 Vector2 t = w.GetWirePoint(1);
-                bool backwards = t.x - s.x < StubLen * 2f; // an output pin faces right, an input pin faces left
-                if (backwards || ClipsAny(s, t, w.SourcePin.parent, w.TargetPin.parent) || OverlapsUsed(s, t)) pending.Add(w);
-                else used.Add((s, t));
+                if (Backwards(s, t)) { pending.Add(w); continue; }
+
+                float xk = channelX[w.SourcePin];
+                List<Vector2> path = Mathf.Abs(s.y - t.y) < 0.001f
+                    ? new List<Vector2> { s, t }
+                    : new List<Vector2> { s, new(xk, s.y), new(xk, t.y), t };
+                if (PathOk(path, w)) Apply(w, path);
+                else pending.Add(w);
             }
 
-            // Pass 2: detours, on the nearest free tracks.
+            // Pass 2: detours. First the obstacle band of each wire and its cost above/below, then the wires
+            // are grouped (source column → target component) so that a group goes the same way, nested.
+            var route = new Dictionary<WireInstance, (float topBase, float botBase, float costAbove, float costBelow)>();
             foreach (WireInstance w in pending)
             {
                 Vector2 s = w.GetWirePoint(0);
                 Vector2 t = w.GetWirePoint(1);
                 IMoveable srcEl = w.SourcePin.parent;
                 IMoveable tgtEl = w.TargetPin.parent;
-                bool backwards = t.x - s.x < StubLen * 2f;
+                bool backwards = Backwards(s, t);
 
-                // Obstacle band across the wire's horizontal span (stubs included). A backwards wire has to go
-                // around its own source/target, so those count too in that case.
-                float spanMinX = Mathf.Min(s.x, t.x - StubLen);
-                float spanMaxX = Mathf.Max(s.x + StubLen, t.x);
+                // Obstacle band across the wire's horizontal span (channel and leads included). A backwards
+                // wire has to go around its own source/target, so those count too in that case.
+                float spanMinX = Mathf.Min(s.x, t.x - Lead);
+                float spanMaxX = Mathf.Max(channelX[w.SourcePin], t.x);
                 float bandTop = float.NegativeInfinity, bandBot = float.PositiveInfinity;
                 foreach (var o in obstacles)
                 {
@@ -287,55 +329,71 @@ namespace DLS.Game
                 if (float.IsInfinity(bandTop)) { bandTop = Mathf.Max(s.y, t.y); bandBot = Mathf.Min(s.y, t.y); }
                 float topBase = Mathf.Ceil(bandTop / DrawSettings.GridSize) * DrawSettings.GridSize;
                 float botBase = Mathf.Floor(bandBot / DrawSettings.GridSize) * DrawSettings.GridSize;
-
                 float costAbove = Mathf.Abs(topBase - s.y) + Mathf.Abs(topBase - t.y);
                 float costBelow = Mathf.Abs(botBase - s.y) + Mathf.Abs(botBase - t.y);
-                bool[] sides = costAbove <= costBelow ? new[] { true, false } : new[] { false, true };
-
-                List<Vector2> best = null;
-                foreach (bool above in sides)
-                {
-                    // Nearest tracks first: iterate by total track index.
-                    for (int sum = 0; sum <= MaxTracks * 3 && best == null; sum++)
-                    for (int ky = 0; ky <= sum && best == null; ky++)
-                    for (int kx = 0; kx <= sum - ky && best == null; kx++)
-                    {
-                        int ke = sum - ky - kx;
-                        if (kx >= MaxTracks || ke >= MaxTracks || ky > MaxTracks * 2) continue;
-
-                        float routeY = above ? topBase + ky * TrackStep : botBase - ky * TrackStep;
-                        float exitX = s.x + StubLen + kx * TrackStep;
-                        float entryX = t.x - StubLen - ke * TrackStep;
-
-                        // Full detour, then the variants without the exit stub / entry stub (when a stub would
-                        // lie on another wire leaving or reaching the same pin).
-                        var full = new List<Vector2> { s, new(exitX, s.y), new(exitX, routeY), new(entryX, routeY), new(entryX, t.y), t };
-                        if (PathOk(full, srcEl, tgtEl)) { best = full; break; }
-                        var noExit = new List<Vector2> { s, new(exitX, routeY), new(entryX, routeY), new(entryX, t.y), t };
-                        if (PathOk(noExit, srcEl, tgtEl)) { best = noExit; break; }
-                        var noEntry = new List<Vector2> { s, new(exitX, s.y), new(exitX, routeY), new(entryX, routeY), t };
-                        if (PathOk(noEntry, srcEl, tgtEl)) { best = noEntry; break; }
-                        var neither = new List<Vector2> { s, new(exitX, routeY), new(entryX, routeY), t };
-                        if (PathOk(neither, srcEl, tgtEl)) { best = neither; break; }
-                    }
-                    if (best != null) break;
-                }
-
-                // Nothing free within reach: take the nearest track anyway (may overlap — the crossing gaps
-                // in the renderer still keep it readable).
-                if (best == null)
-                {
-                    bool above = sides[0];
-                    float routeY = above ? topBase : botBase;
-                    best = new List<Vector2> { s, new(s.x + StubLen, s.y), new(s.x + StubLen, routeY), new(t.x - StubLen, routeY), new(t.x - StubLen, t.y), t };
-                }
-
-                for (int i = 1; i < best.Count - 1; i++) w.InsertPoint(best[i], i - 1);
-                Register(best);
+                route[w] = (topBase, botBase, costAbove, costBelow);
             }
 
+            var groups = pending
+                .GroupBy(w => (col: colOf[w.SourcePin.parent], tgt: w.TargetPin.parent))
+                .OrderBy(g => g.Key.col);
+
+            foreach (var group in groups)
+            {
+                // One side for the whole group (whichever is cheaper overall), innermost track for the wire
+                // closest to the obstacles.
+                bool above = group.Sum(w => route[w].costAbove) <= group.Sum(w => route[w].costBelow);
+                float Height(WireInstance w) => w.GetWirePoint(0).y + w.GetWirePoint(1).y;
+                IEnumerable<WireInstance> ordered = above ? group.OrderBy(Height) : group.OrderByDescending(Height);
+
+                foreach (WireInstance w in ordered)
+                {
+                    Vector2 s = w.GetWirePoint(0);
+                    Vector2 t = w.GetWirePoint(1);
+                    var r = route[w];
+                    float xk = channelX[w.SourcePin];
+                    bool[] sides = above ? new[] { true, false } : new[] { false, true };
+
+                    List<Vector2> best = null;
+                    foreach (bool side in sides)
+                    {
+                        // Nearest tracks first: iterate by total track index (the vertical run stays on the
+                        // pin's own channel).
+                        for (int sum = 0; sum <= MaxTracks * 3 && best == null; sum++)
+                        for (int ky = 0; ky <= sum && best == null; ky++)
+                        {
+                            int ke = sum - ky;
+                            if (ke >= MaxTracks || ky > MaxTracks * 2) continue;
+
+                            float routeY = side ? r.topBase + ky * TrackStep : r.botBase - ky * TrackStep;
+                            float entryX = t.x - Lead - ke * TrackStep;
+
+                            var path = new List<Vector2> { s, new(xk, s.y), new(xk, routeY), new(entryX, routeY), new(entryX, t.y), t };
+                            if (PathOk(path, w)) { best = path; break; }
+                        }
+                        if (best != null) break;
+                    }
+
+                    // Nothing free within reach: take the nearest track anyway (may overlap).
+                    if (best == null)
+                    {
+                        float routeY = above ? r.topBase : r.botBase;
+                        best = new List<Vector2> { s, new(xk, s.y), new(xk, routeY), new(t.x - Lead, routeY), new(t.x - Lead, t.y), t };
+                    }
+
+                    Apply(w, best);
+                }
+            }
+
+            // Diagnostics (Player.log): how many wires took a detour, and whether any overlap remains.
+            int overlaps = 0;
+            for (int i = 0; i < used.Count; i++)
+                for (int j = i + 1; j < used.Count; j++)
+                    if (used[i].srcPin != used[j].srcPin && CollinearOverlap(used[i].a, used[i].b, used[j].a, used[j].b)) overlaps++;
+            Debug.Log($"CleanUp: {routable.Count} wires routed, {pending.Count} detours, {overlaps} overlapping segment pairs");
+
             // ---- 5) Record undo ----
-            if (moved.Count > 0) chip.UndoController.RecordMoveElements(moved);
+            chip.UndoController.RecordLayoutChange(layoutBefore);
 
             // ---- 6) Re-frame the camera on the tidied contents ----
             CameraController.FocusChip(chip);
