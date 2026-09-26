@@ -59,6 +59,9 @@ namespace DLS.Graphics
 		static int collectionInteractFrame;
 		static ChipCollection activeCollection;
 		static Vector2 collectionPopupBottomLeft;
+		// true: popup opened from the bottom bar (panel pinned to the bar); false: opened at the mouse by a right-click in the scene
+		static bool collectionPopupAnchoredToBar = true;
+		const string SceneRightClickCollectionName = "IN/OUT";
 		static Bounds2D barBounds_ScreenSpace;
 
 		static bool MenuButtonsAndShortcutsEnabled => Project.ActiveProject.CanEditViewedChip;
@@ -235,13 +238,14 @@ namespace DLS.Graphics
 								project.controller.StartPlacing(newActiveCollection.Chips[0]);
 								activeCollection = null;
 							}
-							// Open collection in popup
+							// Open collection in popup (or close it if it is the one already open)
+							else if (newActiveCollection == activeCollection)
+							{
+								activeCollection = null;
+							}
 							else
 							{
-								collectionPopupBottomLeft = new Vector2(UI.PrevBounds.Left, barHeight);
-								activeCollection = newActiveCollection == activeCollection ? null : newActiveCollection;
-								collectionInteractFrame = Time.frameCount;
-								closeActiveCollectionMultiModeExit = false;
+								OpenCollectionPopup(newActiveCollection, new Vector2(UI.PrevBounds.Left, barHeight), anchoredToBar: true);
 							}
 						}
 						else
@@ -271,7 +275,37 @@ namespace DLS.Graphics
 			}
 
 
+			HandleSceneRightClick(project);
 			DrawCollectionsPopup();
+		}
+
+		// Right-click on empty space opens the IN/OUT collection at the mouse. It is the very same popup as the one
+		// opened from the bottom bar (same drawing, same shift-click multi-placement, same closing rules).
+		static void HandleSceneRightClick(Project project)
+		{
+			if (UIDrawer.ActiveMenu != UIDrawer.MenuType.None || !project.CanEditViewedChip) return;
+			// The event is consumed when the right-click cancelled a placement/move, so nothing opens in that case
+			if (!InputHelper.IsMouseDownThisFrame(MouseButton.Right)) return;
+			if (InteractionState.MouseIsOverUI || InteractionState.ElementUnderMouse != null) return;
+			if (KeyboardShortcuts.CameraActionKeyHeld || ContextMenu.HasFocus()) return;
+			if (!TryGetChipCollectionByName(SceneRightClickCollectionName, out ChipCollection collection) || collection.Chips.Count == 0) return;
+
+			// Keep the whole list on screen when possible (it grows upward from the anchor)
+			int n = collection.Chips.Count;
+			float totalHeight = n * buttonHeight + (n + 1) * buttonSpacing;
+			float minY = barHeight + buttonSpacing * 2;
+			Vector2 mouseUI = UI.ScreenToUISpace(InputHelper.MousePos);
+			float y = Mathf.Clamp(mouseUI.y, minY, Mathf.Max(minY, UI.Height - totalHeight));
+			OpenCollectionPopup(collection, new Vector2(mouseUI.x, y), anchoredToBar: false);
+		}
+
+		static void OpenCollectionPopup(ChipCollection collection, Vector2 bottomLeft, bool anchoredToBar)
+		{
+			collectionPopupBottomLeft = bottomLeft;
+			collectionPopupAnchoredToBar = anchoredToBar;
+			activeCollection = collection;
+			collectionInteractFrame = Time.frameCount;
+			closeActiveCollectionMultiModeExit = false;
 		}
 
 
@@ -317,17 +351,23 @@ namespace DLS.Graphics
 				{
 					collectionBounds = Bounds2D.Translate(collectionBounds, Vector2.left * collectionBounds.Width);
 				}
+				else if (isFirstPartial)
+				{
+					// Don't let the first column run off the right edge of the screen
+					float overflow = collectionBounds.Right + buttonSpacing * 2 - UI.Width;
+					if (overflow > 0) collectionBounds = Bounds2D.Translate(collectionBounds, Vector2.left * overflow);
+				}
 
 				// Draw the collections (or as much as fit vertically), as well as a background panel
 				Bounds2D panelBounds = Bounds2D.Grow(collectionBounds, buttonSpacing * 2);
-				panelBounds = new Bounds2D(new Vector2(panelBounds.Min.x, barHeight), panelBounds.Max);
+				if (collectionPopupAnchoredToBar) panelBounds = new Bounds2D(new Vector2(panelBounds.Min.x, barHeight), panelBounds.Max);
 				UI.DrawPanel(panelBounds, theme.StarredBarCol);
 				int buttonIndex = DrawCollectionsPopupPartial(collectionBounds.BottomLeft, collectionBounds.Width, firstButtonIndex, numButtonsToDraw, ref openedContextMenu);
 				if (buttonIndex != -1) pressedIndex = buttonIndex;
 
 				// Prepare for next part of the collection (if not all did fit on the screen)
 				firstButtonIndex -= numButtonsToDraw;
-				layoutOrigin = expandLeft ? panelBounds.BottomLeft : panelBounds.BottomRight;
+				layoutOrigin = new Vector2(expandLeft ? panelBounds.Left : panelBounds.Right, collectionPopupBottomLeft.y);
 				isFirstPartial = false;
 			}
 
@@ -384,15 +424,23 @@ namespace DLS.Graphics
 
 		static ChipCollection GetChipCollectionByName(string name)
 		{
+			if (TryGetChipCollectionByName(name, out ChipCollection c)) return c;
+			throw new Exception("Failed to find collection with name: " + name);
+		}
+
+		static bool TryGetChipCollectionByName(string name, out ChipCollection collection)
+		{
 			foreach (ChipCollection c in Project.ActiveProject.description.ChipCollections)
 			{
 				if (ChipDescription.NameMatch(c.Name, name))
 				{
-					return c;
+					collection = c;
+					return true;
 				}
 			}
 
-			throw new Exception("Failed to find collection with name: " + name);
+			collection = null;
+			return false;
 		}
 
 		static bool MouseIsOverBar() => InputHelper.MouseInBounds_ScreenSpace(barBounds_ScreenSpace);
@@ -507,6 +555,7 @@ namespace DLS.Graphics
 			chipBarTotalWidthLastFrame = 0;
 			isDraggingChipBar = false;
 			activeCollection = null;
+			collectionPopupAnchoredToBar = true;
 		}
 	}
 }
