@@ -203,15 +203,7 @@ namespace DLS.Graphics
 		static void OpenChip(string chipName)
 		{
 			Project project = Project.ActiveProject;
-
-			if (project.ActiveChipHasUnsavedChanges())
-			{
-				UnsavedChangesPopup.OpenPopup(OpenChipIfConfirmed);
-			}
-			else
-			{
-				OpenChipIfConfirmed(true);
-			}
+			OpenChipIfConfirmed(true); // free navigation: no prompt, unsaved work kept in memory
 
 			void OpenChipIfConfirmed(bool confirm)
 			{

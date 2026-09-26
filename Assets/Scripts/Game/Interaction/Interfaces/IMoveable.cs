@@ -16,6 +16,11 @@ namespace DLS.Game
 		Bounds2D BoundingBox { get; }
 		int ID { get; }
 
+		// Optional layout constraints honoured by Clean Up (0 = automatic). Bigger LayoutCol = further
+		// right, bigger LayoutRow = higher; equal values mean same column / same line.
+		int LayoutCol { get; set; }
+		int LayoutRow { get; set; }
+
 		public bool ShouldBeIncludedInSelectionBox(Vector2 selectionCentre, Vector2 selectionSize);
 	}
 }

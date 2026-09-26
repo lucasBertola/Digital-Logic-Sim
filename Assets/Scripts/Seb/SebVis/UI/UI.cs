@@ -464,7 +464,20 @@ namespace Seb.Vis.UI
 					string displayString = showDefaultText ? defaultText : state.text;
 
 					Color textCol = showDefaultText ? theme.defaultTextCol : theme.textCol;
-					Draw.Text(theme.font, displayString, fontSize_ss, textCentreLeft_ss, Anchor.TextCentreLeft, textCol);
+
+					// Horizontally scroll the text so the caret stays visible when the content is wider
+					// than the field (otherwise long text runs past the right edge and gets masked away).
+					float scrollX = 0;
+					if (Application.isPlaying && !showDefaultText)
+					{
+						int caretIdx = Mathf.Clamp(state.cursorBeforeCharIndex, 0, displayString.Length);
+						float caretW = Draw.CalculateTextBoundsSize(displayString.AsSpan(0, caretIdx), theme.fontSize, theme.font).x * scale;
+						float visibleW = ss.size.x - textPad * 2 * scale;
+						if (caretW > visibleW) scrollX = caretW - visibleW + fontSize_ss * 0.5f;
+					}
+					Vector2 textLeft_ss = textCentreLeft_ss + Vector2.left * scrollX;
+
+					Draw.Text(theme.font, displayString, fontSize_ss, textLeft_ss, Anchor.TextCentreLeft, textCol);
 
 					if (Application.isPlaying)
 					{
@@ -475,8 +488,8 @@ namespace Seb.Vis.UI
 						{
 							Vector2 boundsSizeUpToSelect = Draw.CalculateTextBoundsSize(displayString.AsSpan(0, state.selectionStartIndex), theme.fontSize, theme.font);
 							Color col = new(0.2f, 0.6f, 1, 0.5f);
-							float startX = textCentreLeft_ss.x + boundsSizeUpToCaret.x * scale;
-							float endX = textCentreLeft_ss.x + boundsSizeUpToSelect.x * scale;
+							float startX = textLeft_ss.x + boundsSizeUpToCaret.x * scale;
+							float endX = textLeft_ss.x + boundsSizeUpToSelect.x * scale;
 							if (startX > endX)
 							{
 								(startX, endX) = (endX, startX);
@@ -493,7 +506,7 @@ namespace Seb.Vis.UI
 						{
 							Vector2 caretTextBoundsTest = Draw.CalculateTextBoundsSize("Mj", theme.fontSize, theme.font);
 							float caretOffset = 1 * 0.075f * (state.cursorBeforeCharIndex == 0 ? -1 : 1);
-							Vector2 caretPos_ss = textCentreLeft_ss + Vector2.right * ((boundsSizeUpToCaret.x + caretOffset) * scale);
+							Vector2 caretPos_ss = textLeft_ss + Vector2.right * ((boundsSizeUpToCaret.x + caretOffset) * scale);
 							Vector2 caretSize = new(0.125f * theme.fontSize, caretTextBoundsTest.y * 1.2f);
 							Draw.Quad(caretPos_ss, caretSize * scale, theme.textCol);
 						}

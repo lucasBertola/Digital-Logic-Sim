@@ -190,6 +190,15 @@ namespace DLS.Graphics
 			}
 		}
 
+		// World-space bounds of a pin's name label (matches DrawPinLabel). Used for double-click-to-edit.
+		public static Seb.Types.Bounds2D GetPinLabelBounds(PinInstance pin)
+		{
+			string text = pin.Name;
+			Vector2 size = Draw.CalculateTextBoundsSize(text, FontSizePinLabel, FontBold) + LabelBackgroundPadding;
+			Vector2 centre = pin.GetWorldPos() + pin.ForwardDir * (size.x / 2 + PinRadius + 0.05f);
+			return Seb.Types.Bounds2D.CreateFromCentreAndSize(centre, size);
+		}
+
 		public static void DrawPinLabel(PinInstance pin)
 		{
 			string text = pin.Name;

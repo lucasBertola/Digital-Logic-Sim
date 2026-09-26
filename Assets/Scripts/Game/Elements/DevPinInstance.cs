@@ -34,6 +34,8 @@ namespace DLS.Game
 
 			Pin = new PinInstance(pinDescription, new PinAddress(ID, 0), this, isInput);
 			pinValueDisplayMode = pinDescription.ValueDisplayMode;
+			LayoutCol = pinDescription.LayoutCol;
+			LayoutRow = pinDescription.LayoutRow;
 
 			// Calculate layout info
 			faceDir = new Vector2(IsInputPin ? 1 : -1, 0);
@@ -68,6 +70,8 @@ namespace DLS.Game
 		public Vector2 MoveStartPosition { get; set; }
 		public Vector2 StraightLineReferencePoint { get; set; }
 		public int ID { get; }
+		public int LayoutCol { get; set; }
+		public int LayoutRow { get; set; }
 
 		public bool IsSelected { get; set; }
 		public bool HasReferencePointForStraightLineMovement { get; set; }

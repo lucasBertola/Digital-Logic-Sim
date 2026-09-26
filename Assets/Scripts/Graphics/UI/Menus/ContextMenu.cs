@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using DLS.Description;
 using DLS.Game;
+using DLS.SaveSystem;
 using Seb.Helpers;
 using Seb.Types;
 using Seb.Vis;
@@ -14,9 +15,14 @@ namespace DLS.Graphics
 	public static class ContextMenu
 	{
 		const int pad = 10;
+		const int NandOnlyWarnThreshold = 800; // above this, confirm before rebuilding (layout + sim get heavy)
 		const string menuDividerString = "#--#";
 		static string interactionContextName;
 		static bool bottomBarItemIsCollection;
+
+		// Whether the right-clicked bottom-bar chip is a NAND-only combinational circuit (so it can be
+		// minimised). Computed once when the menu opens: the entry's IsEnabled runs every frame.
+		static bool bottomBarChipIsReducible;
 		static Vector2 mouseOpenMenuPos;
 
 		static MenuEntry[] activeContextMenuEntries;
@@ -99,15 +105,27 @@ namespace DLS.Graphics
 			new(Format("DELETE"), Delete, CanDelete)
 		};
 
+		static readonly MenuEntry countNandEntry = new(Format("COUNT NAND"), ShowNandCount, () => true);
+		static readonly MenuEntry nandOnlyEntry = new(Format("NAND ONLY"), RecreateWithOnlyNand, CanRecreateWithOnlyNand);
+		static readonly MenuEntry optimiseEntry = new(Format("OPTIMISE"), OptimiseWithChips, () => bottomBarChipIsReducible);
+
 		static readonly MenuEntry[] entries_bottomBarChip =
 		{
 			openChipEntry,
-			new(Format("UN-STAR"), UnstarBottomBarEntry, () => true)
+			countNandEntry,
+			nandOnlyEntry,
+			optimiseEntry,
+			new(Format("RENAME"), RenameBottomBarChip, CanDeleteBottomBarChip),
+			new(Format("UN-STAR"), UnstarBottomBarEntry, () => true),
+			new(Format("DELETE"), DeleteBottomBarChip, CanDeleteBottomBarChip)
 		};
 
 		static readonly MenuEntry[] entries_collectionPopupChip =
 		{
-			openChipEntry
+			openChipEntry,
+			countNandEntry,
+			nandOnlyEntry,
+			optimiseEntry
 		};
 
 		static readonly MenuEntry[] entries_bottomBarCollection =
@@ -243,6 +261,7 @@ namespace DLS.Graphics
 			interactionContextName = name;
 			bottomBarItemIsCollection = isCollection;
 			interactionContext = null;
+			bottomBarChipIsReducible = !isCollection && NandMinimizer.CanOptimize(name, Project.ActiveProject.chipLibrary);
 			SetContextMenuOpen(name);
 
 			if (isCollection)
@@ -273,9 +292,12 @@ namespace DLS.Graphics
 			headerTheme.buttonCols.inactive = ColHelper.MakeCol(0.18f);
 			headerTheme.textCols.inactive = Color.white;
 
-			float menuWidth = Draw.CalculateTextBoundsSize(menuEntries[0].Text, theme.fontSize, theme.font).x + 1;
-			float menuWidthHeader = Draw.CalculateTextBoundsSize(contextMenuHeader, theme.fontSize, theme.font).x + 1;
-			menuWidth = Mathf.Max(menuWidth, menuWidthHeader);
+			float menuWidth = Draw.CalculateTextBoundsSize(contextMenuHeader, theme.fontSize, theme.font).x + 1;
+			foreach (MenuEntry entry in menuEntries)
+			{
+				if (entry.Text == menuDividerString) continue;
+				menuWidth = Mathf.Max(menuWidth, Draw.CalculateTextBoundsSize(entry.Text, theme.fontSize, theme.font).x + 1);
+			}
 
 			Draw.ID panelID = UI.ReservePanel();
 			Vector2 buttonSize = new(menuWidth, 2);
@@ -418,14 +440,8 @@ namespace DLS.Graphics
 			Project project = Project.ActiveProject;
 			string chipToOpenName = interactionContextName;
 
-			if (project.ActiveChipHasUnsavedChanges())
-			{
-				UnsavedChangesPopup.OpenPopup(OpenChipIfConfirmed);
-			}
-			else
-			{
-				OpenChipIfConfirmed(true);
-			}
+			// Free navigation: switching chips never prompts; unsaved work is kept in memory.
+			OpenChipIfConfirmed(true);
 
 			void OpenChipIfConfirmed(bool confirm)
 			{
@@ -453,6 +469,120 @@ namespace DLS.Graphics
 		public static void UnstarBottomBarEntry()
 		{
 			Project.ActiveProject.SetStarred(interactionContextName, false, bottomBarItemIsCollection, true);
+		}
+
+		static bool CanDeleteBottomBarChip() => !bottomBarItemIsCollection && !Project.ActiveProject.chipLibrary.IsBuiltinChip(interactionContextName);
+
+		static void DeleteBottomBarChip()
+		{
+			string name = interactionContextName;
+			string msg = $"Supprimer la brique \"{name}\" du projet ?\nToute instance de cette brique sera retiree des circuits qui l'utilisent.";
+			ConfirmationPopup.Open(msg, () => Project.ActiveProject.DeleteChip(name));
+		}
+
+		static void RenameBottomBarChip() => RenameChipPopup.Open(interactionContextName);
+
+		// Total number of NAND gates the chip is made of (custom sub-chips expanded recursively).
+		static void ShowNandCount() => InfoPopup.Open(NandCounter.BuildReport(interactionContextName, Project.ActiveProject.chipLibrary));
+
+		static bool CanRecreateWithOnlyNand() => !Project.ActiveProject.chipLibrary.IsBuiltinChip(interactionContextName);
+
+		// Creates (and opens) a new chip doing exactly the same thing, but flattened down to primitives only.
+		static void RecreateWithOnlyNand()
+		{
+			Project p = Project.ActiveProject;
+			string sourceName = interactionContextName;
+			string newName = MakeNandChipName(sourceName, p.chipLibrary);
+			ChipDescription flat = NandFlattener.Flatten(sourceName, p.chipLibrary, newName, out NandFlattener.Report report);
+
+			if (flat == null)
+			{
+				InfoPopup.Open(report is { AbortedTooLarge: true }
+					? $"\"{sourceName}\" depasse {NandFlattener.MaxComponents} composants\nune fois mis a plat. Recreation annulee."
+					: $"Impossible de recreer \"{sourceName}\".");
+				return;
+			}
+
+			// Laying out (and simulating) a few thousand gates is not instant, so let the user opt out.
+			if (flat.SubChips.Length > NandOnlyWarnThreshold)
+			{
+				string msg = $"\"{newName}\" contiendra {flat.SubChips.Length} composants et {flat.Wires.Length} fils.\nLa mise en page peut prendre un moment.";
+				ConfirmationPopup.Open(msg, () => CommitNandOnlyChip(flat, report));
+			}
+			else CommitNandOnlyChip(flat, report);
+		}
+
+		static void CommitNandOnlyChip(ChipDescription flat, NandFlattener.Report report)
+		{
+			CommitGeneratedChip(flat, NandFlattener.DescribeResult(flat.Name, report));
+		}
+
+		// Rebuilds the chip out of the logic packages the user owns, minimising the package count.
+		static void OptimiseWithChips()
+		{
+			string sourceName = interactionContextName;
+			GatePaletteMenu.Open(sourceName, selection => RunGateMapping(sourceName, selection));
+		}
+
+		static void RunGateMapping(string sourceName, bool[] selection)
+		{
+			Project p = Project.ActiveProject;
+			string newName = MakeDerivedChipName(sourceName, "_IC", p.chipLibrary);
+			GateMapper.Result r = GateMapper.Map(sourceName, p.chipLibrary, newName, selection);
+
+			if (r.Error != null)
+			{
+				InfoPopup.Open(r.Error);
+				return;
+			}
+
+			// The gate bricks must exist before the mapped chip that references them by name.
+			// (CommitGeneratedChip refreshes the project's chip list once, covering these too.)
+			foreach (ChipDescription brick in r.BricksToCreate)
+			{
+				Saver.SaveChip(brick, p.description.ProjectName);
+				p.chipLibrary.NotifyChipSaved(brick);
+				p.SetStarred(brick.Name, true, false, false);
+			}
+
+			CommitGeneratedChip(r.Chip, GateMapper.DescribeResult(newName, r));
+		}
+
+		// Saves a generated chip, opens it in its own tab, lays it out and reports.
+		static void CommitGeneratedChip(ChipDescription chip, string message)
+		{
+			Project p = Project.ActiveProject;
+
+			// The chip must exist as a file to be openable as a tab (same rule as the assistant's create_module).
+			Saver.SaveChip(chip, p.description.ProjectName);
+			p.chipLibrary.NotifyChipSaved(chip);
+			p.SetStarred(chip.Name, true, false, false);
+
+			// ProjectDescription.AllCustomChipNames is the ONLY list the loader rebuilds the library
+			// from, so it has to be refreshed here: starring alone rewrites the description untouched,
+			// and the chip would come back invisible (present on disk, unusable, undeletable).
+			p.UpdateAndSaveProjectDescription();
+
+			p.LoadDevChipOrCreateNewIfDoesntExist(chip.Name);
+
+			// Generated chips only get a rough grid position; Clean Up does the real layout.
+			CircuitAutoLayout.CleanUp(p.ViewedChip);
+			p.SaveFromDescription(DescriptionCreator.CreateChipDescription(p.ViewedChip));
+
+			InfoPopup.Open(message);
+		}
+
+		static string MakeNandChipName(string sourceName, ChipLibrary library) => MakeDerivedChipName(sourceName, "_NAND", library);
+
+		static string MakeDerivedChipName(string sourceName, string suffix, ChipLibrary library)
+		{
+			int maxLength = ChipSaveMenu.MaxLengthChipName.Length;
+
+			string Candidate(string tail) => sourceName.Substring(0, Mathf.Min(sourceName.Length, maxLength - tail.Length)) + tail;
+
+			string name = Candidate(suffix);
+			for (int i = 2; library.HasChip(name); i++) name = Candidate(suffix + i);
+			return name;
 		}
 
 		public readonly struct MenuEntry

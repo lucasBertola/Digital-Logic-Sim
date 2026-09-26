@@ -75,6 +75,35 @@ namespace DLS.Game
 			if (openInMainMenu || !Application.isEditor) Main.LoadMainMenu();
 			else Main.CreateOrLoadProject(testProjectName, openA ? chipToOpenA : chipToOpenB);
 
+			Application.wantsToQuit += OnWantsToQuit;
+		}
+
+		bool forceQuit;
+
+		// Guard closing the program (window X / Alt+F4) when the edited chip has unsaved changes.
+		bool OnWantsToQuit()
+		{
+			if (forceQuit) return true;
+
+			Project p = Project.ActiveProject;
+			if (p == null) return true;
+			if (UIDrawer.ActiveMenu == UIDrawer.MenuType.MainMenu) return true;
+
+			bool unsaved;
+			try { unsaved = p.AnyUnsavedChanges(); }
+			catch { return true; }
+			if (!unsaved) return true;
+
+			// Cancel the quit and ask; only actually quit once the user confirms.
+			UnsavedChangesPopup.OpenPopup(confirm =>
+			{
+				if (confirm)
+				{
+					forceQuit = true;
+					Application.Quit();
+				}
+			});
+			return false;
 		}
 
 		void Update()
@@ -153,6 +182,7 @@ namespace DLS.Game
 
 		void OnDestroy()
 		{
+			Application.wantsToQuit -= OnWantsToQuit;
 			if (Project.ActiveProject != null) Project.ActiveProject.NotifyExit();
 		}
 
@@ -173,6 +203,10 @@ namespace DLS.Game
 			InteractionState.Reset();
 			CameraController.Reset();
 			WorldDrawer.Reset();
+			AskClaudeMenu.Reset();
+			GatePaletteMenu.Reset();
+			GatePackages.Reset();
+			SimKeyboardHelper.SetVirtualKeys(null); // drop any leftover QA-harness key override
 		}
 
 		[System.Serializable]

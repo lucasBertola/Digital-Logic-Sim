@@ -48,6 +48,8 @@ namespace DLS.SaveSystem
 				desc.StarredList[i] = starred;
 			}
 
+			BuiltinCollectionCreator.AddMissingLateBuiltins(desc);
+
 			foreach (ChipCollection collection in desc.ChipCollections)
 			{
 				collection.UpdateDisplayStrings();

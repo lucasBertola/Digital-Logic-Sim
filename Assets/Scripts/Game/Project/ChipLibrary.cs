@@ -57,6 +57,18 @@ namespace DLS.Game
 
 		public bool TryGetChipDescription(string name, out ChipDescription description) => descriptionFromNameLookup.TryGetValue(name, out description);
 
+		// When set (by Project), returns the LIVE (possibly unsaved) description of a chip that is currently
+		// open in memory, so the SIMULATION reflects unsaved edits to sub-chips. Save/structure logic keeps
+		// using the saved descriptions above.
+		public System.Func<string, ChipDescription> SimOverride;
+
+		public ChipDescription GetChipDescriptionForSim(string name)
+		{
+			ChipDescription live = SimOverride?.Invoke(name);
+			if (live != null) return live;
+			return descriptionFromNameLookup.TryGetValue(name, out ChipDescription d) ? d : null; // null = unresolved (stale ref)
+		}
+
 		public void RemoveChip(string chipName)
 		{
 			allChips.RemoveAll(c => c.NameMatch(chipName));

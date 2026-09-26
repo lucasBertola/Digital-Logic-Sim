@@ -175,6 +175,8 @@ namespace DLS.Game
 
 			undoHistory.Add(action);
 			undoIndex = undoHistory.Count - 1;
+
+			Project.ActiveProject?.NotifyEditRecorded(devChip); // keep the global (cross-tab) undo timeline in order
 		}
 
 		void UndoRedo(UndoAction action, bool undo)

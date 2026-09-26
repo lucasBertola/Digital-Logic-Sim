@@ -60,6 +60,8 @@ namespace DLS.SaveSystem
 		public static void DeleteChip(string chipName, string projectName, bool backupInDeletedFolder = true)
 		{
 			string filePath = GetChipFilePath(chipName, projectName);
+			if (!File.Exists(filePath)) return; // already gone: nothing to do
+
 			if (backupInDeletedFolder)
 			{
 				string deletedChipDirectoryPath = SavePaths.GetDeletedChipsPath(projectName);

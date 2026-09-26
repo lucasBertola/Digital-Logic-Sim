@@ -57,7 +57,9 @@ namespace DLS.Game
 			return inputPins_cached;
 		}
 
-		public static (DevChipInstance devChip, bool anyElementFailedToLoad) LoadFromDescriptionTest(ChipDescription description, ChipLibrary library)
+		// useLiveSubchips: resolve sub-chips to their LIVE (possibly unsaved) descriptions (for editing loads),
+		// so placed sub-components reflect unsaved edits/renames of the chips they reference.
+		public static (DevChipInstance devChip, bool anyElementFailedToLoad) LoadFromDescriptionTest(ChipDescription description, ChipLibrary library, bool useLiveSubchips = false)
 		{
 			DevChipInstance instance = new();
 			instance.LastSavedDescription = description;
@@ -73,7 +75,11 @@ namespace DLS.Game
 			// Load subchips
 			foreach (SubChipDescription subChipDescription in description.SubChips)
 			{
-				if (library.TryGetChipDescription(subChipDescription.Name, out ChipDescription fullDescriptionOfSubchip))
+				ChipDescription fullDescriptionOfSubchip = useLiveSubchips
+					? library.GetChipDescriptionForSim(subChipDescription.Name)
+					: (library.TryGetChipDescription(subChipDescription.Name, out ChipDescription saved) ? saved : null);
+
+				if (fullDescriptionOfSubchip != null)
 				{
 					SubChipInstance subChip = new(fullDescriptionOfSubchip, subChipDescription);
 					instance.AddNewSubChip(subChip, true);

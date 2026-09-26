@@ -38,6 +38,8 @@ namespace DLS.Game
 			Position = subChipDesc.Position;
 			ID = subChipDesc.ID;
 			Label = subChipDesc.Label;
+			LayoutCol = subChipDesc.LayoutCol;
+			LayoutRow = subChipDesc.LayoutRow;
 			IsBus = ChipTypeHelper.IsBusType(ChipType);
 			MultiLineName = CreateMultiLineName(description.Name);
 			MinSize = CalculateMinChipSize(description.InputPins, description.OutputPins, description.Name);
@@ -100,6 +102,8 @@ namespace DLS.Game
 		public Vector2 MoveStartPosition { get; set; }
 		public Vector2 StraightLineReferencePoint { get; set; }
 		public int ID { get; }
+		public int LayoutCol { get; set; }
+		public int LayoutRow { get; set; }
 
 		public bool IsSelected { get; set; }
 		public bool HasReferencePointForStraightLineMovement { get; set; }

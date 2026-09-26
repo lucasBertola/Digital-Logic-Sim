@@ -33,6 +33,10 @@ namespace DLS.Description
 
 			{ ChipType.Buzzer, "BUZZER" },
 
+			// ---- Constants (always-on / always-off sources) ----
+			{ ChipType.Vcc, "VCC" },
+			{ ChipType.Gnd, "GND" },
+
 			// ---- Not really chips (but convenient to treat them as such anyway) ----
 
 			// ---- Inputs/Outputs ----
@@ -61,6 +65,9 @@ namespace DLS.Description
 		public static bool IsBusTerminusType(ChipType type) => type is ChipType.BusTerminus_1Bit or ChipType.BusTerminus_4Bit or ChipType.BusTerminus_8Bit;
 
 		public static bool IsRomType(ChipType type) => type == ChipType.Rom_256x16;
+
+		// VCC / GND: sourceless chips whose single output is permanently held at 1 / 0.
+		public static bool IsConstantType(ChipType type) => type is ChipType.Vcc or ChipType.Gnd;
 
 		public static ChipType GetCorrespondingBusTerminusType(ChipType type)
 		{

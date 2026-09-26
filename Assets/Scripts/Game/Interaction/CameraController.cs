@@ -257,6 +257,38 @@ namespace DLS.Game
 			chipViewStateLookup[nameNew] = activeView;
 		}
 
+		// Adjust zoom/pan when a right-side overlay (Ask Claude panel) covers a fraction of the screen
+		// width, so the world content visible in the remaining usable area is preserved as the fraction
+		// changes (panel opens/resizes/closes). fOld/fNew in [0,1) = fraction of screen width covered.
+		public static void AdjustForViewportChange(float fOld, float fNew)
+		{
+			if (activeView == null || camera == null) return;
+			fOld = Mathf.Clamp(fOld, 0f, 0.9f);
+			fNew = Mathf.Clamp(fNew, 0f, 0.9f);
+
+			float aspect = camera.aspect;
+			float oOld = activeView.OrthoSize;
+			float fullWidthOld = 2f * oOld * aspect;
+
+			float oNew = Mathf.Clamp(oOld * (1f - fOld) / (1f - fNew), zoomRange.x, zoomRange.y);
+			float fullWidthNew = 2f * oNew * aspect;
+
+			// Keep the centre of the usable (left) region fixed on the same world point.
+			float pxNew = activeView.Pos.x - fOld / 2f * fullWidthOld + fNew / 2f * fullWidthNew;
+
+			activeView.OrthoSize = oNew;
+			activeView.Pos = new Vector2(pxNew, activeView.Pos.y);
+		}
+
+		// Re-frame the camera on the given chip's current contents (used after Clean Up).
+		public static void FocusChip(DevChipInstance chip)
+		{
+			ViewState view = GetViewForChip(chip);
+			activeView.OrthoSize = view.OrthoSize;
+			activeView.Pos = view.Pos;
+			chipViewStateLookup[chip.ChipName] = activeView;
+		}
+
 		public class ViewState
 		{
 			public float OrthoSize = StartupOrthoSize;

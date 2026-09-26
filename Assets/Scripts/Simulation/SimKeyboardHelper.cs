@@ -20,6 +20,18 @@ namespace DLS.Simulation
 		static readonly HashSet<char> KeyLookup = new();
 		static bool HasAnyInput;
 
+		// When non-null, replaces the real keyboard: used by the offline QA harness (CircuitTester) so a
+		// test sequence can "press" KEY chips deterministically. Always cleared when the test ends.
+		static HashSet<char> virtualKeys;
+
+		public static void SetVirtualKeys(HashSet<char> keys)
+		{
+			lock (KeyLookup)
+			{
+				virtualKeys = keys;
+			}
+		}
+
 		// Call from Main Thread
 		public static void RefreshInputState()
 		{
@@ -50,7 +62,8 @@ namespace DLS.Simulation
 
 			lock (KeyLookup)
 			{
-				isHeld = HasAnyInput && KeyLookup.Contains(key);
+				if (virtualKeys != null) isHeld = virtualKeys.Contains(key);
+				else isHeld = HasAnyInput && KeyLookup.Contains(key);
 			}
 
 			return isHeld;

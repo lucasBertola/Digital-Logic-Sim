@@ -27,6 +27,8 @@ namespace DLS.Game
 				CreateTristateBuffer(),
 				CreateClock(),
 				CreatePulse(),
+				CreateConstant(ChipType.Vcc),
+				CreateConstant(ChipType.Gnd),
 				// ---- Memory ----
 				dev_CreateRAM_8(),
 				CreateROM_8(),
@@ -147,6 +149,19 @@ namespace DLS.Game
 			PinDescription[] outputPins = { CreatePinDescription("CLK", 0) };
 
 			return CreateBuiltinChipDescription(ChipType.Clock, size, col, null, outputPins);
+		}
+
+		// Constant source: no inputs, one 1-bit output permanently held HIGH (VCC) or LOW (GND).
+		// Placed as a sub-chip, so it is *not* part of the chip's interface (unlike an IN pin) -- which is
+		// what makes hard-wired patterns (LUTs, ROM-style tri-state matrices, tie-offs) possible.
+		static ChipDescription CreateConstant(ChipType type)
+		{
+			bool high = type == ChipType.Vcc;
+			Vector2 size = new(GridHelper.SnapToGrid(1), GridSize * 3);
+			Color col = high ? new Color(0.73f, 0.26f, 0.26f) : new Color(0.18f, 0.18f, 0.18f);
+			PinDescription[] outputPins = { CreatePinDescription("OUT", 0) };
+
+			return CreateBuiltinChipDescription(type, size, col, null, outputPins);
 		}
 
 		static ChipDescription CreatePulse()

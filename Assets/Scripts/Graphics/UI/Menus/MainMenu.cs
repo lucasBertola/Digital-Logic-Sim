@@ -72,7 +72,10 @@ namespace DLS.Graphics
 
 		static int selectedProjectIndex;
 
-		static readonly string authorString = "Created by: Sebastian Lague";
+		// Double-click detection for the project list
+		static int lastProjectClickIndex = -1;
+		static float lastProjectClickTime;
+
 		static readonly string versionString = $"Version: {Main.DLSVersion} ({Main.LastUpdatedString})";
 		static string SelectedProjectName => allProjectDescriptions[selectedProjectIndex].ProjectName;
 
@@ -136,6 +139,7 @@ namespace DLS.Graphics
 			activeMenuScreen = MenuScreen.Main;
 			activePopup = PopupKind.None;
 			selectedProjectIndex = -1;
+			RefreshLoadedProjects(); // so the "Continue [last project]" button can be shown
 		}
 
 		static void DrawMainScreen()
@@ -145,30 +149,47 @@ namespace DLS.Graphics
 			DrawSettings.UIThemeDLS theme = DrawSettings.ActiveUITheme;
 			float buttonWidth = 15;
 
-			int buttonIndex = UI.VerticalButtonGroup(menuButtonNames, theme.MainMenuButtonTheme, UI.Centre + Vector2.up * 6, new Vector2(buttonWidth, 0), false, true, 1);
+			// "Continue [last modified project]" shown on top when a compatible project exists.
+			bool hasRecent = allProjectDescriptions != null && allProjectDescriptions.Length > 0
+			                 && projectCompatibilities.Length > 0 && projectCompatibilities[0].compatible;
+			string recentName = hasRecent ? allProjectDescriptions[0].ProjectName : null;
 
-			if (buttonIndex == 0 || KeyboardShortcuts.MainMenu_NewProjectShortcutTriggered) // New project
+			string[] names = hasRecent
+				? new[] { FormatButtonString("Continue " + recentName) }.Concat(menuButtonNames).ToArray()
+				: menuButtonNames;
+
+			int buttonIndex = UI.VerticalButtonGroup(names, theme.MainMenuButtonTheme, UI.Centre + Vector2.up * 6, new Vector2(buttonWidth, 0), false, true, 1);
+
+			if (hasRecent && buttonIndex == 0) // Continue last project
+			{
+				Main.CreateOrLoadProject(recentName, string.Empty);
+				return;
+			}
+
+			int idx = hasRecent ? buttonIndex - 1 : buttonIndex; // logical index into menuButtonNames
+
+			if (idx == 0 || KeyboardShortcuts.MainMenu_NewProjectShortcutTriggered) // New project
 			{
 				RefreshLoadedProjects();
 				activePopup = PopupKind.NamePopup_NewProject;
 			}
-			else if (buttonIndex == 1 || KeyboardShortcuts.MainMenu_OpenProjectShortcutTriggered) // Load project
+			else if (idx == 1 || KeyboardShortcuts.MainMenu_OpenProjectShortcutTriggered) // Load project
 			{
 				RefreshLoadedProjects();
 				selectedProjectIndex = -1;
 				activeMenuScreen = MenuScreen.LoadProject;
 			}
-			else if (buttonIndex == 2 || KeyboardShortcuts.MainMenu_SettingsShortcutTriggered) // Settings
+			else if (idx == 2 || KeyboardShortcuts.MainMenu_SettingsShortcutTriggered) // Settings
 			{
 				EditedAppSettings = Main.ActiveAppSettings;
 				activeMenuScreen = MenuScreen.Settings;
 				OnSettingsMenuOpened();
 			}
-			else if (buttonIndex == 3) // About
+			else if (idx == 3) // About
 			{
 				activeMenuScreen = MenuScreen.About;
 			}
-			else if (buttonIndex == 4 || KeyboardShortcuts.MainMenu_QuitShortcutTriggered) // Quit
+			else if (idx == 4 || KeyboardShortcuts.MainMenu_QuitShortcutTriggered) // Quit
 			{
 				Quit();
 			}
@@ -231,7 +252,18 @@ namespace DLS.Graphics
 
 				if (UI.Button(desc.ProjectName, buttonTheme, topLeft, new Vector2(width, 0), enabled, false, true, Anchor.TopLeft))
 				{
-					selectedProjectIndex = i;
+					// Double-click on a project opens it directly (if compatible).
+					bool doubleClick = i == lastProjectClickIndex && Time.time - lastProjectClickTime < 0.4f;
+					if (doubleClick && projectCompatibilities[i].compatible)
+					{
+						Main.CreateOrLoadProject(desc.ProjectName, string.Empty);
+					}
+					else
+					{
+						selectedProjectIndex = i;
+						lastProjectClickIndex = i;
+						lastProjectClickTime = Time.time;
+					}
 				}
 
 				topLeft = UI.PrevBounds.BottomLeft + Vector2.down * spacing;
@@ -423,6 +455,8 @@ namespace DLS.Graphics
 			else if (kind is PopupKind.NamePopup_NewProject)
 			{
 				Main.CreateOrLoadProject(name);
+				// New project: immediately prompt for the first chip's name so it is saved and shown in the bar.
+				UIDrawer.SetActiveMenu(UIDrawer.MenuType.ChipSave);
 			}
 		}
 
@@ -476,9 +510,7 @@ namespace DLS.Graphics
 			float pad = 1;
 			Color col = new(1, 1, 1, 0.5f);
 
-			Vector2 versionPos = UI.PrevBounds.CentreLeft + Vector2.right * pad;
 			Vector2 datePos = UI.PrevBounds.CentreRight + Vector2.left * pad;
-			UI.DrawText(authorString, theme.FontRegular, theme.FontSizeRegular, versionPos, Anchor.TextCentreLeft, col);
 			UI.DrawText(versionString, theme.FontRegular, theme.FontSizeRegular, datePos, Anchor.TextCentreRight, col);
 		}
 

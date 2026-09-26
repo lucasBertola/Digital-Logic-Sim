@@ -67,10 +67,36 @@ namespace DLS.Game
 			if (Loader.ProjectExists(projectName)) ActiveProject = LoadProject(projectName);
 			else ActiveProject = CreateProject(projectName);
 
+			// If no specific chip requested, open the most-recently-modified chip of the project.
+			if (string.IsNullOrEmpty(startupChipName)) startupChipName = GetLastModifiedChipName(projectName);
+
 			ActiveProject.LoadDevChipOrCreateNewIfDoesntExist(startupChipName);
 			ActiveProject.StartSimulation();
 			ActiveProject.audioState = audioState;
+
+			// Restore this project's Ask Claude conversation (or clear it when switching to a project that
+			// has none), so the assistant thread belongs to the project and can be picked up again.
+			AskClaude.LoadForProject(projectName);
+
 			UIDrawer.SetActiveMenu(UIDrawer.MenuType.None);
+		}
+
+		// Name of the most-recently-modified chip file in the project (empty if none).
+		static string GetLastModifiedChipName(string projectName)
+		{
+			try
+			{
+				string chipsPath = SavePaths.GetChipsPath(projectName);
+				if (!Directory.Exists(chipsPath)) return string.Empty;
+				FileInfo[] files = new DirectoryInfo(chipsPath).GetFiles("*.json");
+				if (files.Length == 0) return string.Empty;
+				FileInfo latest = files.OrderByDescending(f => f.LastWriteTimeUtc).First();
+				return Path.GetFileNameWithoutExtension(latest.Name);
+			}
+			catch
+			{
+				return string.Empty;
+			}
 		}
 
 		static Project CreateProject(string projectName)
@@ -82,7 +108,7 @@ namespace DLS.Game
 				DLSVersion_EarliestCompatible = DLSVersion_EarliestCompatible.ToString(),
 				CreationTime = DateTime.Now,
 				Prefs_ChipPinNamesDisplayMode = PreferencesMenu.DisplayMode_OnHover,
-				Prefs_MainPinNamesDisplayMode = PreferencesMenu.DisplayMode_OnHover,
+				Prefs_MainPinNamesDisplayMode = PreferencesMenu.DisplayMode_Always,
 				Prefs_SimTargetStepsPerSecond = 1000,
 				Prefs_SimStepsPerClockTick = 250,
 				Prefs_SimPaused = false,

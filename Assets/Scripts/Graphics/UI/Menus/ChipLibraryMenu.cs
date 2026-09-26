@@ -524,20 +524,13 @@ namespace DLS.Graphics
 
 				if (chipActionIndex == 0) // use
 				{
-					project.controller.StartPlacing(project.chipLibrary.GetChipDescription(selectedChipName));
+					project.controller.StartPlacing(project.chipLibrary.GetChipDescriptionForSim(selectedChipName));
 					ExitLibrary();
 				}
 				else if (chipActionIndex == 1) // open
 				{
 					chipToOpenName = selectedChipName;
-					if (project.ActiveChipHasUnsavedChanges())
-					{
-						UnsavedChangesPopup.OpenPopup(OpenChipIfConfirmed);
-					}
-					else
-					{
-						OpenChipIfConfirmed(true);
-					}
+					OpenChipIfConfirmed(true); // free navigation: no prompt, unsaved work kept in memory
 				}
 				else if (chipActionIndex == 2) // delete
 				{

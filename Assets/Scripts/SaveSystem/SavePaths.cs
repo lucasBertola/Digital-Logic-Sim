@@ -5,7 +5,9 @@ namespace DLS.SaveSystem
 {
 	public static class SavePaths
 	{
-		const bool UseBuildPathInEditor = false;
+		// true => the Editor also saves to Application.persistentDataPath (same folder as the built .exe),
+		// so the editor and the standalone build share ONE save location.
+		const bool UseBuildPathInEditor = true;
 
 		public const string ProjectFileName = "ProjectDescription.json";
 		public static readonly string dataPath_Build = Application.persistentDataPath;

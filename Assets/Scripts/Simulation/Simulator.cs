@@ -13,6 +13,11 @@ namespace DLS.Simulation
 		static readonly Stopwatch stopwatch = Stopwatch.StartNew();
 		public static int stepsPerClockTransition;
 		public static int simulationFrame;
+
+		// QA harness override (CircuitTester): -1 = normal time-based clock, 0/1 = every CLOCK chip is held
+		// at that level. Lets a test drive clock edges deterministically instead of waiting for real time.
+		// All clock chips share the same phase in this simulator, so one global level is faithful.
+		public static int forcedClockState = -1;
 		static uint pcg_rngState;
 
 		// When sim is first built, or whenever modified, it needs to run a less efficient pass in which the traversal order of the chips is determined
@@ -236,8 +241,20 @@ namespace DLS.Simulation
 				}
 				case ChipType.Clock:
 				{
-					bool high = stepsPerClockTransition != 0 && ((simulationFrame / stepsPerClockTransition) & 1) == 0;
+					bool high = forcedClockState >= 0
+							? forcedClockState == 1
+							: stepsPerClockTransition != 0 && ((simulationFrame / stepsPerClockTransition) & 1) == 0;
 					PinState.Set(ref chip.OutputPins[0].State, high ? PinState.LogicHigh : PinState.LogicLow);
+					break;
+				}
+				case ChipType.Vcc:
+				{
+					PinState.Set(ref chip.OutputPins[0].State, PinState.LogicHigh);
+					break;
+				}
+				case ChipType.Gnd:
+				{
+					PinState.Set(ref chip.OutputPins[0].State, PinState.LogicLow);
 					break;
 				}
 				case ChipType.Pulse:
@@ -540,8 +557,9 @@ namespace DLS.Simulation
 			for (int i = 0; i < chipDesc.SubChips.Length; i++)
 			{
 				SubChipDescription subchipDesc = chipDesc.SubChips[i];
-				ChipDescription subchipFullDesc = library.GetChipDescription(subchipDesc.Name);
-				SimChip subChip = BuildSimChipRecursive(subchipFullDesc, library, subchipDesc.ID, subchipDesc.InternalData);
+				ChipDescription subchipFullDesc = library.GetChipDescriptionForSim(subchipDesc.Name);
+				// Tolerate an unresolved sub-chip (e.g. a stale in-memory reference after a rename): treat as empty.
+				SimChip subChip = subchipFullDesc != null ? BuildSimChipRecursive(subchipFullDesc, library, subchipDesc.ID, subchipDesc.InternalData) : new SimChip();
 				subchips[i] = subChip;
 			}
 
@@ -669,6 +687,7 @@ namespace DLS.Simulation
 
 		public static void Reset()
 		{
+			forcedClockState = -1;
 			simulationFrame = 0;
 			modificationQueue?.Clear();
 			stopwatch.Restart();

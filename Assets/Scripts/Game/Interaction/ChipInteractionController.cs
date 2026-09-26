@@ -187,8 +187,8 @@ namespace DLS.Game
 			// Ignore shortcuts if don't have control
 			if (!HasControl) return;
 
-			if (KeyboardShortcuts.UndoShortcutTriggered) ActiveDevChip.UndoController.TryUndo();
-			else if (KeyboardShortcuts.RedoShortcutTriggered) ActiveDevChip.UndoController.TryRedo();
+			if (KeyboardShortcuts.UndoShortcutTriggered) project.GlobalUndo();
+			else if (KeyboardShortcuts.RedoShortcutTriggered) project.GlobalRedo();
 
 
 			if (!KeyboardShortcuts.StraightLineModeHeld) straightLineMoveState = StraightLineMoveState.None;
@@ -443,6 +443,10 @@ namespace DLS.Game
 			ClearSelection();
 		}
 
+		// Double-click detection for opening a dev pin's edit menu
+		DevPinInstance lastClickedDevPin;
+		float lastPinClickTime;
+
 		void HandleLeftMouseDown()
 		{
 			SelectionBoxStartPos = InputHelper.MousePosWorld;
@@ -451,6 +455,42 @@ namespace DLS.Game
 			if (InteractionState.ElementUnderMouse == null) ExitWireEditMode();
 
 			if (InteractionState.MouseIsOverUI) return;
+
+			// Double-click a dev pin (its handle/state dot OR its NAME label) to open its edit menu.
+			// Single-click on the name selects the pin (visible feedback).
+			if (HasControl)
+			{
+				bool viaLabel = false;
+				DevPinInstance devPinToEdit = null;
+				if (InteractionState.ElementUnderMouse is PinInstance clickedPin && clickedPin.parent is DevPinInstance dpp) devPinToEdit = dpp;
+				else { devPinToEdit = GetDevPinWithLabelUnderMouse(); viaLabel = devPinToEdit != null; }
+
+				if (devPinToEdit != null)
+				{
+					bool doubleClick = devPinToEdit == lastClickedDevPin && Time.time - lastPinClickTime < 0.4f;
+					lastClickedDevPin = devPinToEdit;
+					lastPinClickTime = Time.time;
+
+					if (doubleClick)
+					{
+						lastClickedDevPin = null;
+						CancelPlacingItems(); // cancel any wire the first click started
+						// Consume the click so the just-opened menu's buttons don't immediately eat it.
+						InputHelper.IsMouseDownThisFrame(MouseButton.Left, consumeEvent: true);
+						PinEditMenu.SetTargetPin(devPinToEdit);
+						UIDrawer.SetActiveMenu(UIDrawer.MenuType.PinRename);
+						return;
+					}
+
+					if (viaLabel)
+					{
+						// Single-click on the name: select + prepare to move the dev pin (visible feedback).
+						Select(devPinToEdit, KeyboardShortcuts.MultiModeHeld);
+						StartMovingSelectedItems();
+						return;
+					}
+				}
+			}
 
 			// Confirm placement of new item
 			if (IsPlacingElementOrCreatingWire)
@@ -522,6 +562,23 @@ namespace DLS.Game
 					wireEditPointOld = wireToEdit.GetWirePoint(wireEditPointIndex);
 				}
 			}
+		}
+
+		// Returns the dev pin whose (currently drawn) name label is under the mouse, or null.
+		DevPinInstance GetDevPinWithLabelUnderMouse()
+		{
+			if (!project.AlwaysDrawDevPinNames) return null; // only names that are actually shown
+			Vector2 mouse = InputHelper.MousePosWorld;
+			foreach (IMoveable element in ActiveDevChip.Elements)
+			{
+				if (element is DevPinInstance dp && !string.IsNullOrWhiteSpace(dp.Name)
+				    && DevSceneDrawer.GetPinLabelBounds(dp.Pin).PointInBounds(mouse))
+				{
+					return dp;
+				}
+			}
+
+			return null;
 		}
 
 		WireInstance.ConnectionInfo CreateWireToWireConnectionInfo(WireInstance wireToConnectTo, PinInstance pin)

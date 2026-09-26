@@ -17,7 +17,13 @@ namespace DLS.Description
 		// Otherwise is null
 		public uint[] InternalData;
 
-		public SubChipDescription(string name, int id, string label, Vector2 position, OutputPinColourInfo[] outputPinColInfo, uint[] internalData = null)
+		// Optional layout constraints honoured by Clean Up (0 = automatic placement, the default):
+		// LayoutCol = column, bigger means further right, equal means same column.
+		// LayoutRow = row, bigger means higher up; elements sharing a row value are aligned on the same line.
+		public int LayoutCol;
+		public int LayoutRow;
+
+		public SubChipDescription(string name, int id, string label, Vector2 position, OutputPinColourInfo[] outputPinColInfo, uint[] internalData = null, int layoutCol = 0, int layoutRow = 0)
 		{
 			Name = name;
 			ID = id;
@@ -25,6 +31,8 @@ namespace DLS.Description
 			Position = position;
 			OutputPinColourInfo = outputPinColInfo;
 			InternalData = internalData;
+			LayoutCol = layoutCol;
+			LayoutRow = layoutRow;
 		}
 	}
 

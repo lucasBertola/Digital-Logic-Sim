@@ -1,6 +1,7 @@
 using System;
 using DLS.Description;
 using DLS.Game;
+using DLS.SaveSystem;
 using Seb.Helpers;
 using Seb.Types;
 using Seb.Vis;
@@ -25,6 +26,10 @@ namespace DLS.Graphics
 			$"FIND CHIP    {shortcutTextCol}Ctrl+F",
 			$"LIBRARY      {shortcutTextCol}Ctrl+L",
 			$"PREFS        {shortcutTextCol}Ctrl+P",
+			$"EXPORT (LLM)",
+			$"TRUTH TABLE",
+			$"CLEAN UP",
+			$"ASK CLAUDE",
 			$"QUIT         {shortcutTextCol}Ctrl+Q"
 		};
 
@@ -33,7 +38,15 @@ namespace DLS.Graphics
 		const int FindChipButtonIndex = 2;
 		const int LibraryButtonIndex = 3;
 		const int OptionsButtonIndex = 4;
-		const int QuitButtonIndex = 5;
+		const int ExportButtonIndex = 5;
+		const int TruthTableButtonIndex = 6;
+		const int CleanUpButtonIndex = 7;
+		const int AskClaudeButtonIndex = 8;
+		const int QuitButtonIndex = 9;
+
+		// ---- Export confirmation toast ----
+		static string toastMsg;
+		static float toastEndTime;
 
 		// ---- State ----
 		static float scrollX;
@@ -53,6 +66,9 @@ namespace DLS.Graphics
 		public static void DrawUI(Project project)
 		{
 			DrawBottomBar(project);
+			TruthTableView.Draw();
+			AskClaudeMenu.Draw();
+			DrawToast();
 
 			if (UIDrawer.ActiveMenu == UIDrawer.MenuType.BottomBarMenuPopup)
 			{
@@ -108,10 +124,14 @@ namespace DLS.Graphics
 			void ButtonPressed(int i)
 			{
 				if (i == NewChipButtonIndex) CreateNewChip();
-				else if (i == SaveChipButtonIndex) OpenSaveMenu();
+				else if (i == SaveChipButtonIndex) SaveChip();
 				else if (i == FindChipButtonIndex) OpenSearchMenu();
 				else if (i == LibraryButtonIndex) OpenLibraryMenu();
 				else if (i == OptionsButtonIndex) OpenPreferencesMenu();
+				else if (i == ExportButtonIndex) ExportForLLM();
+				else if (i == TruthTableButtonIndex) TruthTableView.Toggle();
+				else if (i == CleanUpButtonIndex) CleanUp();
+				else if (i == AskClaudeButtonIndex) AskClaudeMenu.Open();
 				else if (i == QuitButtonIndex) ExitToMainMenu();
 			}
 		}
@@ -226,7 +246,7 @@ namespace DLS.Graphics
 						}
 						else
 						{
-							project.controller.StartPlacing(project.chipLibrary.GetChipDescription(starred.Name));
+							project.controller.StartPlacing(project.chipLibrary.GetChipDescriptionForSim(starred.Name)); // live version (unsaved edits included)
 							activeCollection = null;
 						}
 					}
@@ -235,8 +255,15 @@ namespace DLS.Graphics
 						ContextMenu.OpenBottomBarContextMenu(starred.Name, starred.IsCollection, false);
 					}
 
+					Bounds2D chipBtnBounds = UI.PrevBounds;
 
-					buttonPosX += UI.PrevBounds.Width + buttonSpacing;
+					// Red * on chips that have unsaved changes.
+					if (!starred.IsCollection && project.IsChipDirty(starred.Name))
+					{
+						UI.DrawText("*", theme.FontBold, theme.FontSizeRegular * 1.35f, chipBtnBounds.TopRight + new Vector2(-0.12f, 0.05f), Anchor.TopRight, new Color(1f, 0.4f, 0.4f));
+					}
+
+					buttonPosX += chipBtnBounds.Width + buttonSpacing;
 				}
 
 				// Record total width of all buttons to be used as scroll bounds for the next frame
@@ -308,7 +335,7 @@ namespace DLS.Graphics
 			{
 				if (pressedIndex != -1)
 				{
-					project.controller.StartPlacing(project.chipLibrary.GetChipDescription(activeCollection.Chips[pressedIndex]));
+					project.controller.StartPlacing(project.chipLibrary.GetChipDescriptionForSim(activeCollection.Chips[pressedIndex]));
 					if (KeyboardShortcuts.MultiModeHeld)
 					{
 						closeActiveCollectionMultiModeExit = true;
@@ -372,7 +399,7 @@ namespace DLS.Graphics
 
 		static void ExitToMainMenu()
 		{
-			if (Project.ActiveProject.ActiveChipHasUnsavedChanges()) UnsavedChangesPopup.OpenPopup(ExitIfTrue);
+			if (Project.ActiveProject.AnyUnsavedChanges()) UnsavedChangesPopup.OpenPopup(ExitIfTrue);
 			else ExitIfTrue(true);
 
 			static void ExitIfTrue(bool exit)
@@ -386,22 +413,79 @@ namespace DLS.Graphics
 		}
 
 		static void OpenSaveMenu() => UIDrawer.SetActiveMenu(UIDrawer.MenuType.ChipSave);
+
+		// SAVE = save EVERYTHING at once. If the current chip was never saved (unnamed), name it first.
+		static void SaveChip()
+		{
+			Project p = Project.ActiveProject;
+			if (!p.CanEditViewedChip) return;
+			if (!p.ChipHasBeenSavedBefore)
+			{
+				UIDrawer.SetActiveMenu(UIDrawer.MenuType.ChipSave);
+			}
+			else
+			{
+				p.SaveAllOpenChips();
+				ShowToast("Tout sauvegarde.");
+			}
+		}
 		static void OpenSearchMenu() => UIDrawer.SetActiveMenu(UIDrawer.MenuType.Search);
 		static void OpenLibraryMenu() => UIDrawer.SetActiveMenu(UIDrawer.MenuType.ChipLibrary);
 		static void OpenPreferencesMenu() => UIDrawer.SetActiveMenu(UIDrawer.MenuType.Preferences);
 
+		// Export the currently-edited chip (+ its sub-circuits) as LLM-friendly text into the clipboard.
+		static void ExportForLLM()
+		{
+			Project p = Project.ActiveProject;
+			try
+			{
+				ChipDescription desc = DescriptionCreator.CreateChipDescription(p.ViewedChip);
+				string text = CircuitExporter.ExportChipWithDeps(desc, p.chipLibrary, p.description.ProjectName);
+				InputHelper.CopyToClipboard(text);
+				string label = string.IsNullOrEmpty(desc.Name) ? "le circuit courant" : $"\"{desc.Name}\"";
+				ShowToast($"Copié dans le presse-papier : {label} + ses sous-circuits ({text.Length} caractères)");
+			}
+			catch (Exception e)
+			{
+				ShowToast("Échec de l'export : " + e.Message);
+			}
+
+			UIDrawer.SetActiveMenu(UIDrawer.MenuType.None);
+		}
+
+		static void CleanUp()
+		{
+			Project p = Project.ActiveProject;
+			if (p.CanEditViewedChip)
+			{
+				CircuitAutoLayout.CleanUp(p.ViewedChip);
+				ShowToast("Circuit reorganise (Clean Up).");
+			}
+
+			UIDrawer.SetActiveMenu(UIDrawer.MenuType.None);
+		}
+
+		static void ShowToast(string msg)
+		{
+			toastMsg = msg;
+			toastEndTime = Time.time + 4f;
+		}
+
+		static void DrawToast()
+		{
+			if (string.IsNullOrEmpty(toastMsg) || Time.time > toastEndTime) return;
+			DrawSettings.UIThemeDLS theme = DrawSettings.ActiveUITheme;
+			Vector2 pos = new(UI.Width / 2f, barHeight + 1.2f);
+			UI.DrawText(toastMsg, theme.FontRegular, theme.FontSizeRegular, pos + new Vector2(0.03f, -0.03f), Anchor.CentreBottom, new Color(0, 0, 0, 0.75f));
+			UI.DrawText(toastMsg, theme.FontRegular, theme.FontSizeRegular, pos, Anchor.CentreBottom, Color.white);
+		}
+
 		static void CreateNewChip()
 		{
-			if (Project.ActiveProject.ActiveChipHasUnsavedChanges()) UnsavedChangesPopup.OpenPopup(ConfirmNewChip);
-			else ConfirmNewChip(true);
-
-			static void ConfirmNewChip(bool confirm)
-			{
-				if (confirm)
-				{
-					Project.ActiveProject.CreateBlankDevChip();
-				}
-			}
+			// Free navigation: no prompt. Create a blank chip and immediately prompt for its name so it
+			// gets saved and appears in the bottom bar.
+			Project.ActiveProject.CreateBlankDevChip();
+			UIDrawer.SetActiveMenu(UIDrawer.MenuType.ChipSave);
 		}
 
 		static void HandleKeyboardShortcuts()
@@ -409,7 +493,7 @@ namespace DLS.Graphics
 			if (MenuButtonsAndShortcutsEnabled)
 			{
 				if (KeyboardShortcuts.CreateNewChipShortcutTriggered) CreateNewChip();
-				if (KeyboardShortcuts.SaveShortcutTriggered) OpenSaveMenu();
+				if (KeyboardShortcuts.SaveShortcutTriggered) SaveChip();
 				if (KeyboardShortcuts.LibraryShortcutTriggered) OpenLibraryMenu();
 			}
 

@@ -47,7 +47,12 @@ namespace DLS.Description
 		BusTerminus_8Bit,
 		
 		// ---- Audio ----
-		Buzzer
+		Buzzer,
+
+		// ---- Constants ----
+		// Note: enum values are serialized (ChipDescription.ChipType), so only ever APPEND new types here.
+		Vcc,
+		Gnd
 
 	}
 }

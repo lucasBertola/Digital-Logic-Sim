@@ -23,7 +23,9 @@ namespace DLS.Game
 					ChipType.Clock,
 					ChipType.Pulse,
 					ChipType.Key,
-					ChipType.TriStateBuffer
+					ChipType.TriStateBuffer,
+					ChipType.Vcc,
+					ChipType.Gnd
 				),
 				CreateChipCollection("IN/OUT",
 					ChipType.In_1Bit,
@@ -56,6 +58,44 @@ namespace DLS.Game
 					ChipType.Rom_256x16
 				)
 			};
+		}
+
+		// Builtin chips added to the fork *after* the default collections were authored. Existing projects
+		// store their own collection list in ProjectDescription, so a new builtin would otherwise never
+		// appear in their bottom bar / library. Each entry is added to the named collection (created if
+		// missing) only when the chip is absent from *every* collection, so a chip the user deliberately
+		// removed is never resurrected.
+		static readonly (ChipType type, string collection)[] LateAddedBuiltins =
+		{
+			(ChipType.Vcc, "BASIC"),
+			(ChipType.Gnd, "BASIC")
+		};
+
+		// ProjectDescription is a struct, but ChipCollections is a reference type: mutating the list (and the
+		// collections in it) through a copy still affects the caller's description. Returns true if modified.
+		public static bool AddMissingLateBuiltins(ProjectDescription description)
+		{
+			if (description.ChipCollections == null) return false;
+			bool modified = false;
+
+			foreach ((ChipType type, string collectionName) in LateAddedBuiltins)
+			{
+				string chipName = ChipTypeHelper.GetName(type);
+				bool present = description.ChipCollections.Any(c => c.Chips != null && c.Chips.Any(n => ChipDescription.NameMatch(n, chipName)));
+				if (present) continue;
+
+				ChipCollection collection = description.ChipCollections.FirstOrDefault(c => ChipDescription.NameMatch(c.Name, collectionName));
+				if (collection == null)
+				{
+					collection = new ChipCollection(collectionName);
+					description.ChipCollections.Add(collection);
+				}
+
+				collection.Chips.Add(chipName);
+				modified = true;
+			}
+
+			return modified;
 		}
 
 		static ChipCollection CreateChipCollection(string name, params ChipType[] chipTypes)

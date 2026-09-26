@@ -5,6 +5,10 @@ namespace DLS.Game
 {
 	public static class KeyboardShortcuts
 	{
+		// When a non-blocking on-screen text field is focused (e.g. the Ask Claude panel), game/scene
+		// shortcuts are suppressed so typing doesn't delete elements, step the sim, save, etc.
+		public static bool TextInputActive;
+
 		// ---- Main Menu shortcuts
 		public static bool MainMenu_NewProjectShortcutTriggered => CtrlShortcutTriggered(KeyCode.N);
 		public static bool MainMenu_OpenProjectShortcutTriggered => CtrlShortcutTriggered(KeyCode.O);
@@ -21,7 +25,7 @@ namespace DLS.Game
 
 
 		// ---- Misc shortcuts ----
-		public static bool DuplicateShortcutTriggered => MultiModeHeld && InputHelper.IsKeyDownThisFrame(KeyCode.D);
+		public static bool DuplicateShortcutTriggered => !TextInputActive && MultiModeHeld && InputHelper.IsKeyDownThisFrame(KeyCode.D);
 		public static bool ToggleGridShortcutTriggered => CtrlShortcutTriggered(KeyCode.G);
 		public static bool ResetCameraShortcutTriggered => CtrlShortcutTriggered(KeyCode.R);
 		public static bool UndoShortcutTriggered => CtrlShortcutTriggered(KeyCode.Z);
@@ -29,9 +33,9 @@ namespace DLS.Game
 
 		// ---- Single key shortcuts ----
 		public static bool CancelShortcutTriggered => InputHelper.IsKeyDownThisFrame(KeyCode.Escape);
-		public static bool ConfirmShortcutTriggered => InputHelper.IsKeyDownThisFrame(KeyCode.Return) || InputHelper.IsKeyDownThisFrame(KeyCode.KeypadEnter);
-		public static bool DeleteShortcutTriggered => InputHelper.IsKeyDownThisFrame(KeyCode.Backspace) || InputHelper.IsKeyDownThisFrame(KeyCode.Delete);
-		public static bool SimNextStepShortcutTriggered => InputHelper.IsKeyDownThisFrame(KeyCode.Space) && !InputHelper.CtrlIsHeld;
+		public static bool ConfirmShortcutTriggered => !TextInputActive && (InputHelper.IsKeyDownThisFrame(KeyCode.Return) || InputHelper.IsKeyDownThisFrame(KeyCode.KeypadEnter));
+		public static bool DeleteShortcutTriggered => !TextInputActive && (InputHelper.IsKeyDownThisFrame(KeyCode.Backspace) || InputHelper.IsKeyDownThisFrame(KeyCode.Delete));
+		public static bool SimNextStepShortcutTriggered => !TextInputActive && InputHelper.IsKeyDownThisFrame(KeyCode.Space) && !InputHelper.CtrlIsHeld;
 		public static bool SimPauseToggleShortcutTriggered => CtrlShortcutTriggered(KeyCode.Space);
 
 		// ---- Dev shortcuts ----
@@ -48,8 +52,8 @@ namespace DLS.Game
 		public static bool TakeFirstFromCollectionModifierHeld => InputHelper.CtrlIsHeld || InputHelper.AltIsHeld || InputHelper.ShiftIsHeld;
 
 		// ---- Helpers ----
-		static bool CtrlShortcutTriggered(KeyCode key) => InputHelper.IsKeyDownThisFrame(key) && InputHelper.CtrlIsHeld && !(InputHelper.AltIsHeld || InputHelper.ShiftIsHeld);
-		static bool CtrlShiftShortcutTriggered(KeyCode key) => InputHelper.IsKeyDownThisFrame(key) && InputHelper.CtrlIsHeld && InputHelper.ShiftIsHeld && !(InputHelper.AltIsHeld);
-		static bool ShiftShortcutTriggered(KeyCode key) => InputHelper.IsKeyDownThisFrame(key) && InputHelper.ShiftIsHeld && !(InputHelper.AltIsHeld || InputHelper.CtrlIsHeld);
+		static bool CtrlShortcutTriggered(KeyCode key) => !TextInputActive && InputHelper.IsKeyDownThisFrame(key) && InputHelper.CtrlIsHeld && !(InputHelper.AltIsHeld || InputHelper.ShiftIsHeld);
+		static bool CtrlShiftShortcutTriggered(KeyCode key) => !TextInputActive && InputHelper.IsKeyDownThisFrame(key) && InputHelper.CtrlIsHeld && InputHelper.ShiftIsHeld && !(InputHelper.AltIsHeld);
+		static bool ShiftShortcutTriggered(KeyCode key) => !TextInputActive && InputHelper.IsKeyDownThisFrame(key) && InputHelper.ShiftIsHeld && !(InputHelper.AltIsHeld || InputHelper.CtrlIsHeld);
 	}
 }

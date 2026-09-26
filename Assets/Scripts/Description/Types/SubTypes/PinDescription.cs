@@ -11,7 +11,11 @@ namespace DLS.Description
 		public PinColour Colour;
 		public PinValueDisplayMode ValueDisplayMode;
 
-		public PinDescription(string name, int id, Vector2 position, PinBitCount bitCount, PinColour colour, PinValueDisplayMode valueDisplayMode)
+		// Optional layout constraints honoured by Clean Up (0 = automatic placement). See SubChipDescription.
+		public int LayoutCol;
+		public int LayoutRow;
+
+		public PinDescription(string name, int id, Vector2 position, PinBitCount bitCount, PinColour colour, PinValueDisplayMode valueDisplayMode, int layoutCol = 0, int layoutRow = 0)
 		{
 			Name = name;
 			ID = id;
@@ -19,6 +23,8 @@ namespace DLS.Description
 			BitCount = bitCount;
 			Colour = colour;
 			ValueDisplayMode = valueDisplayMode;
+			LayoutCol = layoutCol;
+			LayoutRow = layoutRow;
 		}
 	}
 

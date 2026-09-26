@@ -37,6 +37,11 @@ namespace DLS.Game
 		// If chips are entered in view mode, they will be placed above on the stack.
 		public readonly Stack<DevChipInstance> chipViewStack = new();
 
+		// Chips opened for editing are kept in memory (keyed by name) so you can navigate freely between
+		// them WITHOUT saving and without losing unsaved work. The simulation resolves sub-chips to these
+		// live (possibly unsaved) versions via chipLibrary.SimOverride, so unsaved edits apply everywhere.
+		readonly Dictionary<string, DevChipInstance> openChips = new(ChipDescription.NameComparer);
+
 		SimChip ViewedSimChip => ViewedChip.SimChip;
 
 		// The chip currently in view. This chip may be in view-only mode.
@@ -74,6 +79,7 @@ namespace DLS.Game
 			ActiveProject = this;
 			this.description = description;
 			this.chipLibrary = chipLibrary;
+			chipLibrary.SimOverride = LiveDescForSim;
 			SearchPopup.ClearRecentChips();
 		}
 
@@ -120,11 +126,12 @@ namespace DLS.Game
 
 		public void EnterViewMode(SubChipInstance subchip)
 		{
-			if (chipLibrary.TryGetChipDescription(subchip.Description.Name, out ChipDescription description))
+			ChipDescription description = chipLibrary.GetChipDescriptionForSim(subchip.Description.Name); // live (unsaved) structure
+			if (description != null)
 			{
 				SimChip simChipToView = ViewedChip.SimChip.GetSubChipFromID(subchip.ID);
 
-				DevChipInstance viewChip = DevChipInstance.LoadFromDescriptionTest(description, chipLibrary).devChip;
+				DevChipInstance viewChip = DevChipInstance.LoadFromDescriptionTest(description, chipLibrary, true).devChip;
 				viewChip.SetSimChip(simChipToView);
 
 				controller.CancelEverything();
@@ -177,6 +184,8 @@ namespace DLS.Game
 
 		public void SaveFromDescription(ChipDescription saveChipDescription, SaveMode saveMode = SaveMode.Normal)
 		{
+			ChipDescription oldSavedBaseline = ViewedChip.LastSavedDescription; // for reconciling open parents
+
 			// If this chip hasn't been saved before, it can't have been used anyway so no need to update anything
 			// (same thing if saving a new version of it)
 			if (ViewedChip.LastSavedDescription != null && saveMode != SaveMode.SaveAs)
@@ -213,6 +222,18 @@ namespace DLS.Game
 			ViewedChip.NotifySaved(saveChipDescription);
 			SearchPopup.AddRecentChip(saveChipDescription.Name);
 			CameraController.NotifyChipNameChanged(saveChipDescription.Name);
+
+			// Keep the open-chips registry keyed by the current name (handles new chips + renames).
+			if (editModeChip != null && !string.IsNullOrEmpty(saveChipDescription.Name))
+			{
+				foreach (string k in openChips.Where(kv => kv.Value == editModeChip).Select(kv => kv.Key).ToArray()) openChips.Remove(k);
+				openChips[saveChipDescription.Name] = editModeChip;
+			}
+
+			ReconcileOpenChipsAfterSave(saveChipDescription.Name, oldSavedBaseline, saveChipDescription);
+
+			// The user saved: persist the Ask Claude conversation alongside the project so it can be resumed.
+			AskClaude.SaveForProject(description.ProjectName);
 		}
 
 		public bool ActiveChipHasUnsavedChanges()
@@ -236,28 +257,100 @@ namespace DLS.Game
 
 		public void LoadDevChipOrCreateNewIfDoesntExist(string chipName)
 		{
+			// Already open in memory? Reuse it so unsaved edits are preserved (free navigation).
+			if (openChips.TryGetValue(chipName, out DevChipInstance already))
+			{
+				ActivateEditChip(already);
+				return;
+			}
+
 			if (chipLibrary.TryGetChipDescription(chipName, out ChipDescription description))
 			{
-				controller = new ChipInteractionController(this);
-
 				(DevChipInstance devChip, bool anyElementFailedToLoad) = DevChipInstance.LoadFromDescriptionTest(description, chipLibrary);
-
-				// If any element (subchip, wire) failed to load, then save the updated description right away so that we have the correct version
-				if (anyElementFailedToLoad)
-				{
-					ChipDescription descNew = DescriptionCreator.CreateChipDescription(devChip);
-					SetNewActiveDevChip(devChip); // needs to be set before saving
-					SaveFromDescription(descNew);
-				}
-
-				SimChip simChip = Simulator.BuildSimChip(devChip.LastSavedDescription, chipLibrary);
-				devChip.SetSimChip(simChip);
-				SetNewActiveDevChip(devChip);
+				openChips[chipName] = devChip;
+				ActivateEditChip(devChip);
+				if (anyElementFailedToLoad) SaveChipInstance(devChip); // resave migrated version
 			}
 			else
 			{
 				CreateBlankDevChip();
 			}
+		}
+
+		// Make devChip the edited chip and (re)build its simulation from its LIVE description so it reflects
+		// unsaved edits — in itself and (via SimOverride) in its sub-chips.
+		void ActivateEditChip(DevChipInstance devChip)
+		{
+			// Record the chip switch on the GLOBAL undo timeline (Ctrl+Z can step back across tabs).
+			if (editModeChip != null && editModeChip != devChip && !suppressUndoRecording)
+			{
+				globalUndo.Add(new UndoStep { isSwitch = true, from = editModeChip, to = devChip });
+				globalRedo.Clear();
+			}
+
+			controller = new ChipInteractionController(this);
+			editModeChip = devChip;
+			chipViewStack.Clear();
+			chipViewStack.Push(devChip);
+			viewedChipsString = string.Empty;
+
+			// Rebuild only the SIM from the live description (sub-chips resolved live) — the DevChipInstance
+			// itself is reused so its undo history survives the switch.
+			devChip.SetSimChip(Simulator.BuildSimChip(DescriptionCreator.CreateChipDescription(devChip), chipLibrary));
+
+			if (devChip.LastSavedDescription != null) SearchPopup.AddRecentChip(devChip.LastSavedDescription.Name);
+		}
+
+		// ---- Global undo/redo across chip switches ----
+		class UndoStep { public bool isSwitch; public DevChipInstance chip; public DevChipInstance from; public DevChipInstance to; }
+		readonly List<UndoStep> globalUndo = new();
+		readonly List<UndoStep> globalRedo = new();
+		bool suppressUndoRecording;
+
+		// Called by UndoController each time an edit is recorded, to keep the global timeline in order.
+		public void NotifyEditRecorded(DevChipInstance chip)
+		{
+			if (suppressUndoRecording) return;
+			globalUndo.Add(new UndoStep { isSwitch = false, chip = chip });
+			globalRedo.Clear();
+		}
+
+		public void GlobalUndo()
+		{
+			if (globalUndo.Count == 0) return;
+			UndoStep e = globalUndo[^1];
+			globalUndo.RemoveAt(globalUndo.Count - 1);
+			suppressUndoRecording = true;
+			if (e.isSwitch)
+			{
+				if (e.from != null) ActivateEditChip(e.from);
+			}
+			else
+			{
+				if (editModeChip != e.chip && e.chip != null) ActivateEditChip(e.chip);
+				e.chip?.UndoController.TryUndo();
+			}
+			suppressUndoRecording = false;
+			globalRedo.Add(e);
+		}
+
+		public void GlobalRedo()
+		{
+			if (globalRedo.Count == 0) return;
+			UndoStep e = globalRedo[^1];
+			globalRedo.RemoveAt(globalRedo.Count - 1);
+			suppressUndoRecording = true;
+			if (e.isSwitch)
+			{
+				if (e.to != null) ActivateEditChip(e.to);
+			}
+			else
+			{
+				if (editModeChip != e.chip && e.chip != null) ActivateEditChip(e.chip);
+				e.chip?.UndoController.TryRedo();
+			}
+			suppressUndoRecording = false;
+			globalUndo.Add(e);
 		}
 
 		void SetNewActiveDevChip(DevChipInstance devChip)
@@ -267,10 +360,128 @@ namespace DLS.Game
 			chipViewStack.Push(devChip);
 			viewedChipsString = string.Empty;
 
-			if (devChip.LastSavedDescription != null)
+			if (devChip.LastSavedDescription != null) SearchPopup.AddRecentChip(devChip.LastSavedDescription.Name);
+		}
+
+		// Live description of an open chip (for the simulation to resolve unsaved sub-chips).
+		ChipDescription LiveDescForSim(string name) =>
+			openChips.TryGetValue(name, out DevChipInstance dc) ? DescriptionCreator.CreateChipDescription(dc) : null;
+
+		public bool IsDirty(DevChipInstance dc)
+		{
+			if (dc == null) return false;
+			if (dc.LastSavedDescription == null) return dc.Elements.Count > 0;
+			return Saver.HasUnsavedChanges(dc.LastSavedDescription, DescriptionCreator.CreateChipDescription(dc));
+		}
+
+		// A named chip is "dirty" if it is open in memory with unsaved changes (used for the * indicator).
+		public bool IsChipDirty(string chipName) => openChips.TryGetValue(chipName, out DevChipInstance dc) && IsDirty(dc);
+
+		// Any unsaved work anywhere (used for the quit / exit-project warning).
+		public bool AnyUnsavedChanges()
+		{
+			if (IsDirty(editModeChip)) return true;
+			foreach (DevChipInstance dc in openChips.Values) if (dc != editModeChip && IsDirty(dc)) return true;
+			return false;
+		}
+
+		// Save ALL open chips that have unsaved changes at once.
+		public void SaveAllOpenChips()
+		{
+			foreach (DevChipInstance dc in openChips.Values.ToArray())
 			{
-				SearchPopup.AddRecentChip(devChip.LastSavedDescription.Name);
+				if (dc == editModeChip) continue;
+				if (dc.LastSavedDescription != null && IsDirty(dc)) SaveChipInstance(dc);
 			}
+			if (editModeChip != null && editModeChip.LastSavedDescription != null && IsDirty(editModeChip))
+				SaveFromDescription(DescriptionCreator.CreateChipDescription(editModeChip));
+		}
+
+		// Simple save of one open chip (not the affected-chips propagation — that stays on the active chip's
+		// SaveFromDescription path).
+		void SaveChipInstance(DevChipInstance dc)
+		{
+			ChipDescription old = dc.LastSavedDescription;
+			ChipDescription desc = DescriptionCreator.CreateChipDescription(dc);
+			Saver.SaveChip(desc, description.ProjectName);
+			chipLibrary.NotifyChipSaved(desc);
+			dc.NotifySaved(desc);
+			ReconcileOpenChipsAfterSave(desc.Name, old, desc);
+		}
+
+		// After saving a chip whose pins changed, remove now-dangling wires (to removed pins of that chip)
+		// from every OPEN chip that uses it, so parents don't keep broken connections.
+		void ReconcileOpenChipsAfterSave(string chipName, ChipDescription oldDesc, ChipDescription newDesc)
+		{
+			if (oldDesc == null || newDesc == null) return;
+			var removed = new HashSet<int>();
+			foreach (PinDescription p in oldDesc.InputPins) removed.Add(p.ID);
+			foreach (PinDescription p in oldDesc.OutputPins) removed.Add(p.ID);
+			foreach (PinDescription p in newDesc.InputPins) removed.Remove(p.ID);
+			foreach (PinDescription p in newDesc.OutputPins) removed.Remove(p.ID);
+			if (removed.Count == 0) return;
+
+			foreach (DevChipInstance dc in openChips.Values)
+			{
+				var toDelete = new List<WireInstance>();
+				foreach (WireInstance w in dc.Wires)
+				{
+					if (!w.IsFullyConnected) continue;
+					if (WireHitsRemovedPin(w.SourcePin, chipName, removed) || WireHitsRemovedPin(w.TargetPin, chipName, removed)) toDelete.Add(w);
+				}
+				foreach (WireInstance w in toDelete) dc.DeleteWire(w);
+			}
+		}
+
+		static bool WireHitsRemovedPin(PinInstance pin, string chipName, HashSet<int> removedIds)
+			=> pin.parent is SubChipInstance sc && ChipDescription.NameMatch(sc.Description.Name, chipName) && removedIds.Contains(pin.Address.PinID);
+
+		// Rename a chip (custom only). Updates the file, library, parents (refs), starred list & collections.
+		public void RenameChip(string oldName, string newName)
+		{
+			if (string.IsNullOrWhiteSpace(newName)) return;
+			if (!chipLibrary.HasChip(oldName) || chipLibrary.IsBuiltinChip(oldName)) return;
+			if (chipLibrary.HasChip(newName) && !ChipDescription.NameMatch(oldName, newName)) return; // name taken
+
+			ChipDescription oldDesc = chipLibrary.GetChipDescription(oldName);
+			// Rename keeps the SAVED content (never write the unsaved edits) so a rename doesn't clear the *.
+			ChipDescription newDesc = Saver.CloneChipDescription(oldDesc);
+			newDesc.Name = newName;
+
+			UpdateAndSaveAffectedChips(oldDesc, newDesc, false);
+			Saver.DeleteChip(oldName, description.ProjectName, false);
+			Saver.SaveChip(newDesc, description.ProjectName);
+			chipLibrary.NotifyChipRenamed(newDesc, oldName);
+			RenameStarred(newName, oldName, false, false);
+			EnsureChipRenamedInCollections(oldName, newName);
+			UpdateAndSaveProjectDescription();
+
+			// Keep the open instance's UNSAVED edits; just point its saved baseline at the renamed saved version.
+			if (openChips.TryGetValue(oldName, out DevChipInstance dc))
+			{
+				openChips.Remove(oldName);
+				openChips[newName] = dc;
+				dc.LastSavedDescription = newDesc;
+			}
+			CameraController.NotifyChipNameChanged(newName);
+
+			// Update open chips that REFERENCE the renamed chip so they don't keep the old (now-broken) name.
+			foreach (string key in openChips.Keys.ToArray())
+			{
+				DevChipInstance inst = openChips[key];
+				ChipDescription d = DescriptionCreator.CreateChipDescription(inst);
+				bool changed = false;
+				for (int i = 0; i < d.SubChips.Length; i++)
+					if (ChipDescription.NameMatch(d.SubChips[i].Name, oldName)) { d.SubChips[i].Name = newName; changed = true; }
+				if (!changed) continue;
+
+				(DevChipInstance reloaded, _) = DevChipInstance.LoadFromDescriptionTest(d, chipLibrary, true);
+				reloaded.LastSavedDescription = chipLibrary.HasChip(key) ? chipLibrary.GetChipDescription(key) : reloaded.LastSavedDescription;
+				openChips[key] = reloaded;
+				if (inst == editModeChip) editModeChip = reloaded;
+			}
+
+			if (editModeChip != null) ActivateEditChip(editModeChip); // refresh active view + sim
 		}
 
 		// Key chip has been bound to a different key, so simulation must be updated
@@ -319,11 +530,17 @@ namespace DLS.Game
 			}
 
 
-			UpdateAndSaveAffectedChips(chipLibrary.GetChipDescription(chipToDeleteName), null, true);
+			// Tolerate a chip that is starred / on disk but missing from the library: it must still be
+			// removable rather than throwing (which looked, from the app, like the button doing nothing).
+			if (chipLibrary.TryGetChipDescription(chipToDeleteName, out ChipDescription descriptionToDelete))
+			{
+				UpdateAndSaveAffectedChips(descriptionToDelete, null, true);
+			}
 
 			// Delete chip save file, remove from library, and update project description
 			Saver.DeleteChip(chipToDeleteName, description.ProjectName);
 			chipLibrary.RemoveChip(chipToDeleteName);
+			openChips.Remove(chipToDeleteName);
 			SetStarred(chipToDeleteName, false, false, false); // ensure removed from starred list
 			EnsureChipRemovedFromCollections(chipToDeleteName);
 			UpdateAndSaveProjectDescription();
@@ -486,6 +703,28 @@ namespace DLS.Game
 			simThreadActive = false;
 		}
 
+		// ---- External pause handshake (lets the main thread safely use the static Simulator) ----
+		public volatile bool simPauseForExternalRequest;
+		public volatile bool simIsPausedForExternal;
+
+		// Runs `action` on the calling thread with the sim thread parked, so it can use the static
+		// Simulator (e.g. compute a truth table) without racing it. Restores nothing itself — the
+		// caller is responsible for saving/restoring any Simulator state it disturbs.
+		public void RunWithSimulationPaused(Action action)
+		{
+			if (!simThreadActive)
+			{
+				action();
+				return;
+			}
+
+			simPauseForExternalRequest = true;
+			Stopwatch sw = Stopwatch.StartNew();
+			while (!simIsPausedForExternal && sw.ElapsedMilliseconds < 500) Thread.SpinWait(200);
+			try { action(); }
+			finally { simPauseForExternalRequest = false; }
+		}
+
 		void SimThread()
 		{
 			const int performanceTimeWindowMs = (int)(SimulationPerformanceTimeWindowSec * 1000);
@@ -497,6 +736,15 @@ namespace DLS.Game
 
 			while (simThreadActive)
 			{
+				// Park the sim thread while an external request (e.g. truth-table computation) uses the Simulator.
+				if (simPauseForExternalRequest)
+				{
+					simIsPausedForExternal = true;
+					Thread.Sleep(1);
+					continue;
+				}
+				simIsPausedForExternal = false;
+
 				Simulator.ApplyModifications();
 				// ---- A new frame has been reached on main thread  ----
 				if (mainThreadFrameCount > simLastMainThreadSyncFrame)
