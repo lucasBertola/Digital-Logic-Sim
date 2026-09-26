@@ -137,6 +137,67 @@ namespace DLS.Game
 			}
 		}
 
+		// Everything Claude did to a chip during ONE request (panel message or quick-bar command) is a single
+		// undo step: the chip's full description before and after the turn. Claude's tools do not record undo
+		// actions themselves; AskClaudeTools snapshots each chip it touches (Touch) and calls this at the end.
+		public void RecordClaudeTurn(ChipSnapshot before, ChipSnapshot after)
+		{
+			if (before == null || after == null || before.SameAs(after)) return;
+			RecordUndoAction(new ClaudeTurnAction { before = before, after = after });
+		}
+
+		class ClaudeTurnAction : UndoAction
+		{
+			public ChipSnapshot before;
+			public ChipSnapshot after;
+		}
+
+		// A chip's whole content (elements, wires, pin names, layout hints, internal data) as a description.
+		public class ChipSnapshot
+		{
+			readonly ChipDescription desc;
+			readonly string json;
+
+			public ChipSnapshot(DevChipInstance devChip)
+			{
+				desc = DescriptionCreator.CreateChipDescription(devChip);
+				json = Saver.CreateSerializedChipDescription(desc);
+			}
+
+			public bool SameAs(ChipSnapshot other) => other != null && UnsavedChangeDetector.IsEquivalentJson(json, other.json);
+
+			// Rebuilds the chip's content from the snapshot: remove everything, then re-create elements (same IDs)
+			// and wires from their descriptions, the same way loading does. The sim is kept in sync by the
+			// DevChipInstance methods.
+			public void Apply(DevChipInstance devChip)
+			{
+				ChipLibrary library = Project.ActiveProject.chipLibrary;
+
+				foreach (WireInstance w in devChip.Wires.ToArray())
+					if (devChip.Wires.Contains(w)) devChip.DeleteWire(w);
+				foreach (IMoveable e in devChip.Elements.ToArray())
+				{
+					if (e is SubChipInstance s) devChip.TryDeleteSubChipByID(s.ID); // (a bus pair goes together: the second call may fail, fine)
+					else if (e is DevPinInstance d) devChip.TryDeleteDevPinByID(d.ID);
+				}
+
+				foreach (SubChipDescription sd in desc.SubChips ?? Array.Empty<SubChipDescription>())
+				{
+					if (!library.TryGetChipDescription(sd.Name, out ChipDescription cd)) continue;
+					devChip.AddNewSubChip(new SubChipInstance(cd, sd), false);
+				}
+				foreach (PinDescription pd in desc.InputPins ?? Array.Empty<PinDescription>()) devChip.AddNewDevPin(new DevPinInstance(pd, true), false);
+				foreach (PinDescription pd in desc.OutputPins ?? Array.Empty<PinDescription>()) devChip.AddNewDevPin(new DevPinInstance(pd, false), false);
+
+				WireDescription[] wires = desc.Wires ?? Array.Empty<WireDescription>();
+				for (int i = 0; i < wires.Length; i++)
+				{
+					(WireInstance loaded, bool failed) = DevChipInstance.TryLoadWireFromDescription(wires[i], i, devChip, devChip.Wires);
+					if (loaded != null && !failed) devChip.AddWire(loaded, false);
+				}
+			}
+		}
+
 		public class LayoutSnapshot
 		{
 			readonly Dictionary<int, Vector2> positions = new();
@@ -260,6 +321,10 @@ namespace DLS.Game
 				else if (action is PinRenameAction rename)
 				{
 					rename.Trigger(undo, devChip);
+				}
+				else if (action is ClaudeTurnAction turn)
+				{
+					(undo ? turn.before : turn.after).Apply(devChip);
 				}
 				else if (action is LayoutUndoAction layout)
 				{

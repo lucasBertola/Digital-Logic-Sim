@@ -519,12 +519,16 @@ namespace DLS.Graphics
 			if (!AskClaude.Waiting || AskClaudeMenu.IsOpen) return;
 			DrawSettings.UIThemeDLS theme = DrawSettings.ActiveUITheme;
 
-			const float w = 15f, h = 2.2f;
+			int dots = (int)(Time.time * 2f) % 4;
+			string label = "Claude is working" + new string('.', dots);
+			float textW = Draw.CalculateTextBoundsSize("Claude is working...", theme.FontSizeRegular, theme.FontRegular).x;
+			const float h = 2.2f, spinnerW = 2.4f, pad = 1.0f;
+			float w = pad + spinnerW + textW + pad;
 			Vector2 centre = new(UI.Width / 2f, UI.Height - 0.5f - h / 2f);
 			UI.DrawPanel(centre, new Vector2(w, h), new Color(0.08f, 0.08f, 0.1f, 0.9f));
 
 			// spinner: 8 dots, one lit after the other
-			Vector2 spin = centre + Vector2.left * (w / 2f - 1.4f);
+			Vector2 spin = centre + Vector2.left * (w / 2f - pad - spinnerW / 2f);
 			float t = Time.time * 8f;
 			for (int i = 0; i < 8; i++)
 			{
@@ -534,8 +538,7 @@ namespace DLS.Graphics
 				UI.DrawPanel(spin + new Vector2(Mathf.Cos(a), Mathf.Sin(a)) * 0.6f, Vector2.one * 0.28f, c);
 			}
 
-			int dots = (int)(Time.time * 2f) % 4;
-			UI.DrawText("Claude travaille" + new string('.', dots), theme.FontRegular, theme.FontSizeRegular, spin + Vector2.right * 1.4f, Anchor.TextCentreLeft, Color.white);
+			UI.DrawText(label, theme.FontRegular, theme.FontSizeRegular, spin + Vector2.right * (spinnerW / 2f), Anchor.TextCentreLeft, Color.white);
 		}
 
 		static void DrawToast()

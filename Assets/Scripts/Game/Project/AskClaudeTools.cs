@@ -202,6 +202,7 @@ namespace DLS.Game
             desc.Name = name;
             p.SaveFromDescription(desc, Project.SaveMode.SaveAs);
             AskClaudeMenu.NotifyViewportDirty();
+            Touch(p.ViewedChip); // the empty module: Ctrl+Z on it empties it again
             return $"done. Module \"{name}\" cree et ouvert (vide).";
         }
 
@@ -739,6 +740,31 @@ namespace DLS.Game
         static ChipDescription LiveDesc(Project p, ChipDescription saved) =>
             p.chipLibrary.GetChipDescriptionForSim(saved.Name) ?? saved;
 
+        // ---- One undo step per Claude request ----
+        // The tools mutate chips directly (no per-action undo records). Instead, the first time a chip is
+        // touched during a turn its full state is snapshotted; when the turn ends, each touched chip gets one
+        // undo action (before -> after), so a single Ctrl+Z on that chip reverts everything Claude did to it.
+        static readonly Dictionary<DevChipInstance, UndoController.ChipSnapshot> turnSnapshots = new();
+
+        public static void BeginTurn() => turnSnapshots.Clear();
+
+        static void Touch(DevChipInstance chip)
+        {
+            if (chip == null || turnSnapshots.ContainsKey(chip)) return;
+            try { turnSnapshots[chip] = new UndoController.ChipSnapshot(chip); }
+            catch (Exception e) { UnityEngine.Debug.LogWarning("Claude turn snapshot failed: " + e.Message); }
+        }
+
+        public static void EndTurn()
+        {
+            foreach ((DevChipInstance chip, UndoController.ChipSnapshot before) in turnSnapshots)
+            {
+                try { chip.UndoController.RecordClaudeTurn(before, new UndoController.ChipSnapshot(chip)); }
+                catch (Exception e) { UnityEngine.Debug.LogWarning("Claude turn undo record failed: " + e.Message); }
+            }
+            turnSnapshots.Clear();
+        }
+
         static bool SwitchToModule(string module, out string err)
         {
             Project p = Project.ActiveProject;
@@ -746,7 +772,7 @@ namespace DLS.Game
             if (p == null) { err = "Aucun projet ouvert."; return false; }
 
             bool editingTarget = p.CanEditViewedChip && (ChipDescription.NameMatch(p.ViewedChip.ChipName ?? "", module) || string.IsNullOrWhiteSpace(module));
-            if (editingTarget) return true;
+            if (editingTarget) { Touch(p.ViewedChip); return true; }
 
             if (p.chipLibrary.HasChip(module))
             {
@@ -754,6 +780,7 @@ namespace DLS.Game
                 // workflow — switching tabs never saves). Saving is the user's decision.
                 p.LoadDevChipOrCreateNewIfDoesntExist(module);
                 AskClaudeMenu.NotifyViewportDirty();
+                Touch(p.ViewedChip);
                 return true;
             }
 

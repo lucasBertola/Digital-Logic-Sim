@@ -247,8 +247,8 @@ namespace DLS.Game
         }
 
         const string QuickModeNote = "[COMMANDE RAPIDE, arriere-plan] L'utilisateur a tape ceci dans la barre de commande : il ne lira PAS ta reponse (aucun panneau ouvert). " +
-                                     "Ne raconte rien, n'explique pas ta demarche, ne pose aucune question : execute la demande avec les outils, teste comme d'habitude, " +
-                                     "et termine par UNE seule ligne de bilan (fait / pas fait et pourquoi). Si la demande est ambigue, prends l'interpretation la plus probable.\n\n";
+                                     "N'ecris AUCUN texte : pas de recit, pas d'explication, pas de question, pas de bilan. Execute la demande avec les outils, teste comme " +
+                                     "d'habitude, corrige si besoin, puis ARRETE-TOI simplement (tour sans message). Si la demande est ambigue, prends l'interpretation la plus probable.\n\n";
 
         static bool quickTurn;
         static bool quickTurnFinished;
@@ -260,24 +260,13 @@ namespace DLS.Game
             summary = null;
             if (!quickTurnFinished) return false;
             quickTurnFinished = false;
-            for (int i = Messages.Count - 1; i >= 0; i--)
-            {
-                if (Messages[i].role == "assistant" || Messages[i].role == "error")
-                {
-                    string t = (Messages[i].text ?? "").Trim();
-                    int nlIdx = t.LastIndexOf('\n');
-                    if (nlIdx >= 0) t = t.Substring(nlIdx + 1).Trim();
-                    if (t.Length > 140) t = t.Substring(0, 140) + "...";
-                    summary = (Messages[i].role == "error" ? "" : "Claude : ") + t;
-                    break;
-                }
-            }
-            summary ??= "Claude a termine.";
+            summary = Error != null ? "Claude: failed (see the Ask Claude panel)" : "Claude: done";
             return true;
         }
 
         static void NotifyTurnEnded()
         {
+            AskClaudeTools.EndTurn(); // one undo step per chip Claude touched during this request
             if (!quickTurn) return;
             quickTurn = false;
             quickTurnFinished = true;
@@ -311,6 +300,7 @@ namespace DLS.Game
         static void SendNow(string question, bool alreadyDisplayed)
         {
             Error = null;
+            AskClaudeTools.BeginTurn();
 
             if (string.IsNullOrEmpty(ReadKey()))
             {
@@ -409,6 +399,11 @@ namespace DLS.Game
                 if (text.Length > 0)
                 {
                     apiConversation.Add(new JObject { ["role"] = "assistant", ["content"] = text });
+                }
+                else if (quickTurn)
+                {
+                    // Quick-bar command: Claude is asked to end without a message. Keep the history well-formed.
+                    apiConversation.Add(new JObject { ["role"] = "assistant", ["content"] = "(commande executee)" });
                 }
                 else
                 {

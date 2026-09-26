@@ -15,8 +15,9 @@ what the fork adds on top.
   sequential ones, reporting outputs, LEDs, 7-segment and pixel displays.
 - Nothing is auto-saved: Claude's edits sit in memory exactly like your own until you save.
 - The conversation is stored with the project and restored when you reopen it.
-- **Quick command bar**: press Space (or right-click > ASK CLAUDE), type a request, Enter. Claude works in the
-  background with a small busy indicator at the top of the screen and a one-line summary when done.
+- **Quick command box**: press Space (or right-click > ASK CLAUDE), type a request (multi-line), Enter. Claude
+  works in the background with a small busy indicator at the top of the screen and a "done" toast; on each
+  chip it edited, one Ctrl+Z reverts everything it did.
 - You can keep typing while Claude is working; your message is taken into account mid-task.
 - Requires an Anthropic API key in the `ANTHROPIC_API_KEY` environment variable.
 
