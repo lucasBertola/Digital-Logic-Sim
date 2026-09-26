@@ -36,6 +36,8 @@ namespace DLS.Game
 			return pins;
 		}
 
+		// Note: OutputPinColourInfo is left null here (the caller has no library access); ChipLibrary fills
+		// the default entries in when the chip is registered, so it never looks "modified" when opened.
 		public static int AddSubChip(List<SubChipDescription> subChips, ref int nextID, string name, ChipType type)
 		{
 			int id = nextID++;

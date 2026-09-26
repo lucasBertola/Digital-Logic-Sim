@@ -200,6 +200,7 @@ don't-cares -> cut-based technology mapping -> bin-packing -> local search -> em
   unusable, and undeletable (`DeleteChip` threw). `ContextMenu.CommitGeneratedChip` calls
   `UpdateAndSaveProjectDescription()` for this reason, and `Project.DeleteChip` now tolerates a chip
   missing from the library.
+- **Generated chips must not look "modified" when opened.** `HasUnsavedChanges` diffs the serialized description, and a `SubChipDescription` written with `OutputPinColourInfo = null` differs from the live one (an entry per output pin). `ChipLibrary.FillMissingOutputPinColours` fills the defaults on load and on `NotifyChipSaved` (buses excepted). `Assets/Editor/DirtyCheck.cs` (`-executeMethod DirtyCheck.Run -benchProject "PC"`) reloads every chip of a project and prints the first JSON difference — run it whenever the red star shows up on a freshly opened chip.
 - **Nothing is ever written before verification.** Every generated chip is read back from its own
   description (slot by slot for packages, so the emitted wiring itself is checked) and compared to the
   original over the whole input space — exhaustively up to 20 inputs, sampled beyond, and the report
