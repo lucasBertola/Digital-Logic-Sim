@@ -75,14 +75,25 @@ namespace DLS.Graphics
 		static Bounds2D hoverSubAnchor;      // bounds of the row that opened it
 		static string subPressedChip;        // chip clicked in the sub-menu this frame
 
-		static readonly Dictionary<string, string[]> LinkedCollections = new(StringComparer.OrdinalIgnoreCase)
+		public static readonly Dictionary<string, string[]> LinkedCollections = new(StringComparer.OrdinalIgnoreCase)
 		{
 			{ "IN/OUT", new[] { "MERGE/SPLIT", "BUS" } }
 		};
 
+		// A collection shown nested under another one (in the popup AND in the library)
+		public static bool IsLinkedCollection(string name)
+		{
+			foreach (string[] linked in LinkedCollections.Values)
+				foreach (string n in linked)
+					if (string.Equals(n, name, StringComparison.OrdinalIgnoreCase)) return true;
+			return false;
+		}
+
 		static void BuildPopupItems(ChipCollection collection)
 		{
+			// Rows are drawn bottom-up from the LAST item, so the linked collections go last = at the bottom.
 			popupItems.Clear();
+			foreach (string chip in collection.Chips) popupItems.Add(new PopupItem { chipName = chip });
 			if (LinkedCollections.TryGetValue(collection.Name, out string[] linked))
 			{
 				foreach (string name in linked)
@@ -91,7 +102,6 @@ namespace DLS.Graphics
 						popupItems.Add(new PopupItem { sub = sub });
 				}
 			}
-			foreach (string chip in collection.Chips) popupItems.Add(new PopupItem { chipName = chip });
 			hoverSub = null;
 		}
 		static Bounds2D barBounds_ScreenSpace;

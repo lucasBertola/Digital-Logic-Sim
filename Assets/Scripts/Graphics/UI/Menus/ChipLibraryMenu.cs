@@ -164,15 +164,27 @@ namespace DLS.Graphics
 			MenuHelper.DrawReservedMenuPanel(panelID, panelBounds, false);
 		}
 
+		const float nestedInset = 1.75f;
+
 		static void DrawCollectionEntry(Vector2 topLeft, float width, int collectionIndex, bool isLayoutPass)
 		{
 			ChipCollection collection = collections[collectionIndex];
-			string label = collection.GetDisplayString();
 
+			// Linked collections (MERGE/SPLIT, BUS) are shown nested under their parent (IN/OUT), like in the
+			// popup — not as top-level entries. (Drawing nothing costs no height in the scroll view.)
+			if (BottomBarUI.IsLinkedCollection(collection.Name)) return;
+
+			DrawCollectionBlock(collection, collectionIndex, topLeft, width, 0f);
+		}
+
+		// A collection row + (when open) its chips, then its linked collections as nested blocks.
+		static void DrawCollectionBlock(ChipCollection collection, int collectionIndex, Vector2 topLeft, float width, float inset)
+		{
+			string label = collection.GetDisplayString();
 			bool collectionHighlighted = collectionIndex == selectedCollectionIndex;
 			ButtonTheme activeCollectionTheme = GetButtonTheme(true, collectionHighlighted);
 
-			bool collectionPressed = UI.Button(label, activeCollectionTheme, topLeft, new Vector2(width, 2), true, false, false, Anchor.TopLeft, true, 1, isScrolling);
+			bool collectionPressed = UI.Button(label, activeCollectionTheme, new Vector2(topLeft.x + inset, topLeft.y), new Vector2(width - inset, 2), true, false, false, Anchor.TopLeft, true, 1, isScrolling);
 			if (collectionPressed)
 			{
 				selectedCollectionIndex = collectionIndex;
@@ -183,30 +195,39 @@ namespace DLS.Graphics
 				if (!InputHelper.CtrlIsHeld) collection.IsToggledOpen = !collection.IsToggledOpen;
 			}
 
-			const float nestedInset = 1.75f;
+			if (!collection.IsToggledOpen) return;
 
-			if (collection.IsToggledOpen)
+			for (int chipIndex = 0; chipIndex < collection.Chips.Count; chipIndex++)
 			{
-				for (int chipIndex = 0; chipIndex < collection.Chips.Count; chipIndex++)
+				string chipName = collection.Chips[chipIndex];
+				ButtonTheme activeChipTheme = collectionIndex == selectedCollectionIndex && chipIndex == selectedChipInCollectionIndex ? ActiveUITheme.ChipLibraryChipToggleOn : ActiveUITheme.ChipLibraryChipToggleOff;
+				Vector2 chipLabelPos = new(topLeft.x + inset + nestedInset, UI.PrevBounds.Bottom - UILayoutHelper.DefaultSpacing);
+				bool chipPressed = UI.Button(chipName, activeChipTheme, chipLabelPos, new Vector2(width - inset - nestedInset, 2), true, false, false, Anchor.TopLeft, true, 1, isScrolling);
+				if (chipPressed)
 				{
-					string chipName = collection.Chips[chipIndex];
-					ButtonTheme activeChipTheme = collectionIndex == selectedCollectionIndex && chipIndex == selectedChipInCollectionIndex ? ActiveUITheme.ChipLibraryChipToggleOn : ActiveUITheme.ChipLibraryChipToggleOff;
-					Vector2 chipLabelPos = new(topLeft.x + nestedInset, UI.PrevBounds.Bottom - UILayoutHelper.DefaultSpacing);
-					bool chipPressed = UI.Button(chipName, activeChipTheme, chipLabelPos, new Vector2(width - nestedInset, 2), true, false, false, Anchor.TopLeft, true, 1, isScrolling);
-					if (chipPressed)
+					bool alreadySelected = selectedChipInCollectionIndex == chipIndex && collectionHighlighted;
+
+					if (alreadySelected) selectedChipInCollectionIndex = -1;
+					else
 					{
-						bool alreadySelected = selectedChipInCollectionIndex == chipIndex && collectionHighlighted;
-
-						if (alreadySelected) selectedChipInCollectionIndex = -1;
-						else
-						{
-							selectedCollectionIndex = collectionIndex;
-							selectedChipInCollectionIndex = chipIndex;
-						}
-
-						selectedStarredItemIndex = -1;
-						lastAutoOpenedCollection = null;
+						selectedCollectionIndex = collectionIndex;
+						selectedChipInCollectionIndex = chipIndex;
 					}
+
+					selectedStarredItemIndex = -1;
+					lastAutoOpenedCollection = null;
+				}
+			}
+
+			// Linked collections, nested one level deeper
+			if (BottomBarUI.LinkedCollections.TryGetValue(collection.Name, out string[] linked))
+			{
+				foreach (string name in linked)
+				{
+					int li = collections.FindIndex(c => ChipDescription.NameMatch(c.Name, name));
+					if (li < 0 || li == collectionIndex) continue;
+					Vector2 subTopLeft = new(topLeft.x, UI.PrevBounds.Bottom - UILayoutHelper.DefaultSpacing);
+					DrawCollectionBlock(collections[li], li, subTopLeft, width, inset + nestedInset);
 				}
 			}
 		}
