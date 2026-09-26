@@ -38,6 +38,9 @@ what the fork adds on top.
     previous layout exactly.
 - **Hover highlighting** — hover a wire to light up everything attached to it; hover a component to light
   up its wires and the components they lead to.
+- **Rename several pins at once** — select several inputs or outputs, right-click one of them, RENAME, type a
+  prefix such as `D`: the pins become D4, D3, D2, D1, D0 from top to bottom. Clean Up also leaves a wider
+  gap between such groups (D4..D1 vs A3..A0) so each bus reads as a block.
 - **VCC / GND** builtin chips: constant HIGH / LOW sources that don't add inputs to your chip.
 - **Keyboard shortcuts work on AZERTY as well as QWERTY** (Ctrl+Z, Ctrl+Q… follow the letter printed on
   the key, not its US position), and KEY chips react to the key you actually bound them to.

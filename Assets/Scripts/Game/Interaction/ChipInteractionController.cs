@@ -134,7 +134,7 @@ namespace DLS.Game
 			if (clearSelection) SelectedElements.Clear();
 		}
 
-		void DeleteSelected()
+		public void DeleteSelected()
 		{
 			// Delete selected subchips/pins
 			if (SelectedElements.Count > 0)
@@ -440,7 +440,12 @@ namespace DLS.Game
 			}
 
 			IsCreatingSelectionBox = false;
-			ClearSelection();
+
+			// Right-clicking one of the selected elements keeps the selection (so the context menu can act on
+			// all of them, e.g. rename several pins at once); anywhere else clears it.
+			IInteractable hovered = InteractionState.ElementUnderMouse;
+			IMoveable hoveredElement = hovered as IMoveable ?? (hovered as PinInstance)?.parent;
+			if (hoveredElement == null || !hoveredElement.IsSelected) ClearSelection();
 		}
 
 		// Double-click detection for opening a dev pin's edit menu

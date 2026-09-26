@@ -145,19 +145,33 @@ namespace DLS.Game
                 runningX += colWidth[c] + GapAfter(c);
             }
 
-            // Stacks a column's elements top→bottom (centred on y = 0), grid-snapped.
+            // Stacks a column's elements top→bottom (centred on y = 0), grid-snapped. Between two dev pins
+            // that belong to different "groups" (same text, different number: D4..D1 vs A3..A0) an extra gap of
+            // two pin heights is left, so that the groups read as separate buses.
             void PlaceColumn(int c, List<IMoveable> elems)
             {
-                float colHeight = elems.Sum(ElementHeight) + VerticalGap * (elems.Count - 1);
-                float y = colHeight / 2f;
-                foreach (IMoveable e in elems)
+                float[] gapAfter = new float[elems.Count];
+                for (int i = 0; i < elems.Count - 1; i++)
                 {
+                    gapAfter[i] = VerticalGap;
+                    if (elems[i] is DevPinInstance a && elems[i + 1] is DevPinInstance b && PinGroup(a) != PinGroup(b) && (GroupSize(elems, a) >= 2 || GroupSize(elems, b) >= 2))
+                        gapAfter[i] += 2f * ElementHeight(a);
+                }
+
+                float colHeight = elems.Sum(ElementHeight) + gapAfter.Sum();
+                float y = colHeight / 2f;
+                for (int i = 0; i < elems.Count; i++)
+                {
+                    IMoveable e = elems[i];
                     float h = ElementHeight(e);
                     Vector2 target = new(colCentreX[c], y - h / 2f);
                     e.Position = new Vector2(GridHelper.SnapToGrid(target.x), GridHelper.SnapToGrid(target.y));
-                    y -= h + VerticalGap;
+                    y -= h + gapAfter[i];
                 }
             }
+
+            static string PinGroup(DevPinInstance p) => (p.Pin.Name ?? "").TrimEnd("0123456789".ToCharArray()).Trim().ToUpperInvariant();
+            static int GroupSize(List<IMoveable> elems, DevPinInstance p) { string g = PinGroup(p); int n = 0; foreach (IMoveable e in elems) if (e is DevPinInstance d && PinGroup(d) == g) n++; return n; }
 
             foreach (int c in sortedCols) PlaceColumn(c, placedCols[c]);
 

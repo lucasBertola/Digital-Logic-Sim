@@ -99,6 +99,13 @@ namespace DLS.Graphics
 			entries_inputDevPin[1]
 		};
 
+		// Several input/output pins selected, right-click on one of them
+		static readonly MenuEntry[] entries_multiDevPin =
+		{
+			new(Format("RENAME"), RenameSelectedPins, CanEditCurrentChip),
+			new(Format("DELETE"), DeleteSelectedElements, CanDelete)
+		};
+
 		static readonly MenuEntry[] entries_wire =
 		{
 			new(Format("EDIT"), EditWire, CanEditWire),
@@ -221,8 +228,20 @@ namespace DLS.Graphics
 						PinInstance activePin = (PinInstance)interactionContext;
 						headerName = CreatePinHeaderName(activePin.Name);
 						interactionContextName = activePin.Name;
-						Project.ActiveProject.controller.Select(activePin.parent, false);
-						activeContextMenuEntries = activePin.IsSourcePin ? entries_inputDevPin : entries_outputDevPin;
+
+						List<IMoveable> selection = Project.ActiveProject.controller.SelectedElements;
+						int selectedPinCount = selection.Count(e => e is DevPinInstance);
+						if (activePin.parent.IsSelected && selectedPinCount >= 2)
+						{
+							// Keep the multi-selection: the menu acts on all selected pins
+							headerName = $"{selectedPinCount} PINS";
+							activeContextMenuEntries = entries_multiDevPin;
+						}
+						else
+						{
+							Project.ActiveProject.controller.Select(activePin.parent, false);
+							activeContextMenuEntries = activePin.IsSourcePin ? entries_inputDevPin : entries_outputDevPin;
+						}
 					}
 					else if (openWireContextMenu)
 					{
@@ -407,6 +426,13 @@ namespace DLS.Graphics
 
 		// Anchored where the menu was opened, so the popup appears where the user right-clicked
 		static void OpenInOutPopup() => BottomBarUI.OpenInOutPopupAt(mouseOpenMenuPos);
+
+		static void RenameSelectedPins()
+		{
+			BulkRenamePinsPopup.Open(Project.ActiveProject.controller.SelectedElements.OfType<DevPinInstance>());
+		}
+
+		static void DeleteSelectedElements() => Project.ActiveProject.controller.DeleteSelected();
 
 		static void OpenChipLabelPopup()
 		{

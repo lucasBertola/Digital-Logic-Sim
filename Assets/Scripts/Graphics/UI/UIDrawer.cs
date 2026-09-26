@@ -24,7 +24,8 @@ namespace DLS.Graphics
 			Confirmation,
 			RenameChip,
 			Info,
-			GatePalette
+			GatePalette,
+			BulkRenamePins
 		}
 
 		static MenuType activeMenuOld;
@@ -74,6 +75,7 @@ namespace DLS.Graphics
 			else if (menuToDraw == MenuType.PulseEdit) PulseEditMenu.DrawMenu();
 			else if (menuToDraw == MenuType.Confirmation) ConfirmationPopup.DrawMenu();
 			else if (menuToDraw == MenuType.RenameChip) RenameChipPopup.DrawMenu();
+			else if (menuToDraw == MenuType.BulkRenamePins) BulkRenamePinsPopup.DrawMenu();
 			else if (menuToDraw == MenuType.Info) InfoPopup.DrawMenu();
 			else if (menuToDraw == MenuType.GatePalette) GatePaletteMenu.DrawMenu();
 			else
