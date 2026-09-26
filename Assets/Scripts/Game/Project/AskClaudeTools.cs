@@ -757,8 +757,22 @@ namespace DLS.Game
 
         public static void EndTurn()
         {
+            Project p = Project.ActiveProject;
             foreach ((DevChipInstance chip, UndoController.ChipSnapshot before) in turnSnapshots)
             {
+                try
+                {
+                    // Layout of what Claude added, once, at the end of the request (part of the same undo step):
+                    // a module that was empty gets a full Clean Up; an existing layout is kept and only the new
+                    // elements are slotted in at sensible places.
+                    var newIDs = new HashSet<int>(chip.Elements.Select(e => e.ID).Where(id => !before.ElementIDs.Contains(id)));
+                    bool onScreen = p != null && p.ViewedChip == chip;
+                    if (before.IsEmpty && chip.Elements.Count > 0) CircuitAutoLayout.CleanUp(chip, recordUndo: false, focusCamera: onScreen);
+                    else if (newIDs.Count > 0) CircuitAutoLayout.PlaceNewElements(chip, newIDs);
+                    if (onScreen) AskClaudeMenu.NotifyViewportDirty();
+                }
+                catch (Exception e) { UnityEngine.Debug.LogWarning("Claude turn layout failed: " + e.Message); }
+
                 try { chip.UndoController.RecordClaudeTurn(before, new UndoController.ChipSnapshot(chip)); }
                 catch (Exception e) { UnityEngine.Debug.LogWarning("Claude turn undo record failed: " + e.Message); }
             }

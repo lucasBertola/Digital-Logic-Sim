@@ -38,7 +38,6 @@ namespace DLS.Graphics
 			FormatButtonString("New Project"),
 			FormatButtonString("Open Project"),
 			FormatButtonString("Settings"),
-			FormatButtonString("About"),
 			FormatButtonString("Quit")
 		};
 
@@ -185,11 +184,7 @@ namespace DLS.Graphics
 				activeMenuScreen = MenuScreen.Settings;
 				OnSettingsMenuOpened();
 			}
-			else if (idx == 3) // About
-			{
-				activeMenuScreen = MenuScreen.About;
-			}
-			else if (idx == 4 || KeyboardShortcuts.MainMenu_QuitShortcutTriggered) // Quit
+			else if (idx == 3 || KeyboardShortcuts.MainMenu_QuitShortcutTriggered) // Quit
 			{
 				Quit();
 			}

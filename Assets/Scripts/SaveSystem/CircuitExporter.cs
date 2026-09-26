@@ -153,10 +153,14 @@ namespace DLS.SaveSystem
                 foreach (var sub in desc.SubChips)
                 {
                     string io = "";
+                    string geo = $"  @({sub.Position.x:0.#}, {sub.Position.y:0.#})";
                     if (Live(lib, sub.Name) is { } sd)
+                    {
                         io = $"  ({BitsInOut(BitsSum(sd.InputPins), "entrant")}, {BitsInOut(BitsSum(sd.OutputPins), "sortant")})";
+                        geo += $" {sd.Size.x:0.#}x{sd.Size.y:0.#}";
+                    }
                     string extra = string.IsNullOrEmpty(sub.Label) ? "" : $"  (label: \"{sub.Label}\")";
-                    sb.AppendLine($"  {compName[sub.ID]}{io}{extra}");
+                    sb.AppendLine($"  {compName[sub.ID]}{io}{geo}{extra}");
                 }
                 sb.AppendLine();
             }

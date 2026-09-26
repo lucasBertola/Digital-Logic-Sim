@@ -160,11 +160,14 @@ namespace DLS.Game
 		{
 			readonly ChipDescription desc;
 			readonly string json;
+			public readonly HashSet<int> ElementIDs = new();
+			public bool IsEmpty => ElementIDs.Count == 0;
 
 			public ChipSnapshot(DevChipInstance devChip)
 			{
 				desc = DescriptionCreator.CreateChipDescription(devChip);
 				json = Saver.CreateSerializedChipDescription(desc);
+				foreach (IMoveable e in devChip.Elements) ElementIDs.Add(e.ID);
 			}
 
 			public bool SameAs(ChipSnapshot other) => other != null && UnsavedChangeDetector.IsEquivalentJson(json, other.json);

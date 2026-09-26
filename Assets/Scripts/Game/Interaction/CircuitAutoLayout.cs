@@ -1,3 +1,4 @@
+using DLS.Description;
 using System.Collections.Generic;
 using System.Linq;
 using DLS.Graphics;
@@ -20,14 +21,16 @@ namespace DLS.Game
         const float DevPinWidth = 1.0f;
         const float MinRowHeight = 0.375f;
 
-        public static void CleanUp(DevChipInstance chip)
+        // recordUndo = false when the caller records a bigger undo step itself (a whole Claude request);
+        // focusCamera = false when the chip is not the one on screen.
+        public static void CleanUp(DevChipInstance chip, bool recordUndo = true, bool focusCamera = true)
         {
             var subchips = chip.Elements.OfType<SubChipInstance>().ToList();
             var inputPins = chip.Elements.OfType<DevPinInstance>().Where(d => d.IsInputPin).ToList();
             var outputPins = chip.Elements.OfType<DevPinInstance>().Where(d => !d.IsInputPin).ToList();
             if (subchips.Count == 0 && inputPins.Count == 0 && outputPins.Count == 0) return;
 
-            UndoController.LayoutSnapshot layoutBefore = new(chip); // Ctrl+Z restores positions AND wire points
+            UndoController.LayoutSnapshot layoutBefore = recordUndo ? new(chip) : null; // Ctrl+Z restores positions AND wire points
 
             // ---- 1) Signal-propagation level of each subchip (dev inputs = level 0) ----
             var inputSources = new Dictionary<int, List<IMoveable>>();
@@ -439,10 +442,145 @@ namespace DLS.Game
             Debug.Log($"CleanUp: {routable.Count} wires routed, {pending.Count} detours, {overlaps} overlapping segment pairs");
 
             // ---- 5) Record undo ----
-            chip.UndoController.RecordLayoutChange(layoutBefore);
+            if (recordUndo) chip.UndoController.RecordLayoutChange(layoutBefore);
 
             // ---- 6) Re-frame the camera on the tidied contents ----
-            CameraController.FocusChip(chip);
+            if (focusCamera) CameraController.FocusChip(chip);
+        }
+
+        // Incremental placement: puts ONLY the given (newly added) elements at sensible spots, without moving
+        // anything else — each in the column matching its signal depth (aligned on the existing components of
+        // that depth, or a new column further right), stacked under the existing content of that column, in
+        // the first free slot. Used at the end of a Claude request on a chip that already had a layout, so the
+        // additions integrate instead of piling up at the origin.
+        public static void PlaceNewElements(DevChipInstance chip, HashSet<int> newIDs)
+        {
+            var newElems = chip.Elements.Where(e => newIDs.Contains(e.ID)).ToList();
+            if (newElems.Count == 0) return;
+            var oldElems = chip.Elements.Where(e => !newIDs.Contains(e.ID)).ToList();
+            var subchips = chip.Elements.OfType<SubChipInstance>().ToList();
+
+            // Signal depth of every subchip (dev inputs = 0), as in CleanUp
+            var inputSources = new Dictionary<int, List<IMoveable>>();
+            foreach (var s in subchips) inputSources[s.ID] = new List<IMoveable>();
+            foreach (WireInstance w in chip.Wires)
+            {
+                if (!w.IsFullyConnected) continue;
+                if (w.TargetPin.parent is SubChipInstance ts && inputSources.ContainsKey(ts.ID)) inputSources[ts.ID].Add(w.SourcePin.parent);
+            }
+            var level = new Dictionary<int, int>();
+            int Level(int id, HashSet<int> visiting)
+            {
+                if (level.TryGetValue(id, out int cached)) return cached;
+                if (!visiting.Add(id)) return 0;
+                int m = -1;
+                foreach (IMoveable src in inputSources[id])
+                {
+                    int srcLevel = src is SubChipInstance ss && inputSources.ContainsKey(ss.ID) ? Level(ss.ID, visiting) : 0;
+                    if (srcLevel > m) m = srcLevel;
+                }
+                visiting.Remove(id);
+                int result = m < 0 ? 0 : m + 1;
+                level[id] = result;
+                return result;
+            }
+            foreach (var s in subchips) Level(s.ID, new HashSet<int>());
+
+            int ColumnOf(IMoveable e) => e is DevPinInstance d ? (d.IsInputPin ? -1 : int.MaxValue) : level[((SubChipInstance)e).ID];
+
+            // x of the existing columns
+            var colX = new Dictionary<int, float>();
+            foreach (var g in oldElems.GroupBy(ColumnOf)) colX[g.Key] = g.Average(e => e.Position.x);
+            float oldMinX = oldElems.Count > 0 ? oldElems.Min(e => e.Position.x - ElementWidth(e) / 2f) : 0f;
+            float oldMaxX = oldElems.Count > 0 ? oldElems.Max(e => e.Position.x + ElementWidth(e) / 2f) : 0f;
+
+            float ColumnX(IMoveable e)
+            {
+                // Strongest cue: existing components of the SAME kind form the column (new MUXes go with the
+                // MUX already there), whatever their computed depth.
+                if (e is SubChipInstance sc)
+                {
+                    var sameKind = oldElems.OfType<SubChipInstance>().Where(o => ChipDescription.NameMatch(o.Description.Name, sc.Description.Name)).ToList();
+                    if (sameKind.Count > 0) return sameKind.Average(o => o.Position.x);
+                }
+                if (e is DevPinInstance dp)
+                {
+                    var samePins = oldElems.OfType<DevPinInstance>().Where(o => o.IsInputPin == dp.IsInputPin).ToList();
+                    if (samePins.Count > 0) return samePins.Average(o => o.Position.x);
+                }
+
+                int c = ColumnOf(e);
+                if (colX.TryGetValue(c, out float x)) return x;
+                if (c == -1) return oldMinX - HorizontalGap - DevPinWidth / 2f;          // new input column, left of everything
+                if (c == int.MaxValue) return oldMaxX + HorizontalGap + DevPinWidth / 2f; // new output column, right of everything
+                // subchip level with no existing column: right of the nearest existing lower level (or of the inputs)
+                var lower = colX.Keys.Where(k => k != int.MaxValue && k < c).DefaultIfEmpty(-1).Max();
+                float baseX = colX.TryGetValue(lower, out float lx) ? lx : oldMinX;
+                x = baseX + (c - lower) * (3f + HorizontalGap);
+                colX[c] = x;
+                return x;
+            }
+
+            // free-slot search: below the existing content of the column, first spot that overlaps nothing
+            var placed = new List<IMoveable>(oldElems);
+            bool Overlaps(Vector2 pos, IMoveable e)
+            {
+                Vector2 half = new(ElementWidth(e) / 2f + VerticalGap / 2f, ElementHeight(e) / 2f + VerticalGap / 2f);
+                foreach (IMoveable o in placed)
+                {
+                    Vector2 oh = new(ElementWidth(o) / 2f, ElementHeight(o) / 2f);
+                    if (Mathf.Abs(pos.x - o.Position.x) < half.x + oh.x && Mathf.Abs(pos.y - o.Position.y) < half.y + oh.y) return true;
+                }
+                return false;
+            }
+
+            // Preferred height of a new element: the median height of the pins it is wired to on elements
+            // already in place (a MUX feeding the top flip-flop from D7 lands next to them). Median, not mean,
+            // so one far-away control signal (LOAD at the bottom) does not drag it down.
+            float? TargetY(IMoveable e)
+            {
+                var ys = new List<float>();
+                foreach (WireInstance w in chip.Wires)
+                {
+                    if (!w.IsFullyConnected) continue;
+                    PinInstance other = w.SourcePin.parent == e ? w.TargetPin : w.TargetPin.parent == e ? w.SourcePin : null;
+                    if (other == null || other.parent == e || !placed.Contains(other.parent)) continue;
+                    ys.Add(other.GetWorldPos().y);
+                }
+                if (ys.Count == 0) return null;
+                ys.Sort();
+                return ys.Count % 2 == 1 ? ys[ys.Count / 2] : (ys[ys.Count / 2 - 1] + ys[ys.Count / 2]) / 2f;
+            }
+
+            // Top-most targets first, so a column fills downward in the same order as the pins it mirrors.
+            var order = newElems.Select(e => (e, ty: TargetY(e))).OrderBy(t => ColumnOf(t.e)).ThenByDescending(t => t.ty ?? float.NegativeInfinity).Select(t => t.e).ToList();
+            foreach (IMoveable e in order)
+            {
+                float x = GridHelper.SnapToGrid(ColumnX(e));
+                float h = ElementHeight(e), w = ElementWidth(e);
+                float? ty = TargetY(e);
+                float y0;
+                if (ty.HasValue) y0 = ty.Value;
+                else
+                {
+                    var inCol = placed.Where(o => Mathf.Abs(o.Position.x - x) < (w + ElementWidth(o)) / 2f).ToList();
+                    y0 = inCol.Count > 0 ? inCol.Min(o => o.Position.y - ElementHeight(o) / 2f) - VerticalGap - h / 2f : 0f;
+                }
+                y0 = GridHelper.SnapToGrid(y0);
+
+                // nearest free slot: the target itself, then one grid step down, up, two down, two up...
+                float y = y0;
+                for (int k = 0; k < 400; k++)
+                {
+                    float dy = (k + 1) / 2 * DrawSettings.GridSize;
+                    y = k == 0 ? y0 : (k % 2 == 1 ? y0 - dy : y0 + dy);
+                    if (!Overlaps(new Vector2(x, y), e)) break;
+                }
+
+                e.MoveStartPosition = e.Position;
+                e.Position = new Vector2(x, y);
+                placed.Add(e);
+            }
         }
 
         // Reorders a column so that elements carrying a LayoutRow constraint appear in constraint order
