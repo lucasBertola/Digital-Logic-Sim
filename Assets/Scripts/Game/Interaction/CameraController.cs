@@ -252,16 +252,6 @@ namespace DLS.Game
 			return view;
 		}
 
-		// Put the camera on the viewed chip's own view RIGHT NOW. The camera normally catches up at the start
-		// of the next frame, so a chip switch made during the update (mouse back / forward) would otherwise be
-		// drawn once with the previous chip's zoom and position: one ugly frame.
-		public static void SyncToViewedChip()
-		{
-			if (camera == null || Project.ActiveProject == null) return;
-			activeView = GetActiveViewState();
-			UpdateCameraState();
-		}
-
 		public static void NotifyChipNameChanged(string nameNew)
 		{
 			chipViewStateLookup[nameNew] = activeView;

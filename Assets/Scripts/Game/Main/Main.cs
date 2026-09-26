@@ -32,6 +32,7 @@ namespace DLS.Game
 		{
 			if (UIDrawer.ActiveMenu != UIDrawer.MenuType.MainMenu)
 			{
+				ActiveProject.HandleNavigationInput(); // chip switch first, so the camera below already targets the new chip
 				CameraController.Update();
 				ActiveProject.Update();
 

@@ -133,6 +133,16 @@ namespace DLS.Game
 
 		bool AlwaysDrawPinNames(int prefIndex) => prefIndex == PreferencesMenu.DisplayMode_Always || (prefIndex == PreferencesMenu.DisplayMode_TabToggle && PinNameDisplayIsTabToggledOn);
 
+		// Mouse back / forward buttons: previous / next chip in the navigation history. Called by Main BEFORE the
+		// camera update of the frame, so the chip we land on is drawn with its own view straight away (a switch
+		// made later in the frame would be drawn once with the previous chip's zoom and position).
+		public void HandleNavigationInput()
+		{
+			if (UIDrawer.ActiveMenu != UIDrawer.MenuType.None || KeyboardShortcuts.TextInputActive) return;
+			if (InputHelper.IsKeyDownThisFrame(KeyCode.Mouse3)) NavigateHistory(-1);
+			if (InputHelper.IsKeyDownThisFrame(KeyCode.Mouse4)) NavigateHistory(+1);
+		}
+
 		void HandleProjectInput()
 		{
 			if (UIDrawer.ActiveMenu is UIDrawer.MenuType.None)
@@ -147,10 +157,6 @@ namespace DLS.Game
 				{
 					PinNameDisplayIsTabToggledOn = !PinNameDisplayIsTabToggledOn;
 				}
-
-				// Mouse back / forward buttons: previous / next chip in the navigation history
-				if (InputHelper.IsKeyDownThisFrame(KeyCode.Mouse3)) NavigateHistory(-1);
-				if (InputHelper.IsKeyDownThisFrame(KeyCode.Mouse4)) NavigateHistory(+1);
 			}
 
 
@@ -300,7 +306,6 @@ namespace DLS.Game
 				RecordVisit(devChip.LastSavedDescription.Name);
 			}
 
-			if (ActiveProject == this) CameraController.SyncToViewedChip();
 		}
 
 		void RecordVisit(string chipName)
@@ -348,7 +353,6 @@ namespace DLS.Game
 			chipViewStack.Push(devChip);
 
 			if (devChip.LastSavedDescription != null) SearchPopup.AddRecentChip(devChip.LastSavedDescription.Name);
-			if (ActiveProject == this) CameraController.SyncToViewedChip();
 		}
 
 		// Live description of an open chip (for the simulation to resolve unsaved sub-chips).
