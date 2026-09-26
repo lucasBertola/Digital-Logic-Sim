@@ -27,7 +27,8 @@ namespace DLS.Graphics
 			GatePalette,
 			BulkRenamePins,
 			QuickAsk,
-			ExportChoice
+			ExportChoice,
+			DuplicateChip
 		}
 
 		static MenuType activeMenuOld;
@@ -80,6 +81,7 @@ namespace DLS.Graphics
 			else if (menuToDraw == MenuType.BulkRenamePins) BulkRenamePinsPopup.DrawMenu();
 			else if (menuToDraw == MenuType.QuickAsk) QuickAskBar.DrawMenu();
 			else if (menuToDraw == MenuType.ExportChoice) ExportChoicePopup.DrawMenu();
+			else if (menuToDraw == MenuType.DuplicateChip) DuplicateChipPopup.DrawMenu();
 			else if (menuToDraw == MenuType.Info) InfoPopup.DrawMenu();
 			else if (menuToDraw == MenuType.GatePalette) GatePaletteMenu.DrawMenu();
 			else

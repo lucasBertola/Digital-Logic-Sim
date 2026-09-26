@@ -40,6 +40,7 @@ namespace DLS.Graphics
 		static readonly MenuEntry setColourEntry = new(Format("SET COLOUR"), pinColEntries, CanSetCol);
 		static readonly MenuEntry deleteEntry = new(Format("DELETE"), Delete, CanDelete);
 		static readonly MenuEntry openChipEntry = new(Format("OPEN"), OpenChip, CanOpenChip);
+		static readonly MenuEntry duplicateChipEntry = new(Format("DUPLICATE"), DuplicateChip, IsCustomChip);
 		static readonly MenuEntry labelChipEntry = new(Format("RENAME"), OpenChipLabelPopup, CanLabelChip);
 		static readonly MenuEntry displayNameEntry = new(() => Format(DisplayNameIsOn() ? "HIDE NAME" : "DISPLAY NAME"), ToggleDisplayName, CanLabelChip);
 		static bool DisplayNameIsOn() => interactionContext is SubChipInstance sc && sc.ShowLabelOnChip && !string.IsNullOrWhiteSpace(sc.Label);
@@ -47,6 +48,7 @@ namespace DLS.Graphics
 		static readonly MenuEntry[] entries_customSubchip =
 		{
 			openChipEntry,
+			duplicateChipEntry,
 			labelChipEntry,
 			displayNameEntry,
 			deleteEntry
@@ -139,6 +141,7 @@ namespace DLS.Graphics
 			nandOnlyEntry,
 			optimiseEntry,
 			new(Format("RENAME"), RenameBottomBarChip, CanDeleteBottomBarChip),
+			duplicateChipEntry,
 			new(Format("UN-STAR"), UnstarBottomBarEntry, () => true),
 			new(Format("DELETE"), DeleteBottomBarChip, CanDeleteBottomBarChip)
 		};
@@ -146,6 +149,7 @@ namespace DLS.Graphics
 		static readonly MenuEntry[] entries_collectionPopupChip =
 		{
 			openChipEntry,
+			duplicateChipEntry,
 			countNandEntry,
 			nandOnlyEntry,
 			optimiseEntry
@@ -518,6 +522,9 @@ namespace DLS.Graphics
 			}
 			else subChip.ShowLabelOnChip = !subChip.ShowLabelOnChip;
 		}
+
+		// DUPLICATE: copy of the chip (bottom bar or scene) under a new name, asked in a popup
+		static void DuplicateChip() => DuplicateChipPopup.Open(interactionContextName);
 
 		static void RenameSelectedPins()
 		{
