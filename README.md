@@ -39,6 +39,8 @@ what the fork adds on top.
 - **Hover highlighting** — hover a wire to light up everything attached to it; hover a component to light
   up its wires and the components they lead to.
 - **VCC / GND** builtin chips: constant HIGH / LOW sources that don't add inputs to your chip.
+- **Keyboard shortcuts work on AZERTY as well as QWERTY** (Ctrl+Z, Ctrl+Q… follow the letter printed on
+  the key, not its US position), and KEY chips react to the key you actually bound them to.
 - Confirmation popup before deleting a chip, and a prompt on quit when there are unsaved changes.
 - Editor and standalone build share the same save location.
 
