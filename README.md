@@ -56,7 +56,7 @@ what the fork adds on top.
 Unity `6000.0.46f1`. A build entry point is provided in `Assets/Editor/BuildTools.cs`
 (`Tools > Build Windows Player (fork)` in the editor, or `BuildTools.BuildWindows` from the command
 line); the output goes to `Builds/Windows/`. When Unity is installed, `lancerApp.bat` rebuilds
-automatically if the code changed since the last build. `publierRelease.bat v0.2` zips the current
+automatically if the code changed since the last build. `publierRelease.bat` zips the current
 build and publishes it as a GitHub Release (directly with the `gh` CLI, otherwise it opens the release
 page with the zip ready to attach). See `CLAUDE.md` for the architecture notes.
 
