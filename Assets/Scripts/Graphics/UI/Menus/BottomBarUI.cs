@@ -594,24 +594,8 @@ namespace DLS.Graphics
 		static void OpenPreferencesMenu() => UIDrawer.SetActiveMenu(UIDrawer.MenuType.Preferences);
 
 		// Export the currently-edited chip (+ its sub-circuits) as LLM-friendly text into the clipboard.
-		static void ExportForLLM()
-		{
-			Project p = Project.ActiveProject;
-			try
-			{
-				ChipDescription desc = DescriptionCreator.CreateChipDescription(p.ViewedChip);
-				string text = CircuitExporter.ExportChipWithDeps(desc, p.chipLibrary, p.description.ProjectName);
-				InputHelper.CopyToClipboard(text);
-				string label = string.IsNullOrEmpty(desc.Name) ? "le circuit courant" : $"\"{desc.Name}\"";
-				ShowToast($"Copié dans le presse-papier : {label} + ses sous-circuits ({text.Length} caractères)");
-			}
-			catch (Exception e)
-			{
-				ShowToast("Échec de l'export : " + e.Message);
-			}
-
-			UIDrawer.SetActiveMenu(UIDrawer.MenuType.None);
-		}
+		// EXPORT (LLM): a small popup asks what to copy — the current chip (+ its sub-circuits) or all chips.
+		static void ExportForLLM() => ExportChoicePopup.Open(ShowToast);
 
 		public static void CleanUp()
 		{
