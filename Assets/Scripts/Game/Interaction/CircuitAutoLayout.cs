@@ -84,6 +84,17 @@ namespace DLS.Game
             // height — a fan of diagonals from one pin to several stacked chips is unreadable, a trunk with
             // right-angle branches is not. Every other wire goes as directly as it can (see step 4). Gaps
             // widen to fit the channels. (Wires connected to another wire, or branched from, are left alone.)
+            // A wire that starts ON another wire (a junction) is first turned into a direct pin-to-pin wire: the
+            // routing below gives every fan-out its own trunk, so the junction has nothing to add — and left as
+            // is, both it and the wire it hangs from would keep points that no longer mean anything once the
+            // components have moved (that is what used to scramble chips like a D latch). A wire whose target
+            // end is on another wire only exists for buses and is left alone.
+            foreach (WireInstance w in chip.Wires)
+            {
+                int guard = 0;
+                while (w.SourceConnectionInfo.IsConnectedAtWire && guard++ < 16) w.RemoveConnectionDependency();
+            }
+
             var branchedWires = new HashSet<WireInstance>();
             foreach (WireInstance w in chip.Wires)
             {
