@@ -274,6 +274,7 @@ gain came from the don't-care pass or from the two package-aware passes.
 | `CPU`, micro-program loop with clock | 63 322 chips, 44 662 gates, 213 294 pins | 7.9 ms/step, ~127 steps/s | 0.35 ms/step, ~2 900 steps/s (idle; same for any activity) | 0.017 ms/step, ~58 000 steps/s (433 gates run per step) |
 | `ALU8`, input A toggling every step | 2 170 chips | 0.094 ms/step, ~10 600/s | 0.0035 ms/step, ~296 000/s | 0.003 ms/step, ~370 000/s (100 gates/step) |
 | `Registre8`, clock toggling every step | 444 chips | 0.016 ms/step, ~62 000/s | 0.001 ms/step, ~940 000/s | 0.002 ms/step, ~500 000/s (85 gates/step) |
+| `CPU` as the user runs it: builtin CLOCK, 70 steps per tick, control lines held (`-benchSet "OE_ALu=1,OP1=1,Load_A=1,We_RAM=1,Reset_all=0"`) | same | 9.5 ms/step, 105 steps/s = 0.75 Hz clock | — | 0.003 ms/step, 321 000 steps/s = 2.3 kHz clock (26 gates/step) |
 
 The tree-walker column was measured on the SAME scenarios by checking the pre-rewrite commit (`b848523`) out into a separate working copy (`git worktree add ../old b848523`) with a copy of this bench's scenario code using the old `PinState.Set(ref ...)` API — a fresh working copy needs a few minutes of asset import on first open.
 

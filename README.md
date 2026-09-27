@@ -25,9 +25,17 @@ checked out from git into a separate working copy), on ACTIVE scenarios — the 
 
 Verified by the regression bench (144 cases, every chip of a CPU project, see Tests below).
 
-In the app, on the CPU as it is actually used (built-in clock, 70 steps per clock tick, control lines held so
-that every cycle does A = A + 1 and stores the value in RAM), the clock ran at about 1 Hz on the old core and
-runs at a few kHz on the new one (the preferences menu now shows the current clock frequency).
+On the CPU as it is actually used — built-in clock, **70 steps per clock tick**, control lines held so that every
+cycle does A = A + 1 and stores the value in RAM — with exactly the same chip and the same settings on both cores
+(a clock period is 2 × 70 steps):
+
+| | steps per second | clock frequency |
+|---|---|---|
+| old core | 105 | 0.75 Hz |
+| new core | 321 000 | 2.3 kHz |
+
+That is ×3 000 on the clock. The preferences menu now shows the current clock frequency next to the current
+steps per second.
 
 ### Ask Claude — an AI assistant inside the editor
 - A resizable chat panel (right side of the screen) where you describe the circuit you want and Claude
