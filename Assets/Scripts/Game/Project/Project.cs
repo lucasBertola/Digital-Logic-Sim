@@ -539,10 +539,25 @@ namespace DLS.Game
 			UpdateAndSaveProjectDescription();
 
 
-			// If has deleted the chip that's currently being edited, then open a blank chip
+			// The deleted chip leaves the navigation history
+			navHistory.RemoveAll(n => ChipDescription.NameMatch(n, chipToDeleteName));
+			navIndex = Mathf.Min(navIndex, navHistory.Count - 1);
+
+			// If has deleted the chip that's currently being edited: go back to the last chip visited that
+			// still exists (rather than to a blank, nameless chip); a blank chip only if there is none.
 			if (ChipDescription.NameMatch(ViewedChip.ChipName, chipToDeleteName))
 			{
-				CreateBlankDevChip();
+				string fallback = null;
+				for (int i = navIndex; i >= 0 && fallback == null; i--)
+					if (openChips.ContainsKey(navHistory[i]) || chipLibrary.HasChip(navHistory[i])) fallback = navHistory[i];
+
+				if (fallback != null)
+				{
+					navigating = true;
+					try { LoadDevChipOrCreateNewIfDoesntExist(fallback); }
+					finally { navigating = false; }
+				}
+				else CreateBlankDevChip();
 			}
 			else
 			{
