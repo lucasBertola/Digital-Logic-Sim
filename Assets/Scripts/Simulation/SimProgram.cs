@@ -32,6 +32,10 @@ namespace DLS.Simulation
 	public sealed class SimProgram
 	{
 		const byte MergeType = 255;
+		// A NAND whose only consumer is an inverter (NAND with both inputs on it) runs the inverter in the same
+		// go: one gate run and one marking instead of two — the user's AND / OR / NOR chips all end that way.
+		// Exact: the inverter always ran right after, in the same step. The inverter gate becomes a no-op.
+		const byte NandNotType = 254, NopType = 253;
 		static int compileStampCounter;
 
 		public uint[] states = Array.Empty<uint>();
@@ -57,6 +61,8 @@ namespace DLS.Simulation
 		// ---- gates, schedule order (hot fields) ----
 		byte[] sType = Array.Empty<byte>();
 		int[] sIn0 = Array.Empty<int>(), sIn1 = Array.Empty<int>(), sOut0 = Array.Empty<int>(), sCanon = Array.Empty<int>();
+		int[] sOut1 = Array.Empty<int>();       // NandNot: the fused inverter's output slot
+		int[] cOut1 = Array.Empty<int>();       // per canonical gate, -1 unless NandNot
 		int[] posOfCanon = Array.Empty<int>();
 		ulong[] dirty = Array.Empty<ulong>();
 		ulong[] dirtyTop = Array.Empty<ulong>(); // bit w set when dirty[w] may be non-zero (cleared lazily by the step loop)
@@ -414,7 +420,7 @@ namespace DLS.Simulation
 			{
 				int g = prog.sCanon[k];
 				byte t = prog.cType[g];
-				bool stateless = t == MergeType || t == (byte)ChipType.Nand || t == (byte)ChipType.TriStateBuffer
+				bool stateless = t == MergeType || t == (byte)ChipType.Nand || t == NandNotType || t == (byte)ChipType.TriStateBuffer
 					|| t == (byte)ChipType.Split_4To1Bit || t == (byte)ChipType.Split_8To1Bit || t == (byte)ChipType.Split_8To4Bit
 					|| t == (byte)ChipType.Merge_1To4Bit || t == (byte)ChipType.Merge_1To8Bit || t == (byte)ChipType.Merge_4To8Bit;
 				if (!stateless || prog.cInCount[g] == 0) continue;
@@ -422,6 +428,8 @@ namespace DLS.Simulation
 				for (int j = 0; j < prog.cInCount[g] && allQuiet; j++) allQuiet = prog.quiet[prog.inSlots[prog.cInStart[g] + j]];
 				if (allQuiet) for (int j = 0; j < prog.cOutCount[g]; j++) prog.quiet[prog.outSlots[prog.cOutStart[g] + j]] = true;
 			}
+
+			prog.FuseInverters();
 
 			prog.dirty = new ulong[(gc + 63) / 64];
 			prog.dirtyTop = new ulong[(prog.dirty.Length + 63) / 64];
@@ -432,6 +440,49 @@ namespace DLS.Simulation
 			prog.MarkAllDirty();
 			return prog;
 		}
+
+		// NAND + sole inverter consumer -> one NandNot gate (see NandNotType). The inverter must be scheduled after
+		// the NAND, and stay so across reschedules: every level from their common ancestor down to each of them
+		// must be free of random picks (a cut-free level always emits its children in the same order).
+		void FuseInverters()
+		{
+			int gc = gateCount;
+			cOut1 = new int[gc];
+			for (int g = 0; g < gc; g++) cOut1[g] = -1;
+			var ancestors = new HashSet<SimChip>();
+			int fused = 0;
+			for (int g = 0; g < gc; g++)
+			{
+				if (cType[g] != (byte)ChipType.Nand) continue;
+				int s = outSlots[cOutStart[g]];
+				// the slot's consumer entries: one per input pin, so the inverter shows up twice
+				int cs = slotConsStart[s], n = slotConsStart[s + 1] - cs;
+				if (n < 1 || n > 2) continue;
+				int c = slotConsList[cs];
+				if (n == 2 && slotConsList[cs + 1] != c) continue;
+				if (c == g || cType[c] != (byte)ChipType.Nand) continue;
+				if (inSlots[cInStart[c]] != s || inSlots[cInStart[c] + 1] != s) continue;
+				if (posOfCanon[c] <= posOfCanon[g]) continue;
+				// order stability
+				SimChip x = chipOfGate[g], y = chipOfGate[c];
+				ancestors.Clear();
+				for (SimChip a = x.compileParent; a != null; a = a.compileParent) ancestors.Add(a);
+				SimChip common = null;
+				for (SimChip a = y.compileParent; a != null; a = a.compileParent) if (ancestors.Contains(a)) { common = a; break; }
+				if (common == null) continue;
+				bool stable = true;
+				for (SimChip a = x.compileParent; stable && a != null; a = a.compileParent) { if (levelHasCuts[a.compileIndex]) stable = false; if (a == common) break; }
+				for (SimChip a = y.compileParent; stable && a != null; a = a.compileParent) { if (levelHasCuts[a.compileIndex]) stable = false; if (a == common) break; }
+				if (!stable) continue;
+				cType[g] = NandNotType;
+				cOut1[g] = outSlots[cOutStart[c]];
+				cType[c] = NopType;
+				fused++;
+			}
+			FusedInverters = fused;
+			CopySchedule(0, gc); // types and sOut1 into the hot arrays
+		}
+		public int FusedInverters; // diagnostic
 
 		static (int[] start, int[] list) Csr(List<int>[] buckets)
 		{
@@ -483,7 +534,7 @@ namespace DLS.Simulation
 			int gc = gateCount;
 			if (sType.Length != gc)
 			{
-				sType = new byte[gc]; sIn0 = new int[gc]; sIn1 = new int[gc]; sOut0 = new int[gc]; sCanon = new int[gc]; posOfCanon = new int[gc];
+				sType = new byte[gc]; sIn0 = new int[gc]; sIn1 = new int[gc]; sOut0 = new int[gc]; sOut1 = new int[gc]; sCanon = new int[gc]; posOfCanon = new int[gc];
 			}
 			for (int k = from; k < from + count; k++)
 			{
@@ -493,6 +544,7 @@ namespace DLS.Simulation
 				sIn0[k] = cInCount[g] > 0 ? inSlots[cInStart[g]] : 0;
 				sIn1[k] = cInCount[g] > 1 ? inSlots[cInStart[g] + 1] : 0;
 				sOut0[k] = cOutCount[g] > 0 ? outSlots[cOutStart[g]] : 0;
+				sOut1[k] = cOut1.Length == gateCount ? cOut1[g] : -1;
 			}
 		}
 
@@ -679,7 +731,8 @@ namespace DLS.Simulation
 						if (TraceGates) LastStepGates.Add(sCanon[k]);
 						if (armedAt[k] != 0) DisarmNoise(k); // re-armed below if it still reads a floating bit
 
-						if (type[k] == (byte)ChipType.Nand)
+						byte tk = type[k];
+						if (tk == (byte)ChipType.Nand || tk == NandNotType)
 						{
 							int ia = in0[k], ic = in1[k];
 							uint a = st[ia], c = st[ic];
@@ -693,9 +746,16 @@ namespace DLS.Simulation
 							}
 							uint v = (1 ^ (a & c)) & 1;
 							int o = out0[k];
-							if (st[o] != v) { st[o] = v; MarkConsumers(o); }
+							if (tk == (byte)ChipType.Nand) { if (st[o] != v) { st[o] = v; MarkConsumers(o); } }
+							else
+							{
+								st[o] = v; // the NAND's own pin (its only reader is the fused inverter)
+								int o2 = sOut1[k];
+								uint nv = (1 ^ v) & 1;
+								if (st[o2] != nv) { st[o2] = nv; MarkConsumers(o2); }
+							}
 						}
-						else RunGate(k, st, clockHigh, audio);
+						else if (tk != NopType) RunGate(k, st, clockHigh, audio);
 
 						// gates later in this word may have been marked by what just ran: take them this step
 						bits = dirtyBits[w] & (b == 63 ? 0 : ~((bit << 1) - 1));
