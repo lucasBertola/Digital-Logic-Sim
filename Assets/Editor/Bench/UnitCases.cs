@@ -38,6 +38,7 @@ namespace DLS.Bench
             ("batched stepping (idle skipping): clock running while an input moves (a game)", BatchedGameInput),
             ("batched stepping (idle skipping): a bus conflict keeps re-drawing", BatchedConflictNeverIdles),
             ("frame counter wrap keeps the clock phase", FrameWrapKeepsClockPhase),
+            ("nand with a controlling 0 on the other input: not woken, still right when it is released", NandControllingValue),
         };
 
         // ---------------- helpers ----------------
@@ -525,6 +526,35 @@ namespace DLS.Bench
             int before = Simulator.simulationFrame;
             int done = c.StepBatched(200);
             return Expect(done == 200 && Simulator.simulationFrame == before + 200, "batched stepping did not account exactly 200 steps");
+        }
+
+        // The core does not wake a NAND whose other input is a driven 0 (its output is 1 whatever happens on this
+        // input). The output must still be right at every moment, including when the 0 is released.
+        static string NandControllingValue()
+        {
+            var c = Build("t_nand_ctrl", new[] { "A", "B" }, new[] { "Q", "R" }, b =>
+            {
+                int n = b.Add(ChipType.Nand), inv = b.Add(ChipType.Nand);
+                b.Wire(b.Input("A"), b.In(n, 0)); b.Wire(b.Input("B"), b.In(n, 1));
+                b.Wire(b.Out(n, 0), b.Output("Q"));
+                b.Wire(b.Out(n, 0), b.In(inv, 0)); b.Wire(b.Out(n, 0), b.In(inv, 1)); // R = NOT Q = A AND B
+                b.Wire(b.Out(inv, 0), b.Output("R"));
+            });
+            c.Set("A", 0); c.Set("B", 0); c.Step(2);
+            for (int i = 0; i < 6; i++)
+            {
+                c.Set("A", i & 1); c.Step(2);
+                if (c.OutBit("Q") != 1 || c.OutBit("R") != 0) return $"with B=0, A={i & 1}: Q={c.OutBit("Q")} R={c.OutBit("R")} (expected 1, 0)";
+            }
+            c.Set("A", 1); c.Set("B", 1); c.Step(2);
+            if (c.OutBit("Q") != 0 || c.OutBit("R") != 1) return $"A=1 B=1: Q={c.OutBit("Q")} R={c.OutBit("R")} (expected 0, 1)";
+            c.Set("A", 0); c.Step(2);
+            if (c.OutBit("Q") != 1 || c.OutBit("R") != 0) return $"A=0 B=1: Q={c.OutBit("Q")} R={c.OutBit("R")} (expected 1, 0)";
+            c.Set("B", 0); c.Set("A", 1); c.Step(2);
+            if (c.OutBit("Q") != 1) return "A=1 B=0: Q should be 1";
+            c.Set("B", 1); c.Step(2);
+            if (c.OutBit("Q") != 0 || c.OutBit("R") != 1) return $"B released with A=1: Q={c.OutBit("Q")} R={c.OutBit("R")} (expected 0, 1)";
+            return null;
         }
 
         static string FrameWrapKeepsClockPhase()

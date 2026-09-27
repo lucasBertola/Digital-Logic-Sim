@@ -63,6 +63,7 @@ namespace DLS.Simulation
 
 		// ---- who reads a slot (canonical gate ids), to mark on change ----
 		int[] slotConsStart = Array.Empty<int>(), slotConsList = Array.Empty<int>();
+		int[] slotConsPos = Array.Empty<int>(); // the same consumers as schedule positions (hot path), kept in sync with posOfCanon
 
 		// ---- root inputs: written from outside the step, change-detected against a shadow copy ----
 		// ---- noise ----
@@ -76,6 +77,7 @@ namespace DLS.Simulation
 		// second, 1/1024 per step is a few times a second)
 		public const int NoisePeriod = 1024;
 		int[] noiseList = Array.Empty<int>(), noisePos = Array.Empty<int>(); // canonical gate ids (survive a reschedule)
+		byte[] armedAt = Array.Empty<byte>(); // by schedule position: 1 when the gate is in the noise list (hot-path check)
 		int noiseAccumulator;
 		// slots nobody ever drives (unconnected pins): floating, but read as a quiet 0, never as noise
 		bool[] quiet = Array.Empty<bool>();
@@ -368,6 +370,8 @@ namespace DLS.Simulation
 				for (int j = 0; j < prog.cInCount[g]; j++) { int s = prog.inSlots[prog.cInStart[g] + j]; consList[consStart[s] + cf[s]++] = g; }
 			prog.slotConsStart = consStart;
 			prog.slotConsList = consList;
+			prog.slotConsPos = new int[consList.Length];
+			for (int j = 0; j < consList.Length; j++) prog.slotConsPos[j] = prog.posOfCanon[consList[j]];
 			prog.quiet = new bool[nextSlot];
 			for (int i = 0; i < n; i++) if (isConstant[i]) prog.quiet[slotOf[i]] = true;
 			// (root inputs are NOT quiet: they are driven by the player; a floating output computed from them — a buffer
@@ -391,6 +395,7 @@ namespace DLS.Simulation
 			prog.dirtyTop = new ulong[(prog.dirty.Length + 63) / 64];
 			prog.noiseList = new int[gc];
 			prog.noisePos = new int[gc];
+			prog.armedAt = new byte[gc];
 			prog.ClearNoise();
 			prog.MarkAllDirty();
 			return prog;
@@ -543,9 +548,21 @@ namespace DLS.Simulation
 				nOrdered = start;
 				Emit(chip, 0);
 				CopySchedule(start, len);
+				// every consumer entry pointing at a gate of the segment must carry its new position: those entries
+				// live in the lists of the slots these gates read
+				for (int k = start; k < start + len; k++)
+				{
+					int g = sCanon[k];
+					for (int j = 0; j < cInCount[g]; j++)
+					{
+						int s = inSlots[cInStart[g] + j];
+						for (int e = slotConsStart[s]; e < slotConsStart[s + 1]; e++) slotConsPos[e] = posOfCanon[slotConsList[e]];
+					}
+				}
 				for (int w = start >> 6; w <= (start + len - 1) >> 6 && w < dirty.Length; w++)
 					if (dirty[w] == 0) dirtyTop[w >> 6] &= ~(1UL << (w & 63));
 				foreach (int c in pendingCanon) SetDirty(posOfCanon[c]);
+				for (int k = start; k < start + len; k++) armedAt[k] = (byte)(noisePos[sCanon[k]] >= 0 ? 1 : 0);
 			}
 			RescheduleMs += sw.Elapsed.TotalMilliseconds;
 		}
@@ -628,7 +645,7 @@ namespace DLS.Simulation
 						ran++;
 						if (CollectStats) { RunsByType[type[k]]++; if (RunsByGate.Length != gateCount) RunsByGate = new long[gateCount]; RunsByGate[sCanon[k]]++; }
 						if (TraceGates) LastStepGates.Add(sCanon[k]);
-						if (noisePos[sCanon[k]] >= 0) DisarmNoise(k); // re-armed below if it still reads a floating bit
+						if (armedAt[k] != 0) DisarmNoise(k); // re-armed below if it still reads a floating bit
 
 						if (type[k] == (byte)ChipType.Nand)
 						{
@@ -708,6 +725,7 @@ namespace DLS.Simulation
 		void ClearNoise()
 		{
 			for (int k = 0; k < noisePos.Length; k++) noisePos[k] = -1;
+			Array.Clear(armedAt, 0, armedAt.Length);
 			noiseCount = 0;
 			noiseAccumulator = 0;
 		}
@@ -716,6 +734,7 @@ namespace DLS.Simulation
 		void ArmNoise(int pos)
 		{
 			int c = sCanon[pos];
+			armedAt[pos] = 1;
 			if (noisePos[c] >= 0) return;
 			noisePos[c] = noiseCount; noiseList[noiseCount++] = c;
 		}
@@ -730,6 +749,7 @@ namespace DLS.Simulation
 		void DisarmNoise(int pos)
 		{
 			int c = sCanon[pos];
+			armedAt[pos] = 0;
 			int p = noisePos[c];
 			if (p < 0) return;
 			int last = noiseList[noiseCount - 1];
@@ -737,14 +757,16 @@ namespace DLS.Simulation
 		}
 
 		// a slot changed: every gate reading it runs (this step if it comes later, next step otherwise)
+		// (A "controlling value" filter — do not wake a NAND whose other input is 0 — was tried here: the 3xAND3
+		// golden and its exhaustive case caught a wrong output, and it gained nothing on the user's montage. Not done.)
 		void MarkConsumers(int slot)
 		{
-			int[] cons = slotConsList, pos = posOfCanon;
+			int[] consPos = slotConsPos;
 			ulong[] d = dirty;
 			ulong[] top = dirtyTop;
 			for (int j = slotConsStart[slot], e = slotConsStart[slot + 1]; j < e; j++)
 			{
-				int p = pos[cons[j]], w = p >> 6;
+				int p = consPos[j], w = p >> 6;
 				d[w] |= 1UL << (p & 63);
 				top[w >> 6] |= 1UL << (w & 63);
 			}
