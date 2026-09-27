@@ -38,7 +38,7 @@ public static class ZCheck
                 sb.Append($"\n=== IN = {inVal} (buffer {(inVal == 1 ? "enabled" : "DISABLED = Z")}) ===\n");
                 for (int t = 0; t < 8; t++)
                 {
-                    for (int i = 0; i < root.InputPins.Length; i++) PinState.Set(ref root.InputPins[i].State, (ushort)(i == inIdx ? inVal : 0), 0);
+                    for (int i = 0; i < root.InputPins.Length; i++) root.InputPins[i].State = PinState.Make((ushort)(i == inIdx ? inVal : 0), 0);
                     Simulator.RunSimulationStep(root, Array.Empty<DevPinInstance>(), new SimAudio());
                     sb.Append($"t{t}: BUF.OUT {S(buffer.OutputPins[0].State)} | NOT19.OUT {S(not19.OutputPins[0].State)} | OR.IN1 {S(or.InputPins[0].State)} | OR.IN2 {S(or.InputPins[1].State)} | OR.OUT {S(or.OutputPins[0].State)}\n");
                 }

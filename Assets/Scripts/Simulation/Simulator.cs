@@ -13,9 +13,8 @@ namespace DLS.Simulation
 		// The live simulation runs on its own thread; the QA harness (CircuitTester, truth tables) runs on the
 		// main thread while that thread is paused; and the regression bench (Assets/Editor/Bench) runs many
 		// isolated simulations IN PARALLEL. Each of those must have its own frame counter, clock override,
-		// RNG and ordering flag, otherwise a step on one thread corrupts another (SimPin.ReceiveInput resets
-		// its input counter when it sees a new frame number). Fields that are set on one thread and consumed
-		// on another (the modification queue, the audio state) stay shared.
+		// RNG and ordering flag, otherwise a step on one thread corrupts another. Fields that are set on one
+		// thread and consumed on another (the modification queue, the audio state) stay shared.
 		public static readonly Random rng = new();
 		static readonly Stopwatch stopwatch = Stopwatch.StartNew();
 		[ThreadStatic] public static int stepsPerClockTransition;
@@ -33,10 +32,11 @@ namespace DLS.Simulation
 		// of the shared time-seeded Random, so a run is reproducible (and threads don't share a Random).
 		[ThreadStatic] static Random testRng;
 
-		// When sim is first built, or whenever modified, it needs to run a less efficient pass in which the traversal order of the chips is determined
+		// Set whenever the structure of the simulated tree changed (or a different tree is stepped): the
+		// compiled program is rebuilt at the top of the next step.
 		[ThreadStatic] public static bool needsOrderPass;
 
-		// Every n frames the simulation permits some random modifications to traversal order of sequential chips (to randomize outcome of race conditions)
+		// Every n frames the cut points inside feedback loops are re-drawn (to randomize outcome of race conditions)
 		[ThreadStatic] public static bool canDynamicReorderThisFrame;
 
 		[ThreadStatic] static SimChip prevRootSimChip;
@@ -60,20 +60,10 @@ namespace DLS.Simulation
 		static readonly ConcurrentQueue<SimModifyCommand> modificationQueue = new();
 
 		// ---- Simulation outline ----
-		// 1) Forward the initial player-controlled input states to all connected pins.
-		// 2) Loop over all subchips not yet processed this frame, and process them if they are ready (i.e. all input pins have received all their inputs)
-		//    * Note: this means that the input pins must be aware of how many input connections they have (pins choose randomly between conflicting inputs)
-		//    * Note: if a pin has zero input connections, it should be considered as always ready
-		// 3) Forward the outputs of the processed subchips to their connected pins, and repeat steps 2 & 3 until no more subchips are ready for processing.
-		// 4) If all subchips have now been processed, then we're done. This is not necessarily the case though, since if an input pin depends on the output of its parent chip
-		//    (directly or indirectly), then it won't receive all its inputs until the chip has already been run, meaning that the chip must be processed before it is ready.
-		//    In this case we process one of the remaining unprocessed (and non-ready) subchips at random, and return to step 3.
-		//
-		// Optimization ideas (todo):
-		// * Compute lookup table for combinational chips
-		// * Ignore chip if inputs are same as last frame, and no internal pins changed state last frame.
-		//   (would have to make exception for chips containing things like clock or key chip, which can activate 'spontaneously')
-		// * Create simplified connections network allowing only builtin chips to be processed during simulation
+		// The SimChip tree is compiled (SimProgram) into a flat list of gates over a single array of pin-state
+		// slots, scheduled in topological order; feedback loops are cut at a random gate, which then reads the
+		// previous step's values. A step is: copy the player inputs into their slots, then run the gates in
+		// order. See SimProgram.cs. The program is rebuilt whenever the tree changes (needsOrderPass).
 
 		public static void RunSimulationStep(SimChip rootSimChip, DevPinInstance[] inputPins, SimAudio audioState)
 		{
@@ -88,7 +78,17 @@ namespace DLS.Simulation
 
 			pcg_rngState = (uint)(testRng ?? rng).Next();
 			canDynamicReorderThisFrame = simulationFrame % 100 == 0;
-			simulationFrame++; //
+			simulationFrame++;
+
+			if (needsOrderPass || rootSimChip.Program == null)
+			{
+				rootSimChip.Program = SimProgram.Compile(rootSimChip, rootSimChip.Program);
+				needsOrderPass = false;
+			}
+			else if (canDynamicReorderThisFrame)
+			{
+				rootSimChip.Program.Reschedule();
+			}
 
 			// Step 1) Get player-controlled input states and copy values to the sim
 			foreach (DevPinInstance input in inputPins)
@@ -96,9 +96,7 @@ namespace DLS.Simulation
 				try
 				{
 					SimPin simPin = rootSimChip.GetSimPinFromAddress(input.Pin.Address);
-					PinState.Set(ref simPin.State, input.Pin.PlayerInputState);
-
-					input.Pin.State = input.Pin.PlayerInputState;
+					simPin.State = input.Pin.PlayerInputState;
 				}
 				catch (Exception)
 				{
@@ -106,16 +104,8 @@ namespace DLS.Simulation
 				}
 			}
 
-			// Process
-			if (needsOrderPass)
-			{
-				StepChipReorder(rootSimChip);
-				needsOrderPass = false;
-			}
-			else
-			{
-				StepChip(rootSimChip);
-			}
+			// Step 2) Run every gate
+			rootSimChip.Program.Step(audioState);
 
 			UpdateAudioState();
 		}
@@ -138,112 +128,12 @@ namespace DLS.Simulation
 			audioState.NotifyAllNotesRegistered(deltaTime);
 		}
 
-		// Recursively propagate signals through this chip and its subchips
-		static void StepChip(SimChip chip)
-		{
-			// Propagate signal from all input dev-pins to all their connected pins
-			chip.Sim_PropagateInputs();
-
-			// NOTE: subchips are assumed to have been sorted in reverse order of desired visitation
-			for (int i = chip.SubChips.Length - 1; i >= 0; i--)
-			{
-				SimChip nextSubChip = chip.SubChips[i];
-
-				// Every n frames (for performance reasons) the simulation permits some random modifications to the chip traversal order.
-				// Here two chips may be swapped if they are not 'ready' (i.e. all inputs have not yet been received for this
-				// frame; indicating that the input relies on the output). The purpose of this reordering is to allow some variety in
-				// the outcomes of race-conditions (such as an SR latch having both inputs enabled, and then released).
-				if (canDynamicReorderThisFrame && i > 0 && !nextSubChip.Sim_IsReady() && RandomBool())
-				{
-					SimChip potentialSwapChip = chip.SubChips[i - 1];
-					if (!ChipTypeHelper.IsBusOriginType(potentialSwapChip.ChipType))
-					{
-						nextSubChip = potentialSwapChip;
-						(chip.SubChips[i], chip.SubChips[i - 1]) = (chip.SubChips[i - 1], chip.SubChips[i]);
-					}
-				}
-
-				if (nextSubChip.IsBuiltin) ProcessBuiltinChip(nextSubChip); // We've reached a built-in chip, so process it directly
-				else StepChip(nextSubChip); // Recursively process custom chip
-
-				// Step 3) Forward the outputs of the processed subchip to connected pins
-				nextSubChip.Sim_PropagateOutputs();
-			}
-		}
-
-		// Recursively propagate signals through this chip and its subchips
-		// In the process, reorder all subchips based on order in which they become ready for processing (have received all their inputs)
-		// Note: the order here is reversed, so those ready first will be at the end of the array
-		static void StepChipReorder(SimChip chip)
-		{
-			chip.Sim_PropagateInputs();
-
-			SimChip[] subChips = chip.SubChips;
-			int numRemaining = subChips.Length;
-
-			while (numRemaining > 0)
-			{
-				int nextSubChipIndex = ChooseNextSubChip(subChips, numRemaining);
-				SimChip nextSubChip = subChips[nextSubChipIndex];
-
-				// "Remove" the chosen subchip from remaining sub chips.
-				// This is done by moving it to the end of the array and reducing the length of the span by one.
-				// This also places the subchip into (reverse) order, so that the traversal order need to be determined again on the next pass.
-				(subChips[nextSubChipIndex], subChips[numRemaining - 1]) = (subChips[numRemaining - 1], subChips[nextSubChipIndex]);
-				numRemaining--;
-
-				// Process chosen subchip
-				if (nextSubChip.ChipType == ChipType.Custom) StepChipReorder(nextSubChip); // Recursively process custom chip
-				else ProcessBuiltinChip(nextSubChip); // We've reached a built-in chip, so process it directly 
-
-				// Step 3) Forward the outputs of the processed subchip to connected pins
-				nextSubChip.Sim_PropagateOutputs();
-			}
-		}
-
-		static int ChooseNextSubChip(SimChip[] subChips, int num)
-		{
-			bool noSubChipsReady = true;
-			bool isNonBusChipRemaining = false;
-			int nextSubChipIndex = -1;
-
-			// Step 2) Loop over all subchips not yet processed this frame, and process them if they are ready
-			for (int i = 0; i < num; i++)
-			{
-				SimChip subChip = subChips[i];
-				if (subChip.Sim_IsReady())
-				{
-					noSubChipsReady = false;
-					nextSubChipIndex = i;
-					break;
-				}
-
-				isNonBusChipRemaining |= !ChipTypeHelper.IsBusOriginType(subChip.ChipType);
-			}
-
-			// Step 4) if no sub chip is ready to be processed, pick one at random (but save buses for last)
-			if (noSubChipsReady)
-			{
-				nextSubChipIndex = RandomIndex(num);
-
-				// If processing in random order, save buses for last (since we must know all their inputs to display correctly)
-				if (isNonBusChipRemaining)
-				{
-					for (int i = 0; i < num; i++)
-					{
-						if (!ChipTypeHelper.IsBusOriginType(subChips[nextSubChipIndex].ChipType)) break;
-						nextSubChipIndex = (nextSubChipIndex + 1) % num;
-					}
-				}
-			}
-
-			return nextSubChipIndex;
-		}
-
 		public static void UpdateKeyboardInputFromMainThread()
 		{
 			SimKeyboardHelper.RefreshInputState();
 		}
+
+		// ---- Random draws: ALL through the seeded per-thread stream, so a seeded run is exactly reproducible ----
 
 		// 16 random bits (one PCG step), for the value carried by a floating (high-impedance) line
 		public static ushort RandomBits16()
@@ -254,7 +144,7 @@ namespace DLS.Simulation
 			return (ushort)result;
 		}
 
-		// Random index in [0, n), from the same seeded stream (so a seeded test run is exactly reproducible)
+		// Random index in [0, n)
 		public static int RandomIndex(int n)
 		{
 			pcg_rngState = pcg_rngState * 747796405 + 2891336453;
@@ -278,328 +168,7 @@ namespace DLS.Simulation
 			return result < uint.MaxValue / 2;
 		}
 
-		static void ProcessBuiltinChip(SimChip chip)
-		{
-			switch (chip.ChipType)
-			{
-				// ---- Process Built-in chips ----
-				case ChipType.Nand:
-				{
-					uint nandOp = 1 ^ (chip.InputPins[0].State & chip.InputPins[1].State);
-					chip.OutputPins[0].State = (ushort)(nandOp & 1);
-					break;
-				}
-				case ChipType.Clock:
-				{
-					bool high = forcedClockState >= 0
-							? forcedClockState == 1
-							: stepsPerClockTransition != 0 && ((simulationFrame / stepsPerClockTransition) & 1) == 0;
-					PinState.Set(ref chip.OutputPins[0].State, high ? PinState.LogicHigh : PinState.LogicLow);
-					break;
-				}
-				case ChipType.Vcc:
-				{
-					PinState.Set(ref chip.OutputPins[0].State, PinState.LogicHigh);
-					break;
-				}
-				case ChipType.Gnd:
-				{
-					PinState.Set(ref chip.OutputPins[0].State, PinState.LogicLow);
-					break;
-				}
-				case ChipType.Pulse:
-				{
-					const int pulseDurationIndex = 0;
-					const int pulseTicksRemainingIndex = 1;
-					const int pulseInputOldIndex = 2;
-
-					uint inputState = chip.InputPins[0].State;
-					bool pulseInputHigh = PinState.FirstBitHigh(inputState);
-					uint pulseTicksRemaining = chip.InternalState[pulseTicksRemainingIndex];
-
-					if (pulseTicksRemaining == 0)
-					{
-						bool isRisingEdge = pulseInputHigh && chip.InternalState[pulseInputOldIndex] == 0;
-						if (isRisingEdge)
-						{
-							pulseTicksRemaining = chip.InternalState[pulseDurationIndex];
-							chip.InternalState[pulseTicksRemainingIndex] = pulseTicksRemaining;
-						}
-					}
-
-					uint outputState = PinState.LogicLow;
-					if (pulseTicksRemaining > 0)
-					{
-						chip.InternalState[1]--;
-						outputState = PinState.LogicHigh;
-					}
-					else if (PinState.GetTristateFlags(inputState) != 0)
-					{
-						PinState.SetAllDisconnected(ref outputState);
-					}
-
-					chip.OutputPins[0].State = outputState;
-					chip.InternalState[pulseInputOldIndex] = pulseInputHigh ? 1u : 0;
-
-					break;
-				}
-				case ChipType.Split_4To1Bit:
-				{
-					uint inState4Bit = chip.InputPins[0].State;
-					chip.OutputPins[0].State = (inState4Bit >> 3) & PinState.SingleBitMask;
-					chip.OutputPins[1].State = (inState4Bit >> 2) & PinState.SingleBitMask;
-					chip.OutputPins[2].State = (inState4Bit >> 1) & PinState.SingleBitMask;
-					chip.OutputPins[3].State = (inState4Bit >> 0) & PinState.SingleBitMask;
-					break;
-				}
-				case ChipType.Merge_1To4Bit:
-				{
-					uint stateA = chip.InputPins[3].State & PinState.SingleBitMask; // lsb
-					uint stateB = chip.InputPins[2].State & PinState.SingleBitMask;
-					uint stateC = chip.InputPins[1].State & PinState.SingleBitMask;
-					uint stateD = chip.InputPins[0].State & PinState.SingleBitMask;
-					chip.OutputPins[0].State = stateA | stateB << 1 | stateC << 2 | stateD << 3;
-					break;
-				}
-				case ChipType.Merge_1To8Bit:
-				{
-					uint stateA = chip.InputPins[7].State & PinState.SingleBitMask; // lsb
-					uint stateB = chip.InputPins[6].State & PinState.SingleBitMask;
-					uint stateC = chip.InputPins[5].State & PinState.SingleBitMask;
-					uint stateD = chip.InputPins[4].State & PinState.SingleBitMask;
-					uint stateE = chip.InputPins[3].State & PinState.SingleBitMask;
-					uint stateF = chip.InputPins[2].State & PinState.SingleBitMask;
-					uint stateG = chip.InputPins[1].State & PinState.SingleBitMask;
-					uint stateH = chip.InputPins[0].State & PinState.SingleBitMask;
-					chip.OutputPins[0].State = stateA | stateB << 1 | stateC << 2 | stateD << 3 | stateE << 4 | stateF << 5 | stateG << 6 | stateH << 7;
-					break;
-				}
-				case ChipType.Merge_4To8Bit:
-				{
-					SimPin in4A = chip.InputPins[0];
-					SimPin in4B = chip.InputPins[1];
-					SimPin out8 = chip.OutputPins[0];
-					PinState.Set8BitFrom4BitSources(ref out8.State, in4B.State, in4A.State);
-					break;
-				}
-				case ChipType.Split_8To4Bit:
-				{
-					SimPin in8 = chip.InputPins[0];
-					SimPin out4A = chip.OutputPins[0];
-					SimPin out4B = chip.OutputPins[1];
-					PinState.Set4BitFrom8BitSource(ref out4A.State, in8.State, false);
-					PinState.Set4BitFrom8BitSource(ref out4B.State, in8.State, true);
-					break;
-				}
-				case ChipType.Split_8To1Bit:
-				{
-					uint in8 = chip.InputPins[0].State;
-					chip.OutputPins[0].State = (in8 >> 7) & PinState.SingleBitMask;
-					chip.OutputPins[1].State = (in8 >> 6) & PinState.SingleBitMask;
-					chip.OutputPins[2].State = (in8 >> 5) & PinState.SingleBitMask;
-					chip.OutputPins[3].State = (in8 >> 4) & PinState.SingleBitMask;
-					chip.OutputPins[4].State = (in8 >> 3) & PinState.SingleBitMask;
-					chip.OutputPins[5].State = (in8 >> 2) & PinState.SingleBitMask;
-					chip.OutputPins[6].State = (in8 >> 1) & PinState.SingleBitMask;
-					chip.OutputPins[7].State = (in8 >> 0) & PinState.SingleBitMask;
-					break;
-				}
-				case ChipType.TriStateBuffer:
-				{
-					SimPin dataPin = chip.InputPins[0];
-					SimPin enablePin = chip.InputPins[1];
-					SimPin outputPin = chip.OutputPins[0];
-
-					if (PinState.FirstBitHigh(enablePin.State)) outputPin.State = dataPin.State;
-					else
-					{
-						// Disabled: the output floats (tristate flag set, value flipping every step)...
-						PinState.SetAllDisconnected(ref outputPin.State);
-						// ...unless the net it sits on is driven by something else: a floating output takes the
-						// voltage of its net, so it (and everything wired to it) reads that value.
-						foreach (SimPin target in outputPin.ConnectedTargetPins)
-						{
-							ushort targetTri = PinState.GetTristateFlags(target.State);
-							if (targetTri == ushort.MaxValue) continue; // that pin is floating too
-							ushort bits = (ushort)((PinState.GetBitStates(target.State) & ~targetTri) | (PinState.GetBitStates(outputPin.State) & targetTri));
-							PinState.Set(ref outputPin.State, bits, ushort.MaxValue);
-							break;
-						}
-					}
-
-					break;
-				}
-				case ChipType.Key:
-				{
-					bool isHeld = SimKeyboardHelper.KeyIsHeld((char)chip.InternalState[0]);
-					chip.OutputPins[0].State = isHeld ? PinState.LogicHigh : PinState.LogicLow;
-					break;
-				}
-				case ChipType.DisplayRGB:
-				{
-					const uint addressSpace = 256;
-					uint addressPin = chip.InputPins[0].State;
-					uint redPin = chip.InputPins[1].State;
-					uint greenPin = chip.InputPins[2].State;
-					uint bluePin = chip.InputPins[3].State;
-					uint resetPin = chip.InputPins[4].State;
-					uint writePin = chip.InputPins[5].State;
-					uint refreshPin = chip.InputPins[6].State;
-					uint clockPin = chip.InputPins[7].State;
-
-					// Detect clock rising edge
-					bool clockHigh = PinState.FirstBitHigh(clockPin);
-					bool isRisingEdge = clockHigh && chip.InternalState[^1] == 0;
-					chip.InternalState[^1] = clockHigh ? 1u : 0;
-
-					if (isRisingEdge)
-					{
-						// Clear back buffer
-						if (PinState.FirstBitHigh(resetPin))
-						{
-							for (int i = 0; i < addressSpace; i++)
-							{
-								chip.InternalState[i + addressSpace] = 0;
-							}
-						}
-						// Write to back-buffer
-						else if (PinState.FirstBitHigh(writePin))
-						{
-							uint addressIndex = PinState.GetBitStates(addressPin) + addressSpace;
-							uint data = (uint)(PinState.GetBitStates(redPin) | (PinState.GetBitStates(greenPin) << 4) | (PinState.GetBitStates(bluePin) << 8));
-							chip.InternalState[addressIndex] = data;
-						}
-
-						// Copy back-buffer to display buffer
-						if (PinState.FirstBitHigh(refreshPin))
-						{
-							for (int i = 0; i < addressSpace; i++)
-							{
-								chip.InternalState[i] = chip.InternalState[i + addressSpace];
-							}
-						}
-					}
-
-					// Output current pixel colour
-					uint colData = chip.InternalState[PinState.GetBitStates(addressPin)];
-					chip.OutputPins[0].State = (ushort)((colData >> 0) & 0b1111); // red
-					chip.OutputPins[1].State = (ushort)((colData >> 4) & 0b1111); // green
-					chip.OutputPins[2].State = (ushort)((colData >> 8) & 0b1111); // blue
-
-					break;
-				}
-				case ChipType.DisplayDot:
-				{
-					const uint addressSpace = 256;
-					uint addressPin = chip.InputPins[0].State;
-					uint pixelInputPin = chip.InputPins[1].State;
-					uint resetPin = chip.InputPins[2].State;
-					uint writePin = chip.InputPins[3].State;
-					uint refreshPin = chip.InputPins[4].State;
-					uint clockPin = chip.InputPins[5].State;
-
-					// Detect clock rising edge
-					bool clockHigh = PinState.FirstBitHigh(clockPin);
-					bool isRisingEdge = clockHigh && chip.InternalState[^1] == 0;
-					chip.InternalState[^1] = clockHigh ? 1u : 0;
-
-					if (isRisingEdge)
-					{
-						// Clear back buffer
-						if (PinState.FirstBitHigh(resetPin))
-						{
-							for (int i = 0; i < addressSpace; i++)
-							{
-								chip.InternalState[i + addressSpace] = 0;
-							}
-						}
-						// Write to back-buffer
-						else if (PinState.FirstBitHigh(writePin))
-						{
-							uint addressIndex = PinState.GetBitStates(addressPin) + addressSpace;
-							uint data = PinState.GetBitStates(pixelInputPin);
-							chip.InternalState[addressIndex] = data;
-						}
-
-						// Copy back-buffer to display buffer
-						if (PinState.FirstBitHigh(refreshPin))
-						{
-							for (int i = 0; i < addressSpace; i++)
-							{
-								chip.InternalState[i] = chip.InternalState[i + addressSpace];
-							}
-						}
-					}
-
-					// Output current pixel colour
-					ushort pixelState = (ushort)chip.InternalState[PinState.GetBitStates(addressPin)];
-					chip.OutputPins[0].State = pixelState;
-
-					break;
-				}
-				case ChipType.dev_Ram_8Bit:
-				{
-					uint addressPin = chip.InputPins[0].State;
-					uint dataPin = chip.InputPins[1].State;
-					uint writeEnablePin = chip.InputPins[2].State;
-					uint resetPin = chip.InputPins[3].State;
-					uint clockPin = chip.InputPins[4].State;
-
-					// Detect clock rising edge
-					bool clockHigh = PinState.FirstBitHigh(clockPin);
-					bool isRisingEdge = clockHigh && chip.InternalState[^1] == 0;
-					chip.InternalState[^1] = clockHigh ? 1u : 0;
-
-					// Write/Reset on rising edge
-					if (isRisingEdge)
-					{
-						if (PinState.FirstBitHigh(resetPin))
-						{
-							for (int i = 0; i < 256; i++)
-							{
-								chip.InternalState[i] = 0;
-							}
-						}
-						else if (PinState.FirstBitHigh(writeEnablePin))
-						{
-							chip.InternalState[PinState.GetBitStates(addressPin)] = PinState.GetBitStates(dataPin);
-						}
-					}
-
-					// Output data at current address
-					chip.OutputPins[0].State = (ushort)chip.InternalState[PinState.GetBitStates(addressPin)];
-
-					break;
-				}
-				case ChipType.Rom_256x16:
-				{
-					const int ByteMask = 0b11111111;
-					uint address = PinState.GetBitStates(chip.InputPins[0].State);
-					uint data = chip.InternalState[address];
-					chip.OutputPins[0].State = (ushort)((data >> 8) & ByteMask);
-					chip.OutputPins[1].State = (ushort)(data & ByteMask);
-					break;
-				}
-				case ChipType.Buzzer:
-				{
-					int freqIndex = PinState.GetBitStates(chip.InputPins[0].State);
-					int volumeIndex = PinState.GetBitStates(chip.InputPins[1].State);
-					audioState.RegisterNote(freqIndex, (uint)volumeIndex);
-					break;
-				}
-				// ---- Bus types ----
-				default:
-				{
-					if (ChipTypeHelper.IsBusOriginType(chip.ChipType))
-					{
-						SimPin inputPin = chip.InputPins[0];
-						PinState.Set(ref chip.OutputPins[0].State, inputPin.State);
-					}
-
-					break;
-				}
-			}
-		}
+		// ---- Building the tree ----
 
 		public static SimChip BuildSimChip(ChipDescription chipDesc, ChipLibrary library)
 		{
@@ -629,7 +198,6 @@ namespace DLS.Simulation
 
 			SimChip simChip = new(chipDesc, subChipID, internalState, subchips);
 
-
 			// Create connections
 			for (int i = 0; i < chipDesc.Wires.Length; i++)
 			{
@@ -638,6 +206,8 @@ namespace DLS.Simulation
 
 			return simChip;
 		}
+
+		// ---- Runtime modifications (enqueued from the main thread, applied on the sim thread) ----
 
 		public static void AddPin(SimChip simChip, int pinID, bool isInputPin)
 		{
@@ -753,6 +323,7 @@ namespace DLS.Simulation
 		{
 			forcedClockState = -1;
 			simulationFrame = 0;
+			prevRootSimChip = null;
 			modificationQueue?.Clear();
 			stopwatch.Restart();
 			elapsedSecondsOld = 0;

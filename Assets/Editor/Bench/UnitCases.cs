@@ -44,7 +44,7 @@ namespace DLS.Bench
             public SimChip root, target;
             public Dictionary<string, int> inIdx = new(), outIdx = new();
 
-            public void Set(string input, int value) => PinState.Set(ref root.InputPins[inIdx[input]].State, (ushort)value, 0);
+            public void Set(string input, int value) => root.InputPins[inIdx[input]].State = PinState.Make((ushort)value, 0);
             public uint Out(string output) => target.OutputPins[outIdx[output]].State;
             public int OutBit(string output) => (int)(Out(output) & 1);
             public bool OutFloating(string output) => (PinState.GetTristateFlags(Out(output)) & 1) == 1;
@@ -368,7 +368,7 @@ namespace DLS.Bench
             {
                 for (int s = 0; s < 40; s++)
                 {
-                    for (int i = 0; i < root.InputPins.Length; i++) PinState.Set(ref root.InputPins[i].State, (ushort)(stim.Next() & 1), 0);
+                    for (int i = 0; i < root.InputPins.Length; i++) root.InputPins[i].State = PinState.Make((ushort)(stim.Next() & 1), 0);
                     Simulator.RunSimulationStep(root, Array.Empty<DevPinInstance>(), new SimAudio());
                     foreach (SimPin p in target.OutputPins) sb.Append(p.State).Append(',');
                 }

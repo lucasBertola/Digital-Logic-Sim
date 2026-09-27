@@ -6,6 +6,21 @@ what the fork adds on top.
 
 ## What's new in this fork
 
+### Simulation core rewritten: 15 to 27 times faster
+The simulation no longer walks the chip tree object by object. The tree is compiled once into a flat list of
+gates over a single array of pin states (a pin fed by one source shares its source's slot, so custom-chip
+boundaries cost nothing), scheduled in the same order as before so latches, registers and buses keep exactly
+the same tick-level behaviour, and recompiled only when the circuit is edited. Measured with the same chips
+on the same machine (`Assets/Editor/SimBench.cs`):
+
+| chip | before | after | factor |
+|---|---|---|---|
+| 8-bit CPU (63 322 simulated chips) | 136 steps/s | 2 900 steps/s | ×21 |
+| 8-bit ALU | 10 700 steps/s | 296 000 steps/s | ×27 |
+| 8-bit register | 64 000 steps/s | 940 000 steps/s | ×15 |
+
+Verified by the regression bench (142 cases, every chip of a CPU project, see Tests below).
+
 ### Ask Claude — an AI assistant inside the editor
 - A resizable chat panel (right side of the screen) where you describe the circuit you want and Claude
   builds it in the open project: it creates modules, adds inputs/outputs and components, wires them,

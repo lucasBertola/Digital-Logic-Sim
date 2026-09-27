@@ -465,9 +465,9 @@ namespace DLS.Bench
             public void Set(string input, int value)
             {
                 if (!inIdx.TryGetValue(input, out int i)) throw new Exception($"no input pin '{input}' on {desc.Name}");
-                PinState.Set(ref root.InputPins[i].State, (ushort)value, 0);
+                root.InputPins[i].State = PinState.Make((ushort)value, 0);
             }
-            public void SetIndex(int i, int value) => PinState.Set(ref root.InputPins[i].State, (ushort)value, 0);
+            public void SetIndex(int i, int value) => root.InputPins[i].State = PinState.Make((ushort)value, 0);
             public void SetWord(string[] pinsMsbFirst, int value)
             {
                 if (pinsMsbFirst.Length == 1) { Set(pinsMsbFirst[0], value); return; }

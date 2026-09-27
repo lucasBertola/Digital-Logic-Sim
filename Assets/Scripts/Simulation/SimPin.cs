@@ -7,99 +7,41 @@ namespace DLS.Simulation
 		public readonly int ID;
 		public readonly SimChip parentChip;
 		public readonly bool isInput;
-		public uint State;
 
+		// Structure: the pins this pin feeds (wires), and how many wires feed it
 		public SimPin[] ConnectedTargetPins = Array.Empty<SimPin>();
-
-		// Simulation frame index on which pin last received an input
-		public int lastUpdatedFrameIndex;
-
-		// Address of pin from where this pin last received its input
-		public int latestSourceID;
-		public int latestSourceParentChipID;
-
-		// Number of wires that input their signal to this pin.
-		// (In the case of conflicting signals, the pin chooses randomly)
 		public int numInputConnections;
-		public int numInputsReceivedThisFrame;
+
+		// Address of the pin this pin last took its value from (display colouring). Set by the compiled
+		// program: statically for a pin with one source, per step for a merge node.
+		public int latestSourceID = -1;
+		public int latestSourceParentChipID = -1;
+
+		// ---- State ----
+		// Once the tree is compiled (SimProgram) the value lives in a slot of the program's state array,
+		// shared with every pin on the same net; before that (a pin just created) it lives here.
+		uint localState;
+		internal uint[] stateArray;
+		internal int stateIndex;
+
+		// Compile scratch (SimProgram.Compile)
+		internal int compileIndex;
+		internal int compileStamp;
+
+		public uint State
+		{
+			get { uint[] a = stateArray; return a == null ? localState : a[stateIndex]; }
+			set { uint[] a = stateArray; if (a == null) localState = value; else a[stateIndex] = value; }
+		}
 
 		public SimPin(int id, bool isInput, SimChip parentChip)
 		{
 			this.parentChip = parentChip;
 			this.isInput = isInput;
 			ID = id;
-			latestSourceID = -1;
-			latestSourceParentChipID = -1;
-
-			PinState.SetAllDisconnectedLow(ref State);
+			localState = PinState.FloatingLow;
 		}
 
 		public bool FirstBitHigh => PinState.FirstBitHigh(State);
-
-		public void PropagateSignal()
-		{
-			int length = ConnectedTargetPins.Length;
-			for (int i = 0; i < length; i++)
-			{
-				ConnectedTargetPins[i].ReceiveInput(this);
-			}
-		}
-
-		// Called on sub-chip input pins, or chip dev-pins
-		void ReceiveInput(SimPin source)
-		{
-			// If this is the first input of the frame, reset the received inputs counter to zero
-			if (lastUpdatedFrameIndex != Simulator.simulationFrame)
-			{
-				lastUpdatedFrameIndex = Simulator.simulationFrame;
-				numInputsReceivedThisFrame = 0;
-			}
-
-			bool set;
-
-			if (numInputsReceivedThisFrame > 0)
-			{
-				// Has already received input this frame, so choose at random whether to accept conflicting input.
-				// Note: for multi-bit pins, this choice is made identically for all bits, rather than individually.
-				// Todo: maybe consider changing to per-bit in the future...)
-
-				// Per bit: a driven source always beats a high-impedance one (a floating line takes the voltage of
-				// whatever drives it); two driven sources in conflict are resolved at random; two floating sources
-				// stay floating.
-				ushort srcBits = (ushort)source.State, curBits = (ushort)State;
-				ushort srcTri = (ushort)(source.State >> 16), curTri = (ushort)(State >> 16);
-				ushort bothTri = (ushort)(srcTri & curTri);
-				ushort onlySrcTri = (ushort)(srcTri & ~curTri);
-				ushort onlyCurTri = (ushort)(curTri & ~srcTri);
-				ushort noneTri = (ushort)~(srcTri | curTri);
-				ushort conflict = (ushort)(Simulator.RandomBool() ? (srcBits | curBits) : (srcBits & curBits)); // randomly accept or reject conflicting state
-				ushort bitsNew = (ushort)((curBits & onlySrcTri) | (srcBits & onlyCurTri) | (srcBits & bothTri) | (conflict & noneTri));
-
-				ushort tristateNew = bothTri;
-				uint stateNew = (uint)(bitsNew | (tristateNew << 16));
-				set = stateNew != State;
-				State = stateNew;
-			}
-			else
-			{
-				// First input source this frame, so accept it.
-				State = source.State;
-				set = true;
-			}
-
-			if (set)
-			{
-				latestSourceID = source.ID;
-				latestSourceParentChipID = source.parentChip.ID;
-			}
-
-			numInputsReceivedThisFrame++;
-
-			// If this is a sub-chip input pin, and has received all of its connections, notify the sub-chip that the input is ready
-			if (isInput && numInputsReceivedThisFrame == numInputConnections)
-			{
-				parentChip.numInputsReady++;
-			}
-		}
 	}
 }

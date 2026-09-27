@@ -80,13 +80,20 @@ The core idea: a chip exists in **three parallel representations**, and most fea
 The simulation runs on a **dedicated background thread** (`Project.SimThread`), separate from Unity's main thread, targeting `Prefs_SimTargetStepsPerSecond` ticks/sec. Consequences to respect when editing sim or game code:
 
 - **Never mutate the `SimChip` graph directly from the main thread.** All structural changes go through `Simulator.Add*/Remove*`, which enqueue onto a `ConcurrentQueue<SimModifyCommand>`. `Simulator.ApplyModifications()` drains the queue **on the sim thread** at the top of each step.
-- Any structural change sets `needsOrderPass = true`. The next step then runs `StepChipReorder` (the expensive pass that determines a valid subchip traversal order) instead of the fast `StepChip`.
+- Any structural change sets `needsOrderPass = true`. The next step then **recompiles** the root's `SimProgram` (see below) before running; a compile of the CPU chip (63 000 sim chips) takes a few tens of ms, so it only happens on edits.
 - The main thread reads sim results via `ViewedChip.UpdateStateFromSim(...)`, synced once per main-thread frame. Reads of pin state can transiently be out of sync (threads race) — sim code deliberately swallows "pin not found" exceptions rather than locking. Keep that tolerance in mind.
 - `debug_runSimMainThread` in `Project.cs` forces the sim onto the main thread for debugging; `debug_logSimTime` logs step timing.
 
 ### How the simulation actually steps
 
-The algorithm is documented in the header comment of `Simulator.cs`. In short: propagate player inputs, then repeatedly process any subchip that is "ready" (all inputs received). Built-in chips are evaluated directly in the big `ProcessBuiltinChip` switch (this is where per-chip behavior lives — add a new built-in's logic here). Custom chips recurse. Feedback loops (a pin depending on its own chip's output) are resolved by processing an unready chip at random. Every ~100 frames the order of unready sequential chips may be randomly swapped to give race conditions (e.g. SR latches) varied outcomes. A built-in PCG RNG (`Simulator.RandomBool`) is used for determinism-adjacent reordering.
+The `SimChip` / `SimPin` tree is only the **structure** (what the editor addresses, modifies at runtime and reads for display). A step runs on its compiled form, `SimProgram` (`Simulation/SimProgram.cs`), rebuilt by `Simulator.RunSimulationStep` whenever `needsOrderPass` is set or a different root is stepped:
+
+- **Slots.** Every pin resolves to a slot in one contiguous `uint[]` of pin states. A pin fed by exactly one source *aliases* its source's slot (no copy — a signal crossing custom-chip boundaries costs nothing), a pin fed by several sources is a **merge node** with its own slot, a builtin output pin or a root input pin owns a slot, an unconnected pin gets a slot holding "floating, low" forever (`PinState.FloatingLow`). Custom chips therefore vanish from the step. `SimPin.State` is a property reading the slot (before compilation, a local value), so everything that looks at pins (`UpdateStateFromSim`, the harness probes, tests) sees live values without any write-back — but pin state can no longer be written by `ref`; use `pin.State = PinState.Make(bits, tri)`.
+- **Gates.** Every builtin chip is a `Gate` (struct, SoA arrays) reading and writing slots directly; the per-chip behaviour lives in the `switch` of `SimProgram.Step` (add a new builtin's logic there). Bus origins are wires (output aliases input), termini and pure displays (7-seg, LED) have no gate at all. Merge nodes are gates too (`MergeType`): per-bit, a driven source beats a floating one, driven sources in conflict are resolved at random for the step, all-floating stays floating; then floating sources on a driven bit are written back with the net's value (that is how a disabled 3-state buffer's output pin reads its net) and the winning source is recorded in `latestSourceID` for the wire colouring.
+- **Order.** Gates are emitted by walking the tree exactly as the original stepper visited it: at every level the sub-chips run in the order they become ready (all their inputs produced by siblings already run), and when none is ready (a feedback loop) an unready **non-bus** chip is picked at random and runs on last step's values (`Emit`, the `remaining` / `nonBus` O(1) pick lists). A merge node is emitted right before the chip that owns the pin (input pin) or at the end of it (output pin). So the tick-level timing of latches, registers and buses is the same as the tree walker's, and the random picks are re-drawn every 100 steps (`Reschedule`, only when the circuit has feedback) so race conditions vary as before. Compile cost is O(pins + wires); the schedule is a permutation of the gate array, copied so the step loop is sequential in memory.
+- **Do not** replace the hierarchical order by a flat topological sort with random gate cuts: it was tried, and in the CPU's bus loop the random cuts land on long combinational paths (the ALU carry chain), so a signal needs several steps to settle instead of one or two — the directed CPU case caught it.
+- All randomness (floating noise `RandomBits16`, merge conflicts `RandomBool`, forced picks `RandomIndex`, RAM init `NextBytes`) comes from the per-thread PCG stream reseeded each step from `testRng ?? rng`, so a seeded run is exactly reproducible.
+- The state array is reused across recompiles of the same root (grown when needed) and each pin keeps its slot index, so a main-thread read racing a recompile at worst sees a stale value, never an exception.
 
 ### Graphics / UI — immediate mode
 
@@ -104,7 +111,7 @@ Four project assemblies (`.asmdef`), roughly matching the layers: `DLS` (`Assets
 
 To add or change a built-in chip you typically touch several places, kept in sync manually:
 - `ChipType` enum (`Description/Types/SubTypes/ChipTypes.cs`) — the identity.
-- `ProcessBuiltinChip` switch in `Simulator.cs` — its simulation behavior.
+- the `switch` in `SimProgram.Step` (`Simulation/SimProgram.cs`) — its simulation behavior (a chip with no output pin and no side effect needs no case: its input pins carry the values).
 - `BuiltinChipCreator` (`Game/Project/BuiltinChipCreator.cs`) — its description (pins, size, colour, display).
 - `BuiltinCollectionCreator` — which collection / starred list it appears in for new projects.
 - Possibly `ChipTypeHelper` if it needs special classification (e.g. bus handling).
@@ -115,7 +122,7 @@ To add or change a built-in chip you typically touch several places, kept in syn
 
 ### VCC / GND (constant sources)
 
-`ChipType.Vcc` / `ChipType.Gnd` — no input pins, one 1-bit output permanently held HIGH / LOW (`ProcessBuiltinChip`, alongside CLOCK which is likewise sourceless, so the "ready" logic already handles zero-input chips). They are **components, not I/O pins**, so they never appear in the chip's interface — that is the point: they let a circuit hard-wire values (LUTs, tri-state ROM matrices, tie-offs) without inflating its input count. `ChipTypeHelper.IsConstantType` classifies them. They are in the `BASIC` collection and, being builtins, are automatically in the Ask Claude `add_components` palette (described in `CircuitExporter.BuiltinDesc`).
+`ChipType.Vcc` / `ChipType.Gnd` — no input pins, one 1-bit output permanently held HIGH / LOW (`SimProgram.Step`, alongside CLOCK which is likewise sourceless; a zero-input chip is always ready). They are **components, not I/O pins**, so they never appear in the chip's interface — that is the point: they let a circuit hard-wire values (LUTs, tri-state ROM matrices, tie-offs) without inflating its input count. `ChipTypeHelper.IsConstantType` classifies them. They are in the `BASIC` collection and, being builtins, are automatically in the Ask Claude `add_components` palette (described in `CircuitExporter.BuiltinDesc`).
 
 ## Fork additions ("Ask Claude" AI assistant + editor QoL)
 
@@ -140,7 +147,7 @@ Lets the assistant (and the truth-table view) **run the real simulator on an iso
 - `RunSequence` = the `test_sequence` tool: applies a list of steps (`set` input values, then N ticks) and reports, after each step, output pins + everything **visible** on the chip face — LED ON/off, 7-segment (decoded to the character it forms, else the lit segments), RGB/dot displays as a 16×16 ASCII grid (only reprinted when it changes), plus optional internal probe pins (`watch`). Sim state persists between steps, so sequential circuits (latches, counters, RAM) behave as in the app. Report only ever mentions things that exist (no "no LED" filler) — keep it token-lean.
 - Displays are enumerated exactly like `DevSceneDrawer.DrawDisplay` (builtin display chips placed directly + displays exposed on a custom sub-chip's face, recursively), resolved in the sim by their subchip-ID path.
 - KEY chips are pressable: `SimKeyboardHelper.SetVirtualKeys` overrides the real keyboard for the duration of a test (always cleared in `finally`, and in `UnityMain.ResetStatics`).
-- Everything runs with the sim thread parked via `Project.RunWithSimulationPaused`, and restores `Simulator.simulationFrame` / forces `needsOrderPass` afterwards (the `Simulator` is static).
+- Everything runs with the sim thread parked via `Project.RunWithSimulationPaused`. The harness builds its own tree (its own `SimProgram`), and the per-run `Simulator` statics are thread-static, so the live simulation's state is never disturbed.
 - The system prompt makes testing **mandatory** before Claude declares a module finished (truth_table if combinational, test_sequence if sequential).
 - The system prompt has a **strict scope rule** ("PERIMETRE"): do exactly what is asked and nothing more — no unrequested fixes, no "while I'm at it" wiring, no tidying; anything else noticed is reported in one line, not acted on. Added after "relie les reset" on an 8-bit register also wired the data lines. The quick-mode note asks for the narrowest reading of an ambiguous request.
 
@@ -256,7 +263,15 @@ gain came from the don't-care pass or from the two package-aware passes.
 
 #### Simulation speed bench
 
-`Assets/Editor/SimBench.cs` (`-executeMethod SimBench.Run -benchProject "PC" -benchChip "CPU"`) builds the isolated sim of a chip, counts the sim tree and times 500 / 2000 steps. Measured 2026-09-27: `CPU` = 63 322 sim chips (44 408 builtin leaves, 213 294 pins), 7.3 ms/step → ~136 steps/s max against a 2000 target; `ALU8` 0.09 ms/step (~10 700/s); `Registre8` 0.016 ms/step (~64 000/s). Every step visits every chip of the tree, so cost is proportional to the flattened size.
+`Assets/Editor/SimBench.cs` (`-executeMethod SimBench.Run -benchProject "PC" -benchChip "CPU"`) builds the isolated sim of a chip, counts the sim tree and times 500 / 2000 steps. Measured 2026-09-27 on the tree walker (before the `SimProgram` rewrite) and on the compiled core (after):
+
+| chip | sim tree | before | after | factor |
+|---|---|---|---|---|
+| `CPU` | 63 322 chips, 44 408 builtin leaves, 213 294 pins | 7.3 ms/step, ~136 steps/s | 0.35 ms/step, ~2 900 steps/s | ×21 |
+| `ALU8` | 2 170 chips | 0.09 ms/step, ~10 700/s | 0.0035 ms/step, ~296 000/s | ×27 |
+| `Registre8` | 444 chips | 0.016 ms/step, ~64 000/s | 0.001 ms/step, ~940 000/s | ×15 |
+
+A step costs about 8 ns per builtin gate; custom-chip wrappers and single-source pins cost nothing. The remaining lever is skipping gates whose inputs did not change (most of a CPU is idle between clock edges), bounded by the floating-line noise, which changes every step wherever nothing drives a line.
 
 #### Regression bench
 

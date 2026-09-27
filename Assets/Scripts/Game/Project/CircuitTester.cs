@@ -242,7 +242,7 @@ namespace DLS.Game
                         if (clockInputIdx >= 0 && (cycles > 0 || plan[s].Exists(a => a.kind == 2))) inputStates[clockInputIdx] = (ushort)clockLevel;
                         for (int t = 0; t < n; t++)
                         {
-                            for (int i = 0; i < inputStates.Length; i++) PinState.Set(ref root.InputPins[i].State, inputStates[i], 0);
+                            for (int i = 0; i < inputStates.Length; i++) root.InputPins[i].State = PinState.Make(inputStates[i], 0);
                             Simulator.RunSimulationStep(root, Array.Empty<DevPinInstance>(), audio);
                         }
                     }

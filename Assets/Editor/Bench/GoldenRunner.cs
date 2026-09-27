@@ -95,9 +95,10 @@ namespace DLS.Bench
                 rec.inputVectors.Add(v);
             }
 
-            // three runs with different sim seeds: only what agrees is asserted
+            // five runs with different sim seeds: only what agrees is asserted (a random conflict that happened
+            // to resolve the same way in every run would otherwise be recorded as a fact)
             var runs = new List<Trace>();
-            foreach (int simSeed in new[] { rec.seed, rec.seed + 101, rec.seed + 202 })
+            foreach (int simSeed in new[] { rec.seed, rec.seed + 101, rec.seed + 202, rec.seed + 303, rec.seed + 404 })
                 runs.Add(Play(desc, lib, rec, simSeed));
 
             rec.clockComponent = runs[0].hasClock;
@@ -219,7 +220,7 @@ namespace DLS.Bench
                 for (int s = 0; s < rec.steps; s++)
                 {
                     ushort[] v = rec.inputVectors[s];
-                    for (int i = 0; i < v.Length && i < root.InputPins.Length; i++) PinState.Set(ref root.InputPins[i].State, v[i], 0);
+                    for (int i = 0; i < v.Length && i < root.InputPins.Length; i++) root.InputPins[i].State = PinState.Make(v[i], 0);
                     if (t.hasClock) Simulator.forcedClockState = s & 1;
 
                     for (int k = 0; k < rec.ticksPerStep; k++) Simulator.RunSimulationStep(root, Array.Empty<DevPinInstance>(), audio);

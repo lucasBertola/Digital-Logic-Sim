@@ -13,6 +13,11 @@ namespace DLS.Simulation
 		// Mask for single bit value (bit state, and tristate flag)
 		public const uint SingleBitMask = 1 | (1 << 16);
 		
+		// A pin nobody drives: floating (all tristate flags set), value LOW
+		public const uint FloatingLow = 0xFFFF0000u;
+
+		public static uint Make(ushort bitStates, ushort tristateFlags) => (uint)(bitStates | (tristateFlags << 16));
+
 		public static ushort GetBitStates(uint state) => (ushort)state;
 		public static ushort GetTristateFlags(uint state) => (ushort)(state >> 16);
 

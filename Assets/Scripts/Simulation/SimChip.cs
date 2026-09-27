@@ -4,6 +4,9 @@ using DLS.Description;
 
 namespace DLS.Simulation
 {
+	// One chip of the simulation TREE: structure (pins, sub-chips, connections) and internal state. The tree
+	// is what the editor addresses and modifies; a step runs on the compiled SimProgram of the root chip
+	// (rebuilt whenever the structure changes), and pin states read through to it.
 	public class SimChip
 	{
 		public readonly ChipType ChipType;
@@ -14,12 +17,15 @@ namespace DLS.Simulation
 		public readonly uint[] InternalState = Array.Empty<uint>();
 		public readonly bool IsBuiltin;
 		public SimPin[] InputPins = Array.Empty<SimPin>();
-		public int numConnectedInputs;
-
-		public int numInputsReady;
 		public SimPin[] OutputPins = Array.Empty<SimPin>();
 		public SimChip[] SubChips = Array.Empty<SimChip>();
 
+		// Compiled form (only meaningful on the chip a simulation is run on)
+		public SimProgram Program;
+
+		// Compile scratch (SimProgram.Compile)
+		internal int compileIndex;
+		internal SimChip compileParent;
 
 		public SimChip()
 		{
@@ -87,31 +93,6 @@ namespace DLS.Simulation
 
 		public void UpdateInternalState(uint[] source) => Array.Copy(source, InternalState, InternalState.Length);
 
-
-		public void Sim_PropagateInputs()
-		{
-			int length = InputPins.Length;
-
-			for (int i = 0; i < length; i++)
-			{
-				InputPins[i].PropagateSignal();
-			}
-		}
-
-		public void Sim_PropagateOutputs()
-		{
-			int length = OutputPins.Length;
-
-			for (int i = 0; i < length; i++)
-			{
-				OutputPins[i].PropagateSignal();
-			}
-
-			numInputsReady = 0; // Reset for next frame
-		}
-
-		public bool Sim_IsReady() => numInputsReady == numConnectedInputs;
-		
 		public (bool success, SimChip chip) TryGetSubChipFromID(int id)
 		{
 			// Todo: address possible errors if accessing from main thread while being modified on sim thread?
@@ -237,13 +218,11 @@ namespace DLS.Simulation
 			try
 			{
 				SimPin sourcePin = GetSimPinFromAddress(sourcePinAddress);
-				(SimPin targetPin, SimChip targetChip) = GetSimPinFromAddressWithChip(targetPinAddress);
-
+				SimPin targetPin = GetSimPinFromAddress(targetPinAddress);
 
 				Array.Resize(ref sourcePin.ConnectedTargetPins, sourcePin.ConnectedTargetPins.Length + 1);
 				sourcePin.ConnectedTargetPins[^1] = targetPin;
 				targetPin.numInputConnections++;
-				if (targetPin.numInputConnections == 1 && targetChip != null) targetChip.numConnectedInputs++;
 			}
 			catch (Exception)
 			{
@@ -255,7 +234,7 @@ namespace DLS.Simulation
 		public void RemoveConnection(PinAddress sourcePinAddress, PinAddress targetPinAddress)
 		{
 			SimPin sourcePin = GetSimPinFromAddress(sourcePinAddress);
-			(SimPin removeTargetPin, SimChip targetChip) = GetSimPinFromAddressWithChip(targetPinAddress);
+			SimPin removeTargetPin = GetSimPinFromAddress(targetPinAddress);
 
 			// Remove first matching connection
 			for (int i = 0; i < sourcePin.ConnectedTargetPins.Length; i++)
@@ -266,16 +245,8 @@ namespace DLS.Simulation
 					Array.Copy(sourcePin.ConnectedTargetPins, 0, newArray, 0, i);
 					Array.Copy(sourcePin.ConnectedTargetPins, i + 1, newArray, i, sourcePin.ConnectedTargetPins.Length - i - 1);
 					sourcePin.ConnectedTargetPins = newArray;
-
 					removeTargetPin.numInputConnections -= 1;
-					if (removeTargetPin.numInputConnections == 0)
-					{
-						PinState.SetAllDisconnected(ref removeTargetPin.State);
-						removeTargetPin.latestSourceID = -1;
-						removeTargetPin.latestSourceParentChipID = -1;
-						if (targetChip != null) removeTargetPin.parentChip.numConnectedInputs--;
-					}
-
+					// (a pin left without a source becomes "floating, low" when the program is recompiled)
 					break;
 				}
 			}

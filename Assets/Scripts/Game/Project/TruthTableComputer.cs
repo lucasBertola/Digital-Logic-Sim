@@ -67,7 +67,7 @@ namespace DLS.Game
                         cursor -= w;
                         uint v = (uint)((c >> cursor) & ((1L << w) - 1));
                         ins[i] = v;
-                        PinState.Set(ref root.InputPins[i].State, (ushort)v, 0);
+                        root.InputPins[i].State = PinState.Make((ushort)v, 0);
                     }
 
                     for (int s = 0; s < 8; s++)
