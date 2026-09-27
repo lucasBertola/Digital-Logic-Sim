@@ -110,6 +110,14 @@ namespace DLS.Game
 			}
 		}
 
+		// Bench hook: what Update() does for the simulation (publish the input pins, advance the frame count so
+		// the sim thread syncs the dev pins) without any UI or input handling.
+		public void TickMainThreadForTests()
+		{
+			inputPins = editModeChip.GetInputPins();
+			mainThreadFrameCount++;
+		}
+
 		public void StartSimulation()
 		{
 			if (debug_runSimMainThread)

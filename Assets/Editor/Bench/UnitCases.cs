@@ -36,8 +36,9 @@ namespace DLS.Bench
 
         // ---------------- helpers ----------------
 
-        class Circuit
+        internal class Circuit
         {
+            public readonly SimAudio audio = new();
             public ChipDescription desc;
             public ChipLibrary lib;
             public SimChip root, target;
@@ -47,16 +48,24 @@ namespace DLS.Bench
             public uint Out(string output) => target.OutputPins[outIdx[output]].State;
             public int OutBit(string output) => (int)(Out(output) & 1);
             public bool OutFloating(string output) => (PinState.GetTristateFlags(Out(output)) & 1) == 1;
-            public void Step(int n = 1) { for (int i = 0; i < n; i++) Simulator.RunSimulationStep(root, Array.Empty<DevPinInstance>(), new SimAudio()); }
+            public void Step(int n = 1) { for (int i = 0; i < n; i++) Simulator.RunSimulationStep(root, Array.Empty<DevPinInstance>(), audio); }
+            // value of a multi-bit output, -1 when any of its bits floats
+            public int OutValue(string output)
+            {
+                int width = (int)desc.OutputPins[outIdx[output]].BitCount, mask = (1 << width) - 1;
+                uint st = Out(output);
+                return (PinState.GetTristateFlags(st) & mask) != 0 ? -1 : PinState.GetBitStates(st) & mask;
+            }
         }
 
         // Builds a chip from lambdas and wraps it in the isolated harness
-        static Circuit Build(string name, string[] inputs, string[] outputs, Action<Builder> build, ChipLibrary lib = null, int seed = 1)
+        // Pin names may carry a bit width: "DATA:8" (1, 4 or 8; default 1)
+        internal static Circuit Build(string name, string[] inputs, string[] outputs, Action<Builder> build, ChipLibrary lib = null, int seed = 1)
         {
             lib ??= BenchProject.BuiltinsOnly();
             var b = new Builder(lib);
-            b.inputPins = ChipEmitHelper.MakePins(inputs, true, ref b.nextID);
-            b.outputPins = ChipEmitHelper.MakePins(outputs, false, ref b.nextID);
+            b.inputPins = MakePins(inputs, true, ref b.nextID, out inputs);
+            b.outputPins = MakePins(outputs, false, ref b.nextID, out outputs);
             build(b);
             ChipDescription desc = ChipEmitHelper.Assemble(name, Color.gray, NameDisplayLocation.Centre, Vector2.zero, b.inputPins, b.outputPins, b.subChips, b.wires);
 
@@ -70,7 +79,19 @@ namespace DLS.Bench
             return c;
         }
 
-        class Builder
+        static PinDescription[] MakePins(string[] spec, bool isInput, ref int nextID, out string[] names)
+        {
+            names = spec.Select(s => s.Split(':')[0]).ToArray();
+            PinDescription[] pins = ChipEmitHelper.MakePins(names, isInput, ref nextID);
+            for (int i = 0; i < spec.Length; i++)
+            {
+                string[] parts = spec[i].Split(':');
+                if (parts.Length > 1) pins[i].BitCount = parts[1] == "8" ? PinBitCount.Bit8 : parts[1] == "4" ? PinBitCount.Bit4 : PinBitCount.Bit1;
+            }
+            return pins;
+        }
+
+        internal class Builder
         {
             public readonly ChipLibrary lib;
             public int nextID = 1;
@@ -86,6 +107,7 @@ namespace DLS.Bench
             public PinAddress Input(string name) => new(inputPins.First(p => p.Name == name).ID, 0);
             public PinAddress Output(string name) => new(outputPins.First(p => p.Name == name).ID, 0);
             public void Wire(PinAddress from, PinAddress to) => wires.Add(ChipEmitHelper.Wire(from, to));
+            public uint[] Data(int chipID) => subChips.First(s => s.ID == chipID).InternalData; // ROM contents, pulse width, key...
         }
 
         static string Expect(bool cond, string msg) => cond ? null : msg;

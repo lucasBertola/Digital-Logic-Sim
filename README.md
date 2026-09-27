@@ -93,10 +93,13 @@ the regression bench and aborts if it fails. See `CLAUDE.md` for the architectur
 ### Tests
 `runTests.bat` runs the regression bench (`Assets/Editor/Bench/`): every chip of a fixture project committed under
 `TestData/Bench/` (a copy of a CPU project: ALU, RAM, registers, latches, generated packages…) is simulated on a
-seeded random stimulus and compared to recorded goldens (outputs and the output pins of every sub-chip), plus
-hand-written cases for the simulator rules (tri-state, floating lines, clock, latches, live modification) and a
-reload round-trip of every chip. All cases are seeded and run in parallel: about 2 s for the cases, plus Unity
-start-up. `runTests.bat record` re-records the goldens after an intended behaviour change.
+seeded random stimulus and compared to recorded goldens (outputs and the output pins of every sub-chip); directed
+sequences with known answers (registers, RAMs, latches, a CPU micro-program, every ALU operation, exhaustive
+checks of the combinational chips); one case per builtin chip (pulse, ROM, RAM, displays, buzzer, buses,
+merge/split); hand-written cases for the simulator rules (tri-state, floating lines, clock, live modification);
+a real project driven through its simulation thread; and a reload round-trip of every chip. All 142 cases are
+seeded and run in parallel: about 3.5 s, plus Unity start-up. `runTests.bat record` re-records the goldens after
+an intended behaviour change.
 
 ---
 

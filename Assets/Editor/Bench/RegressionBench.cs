@@ -38,6 +38,7 @@ namespace DLS.Bench
             Stopwatch total = Stopwatch.StartNew();
             var results = new ConcurrentBag<(string name, string error, double ms)>();
             var cases = new List<(string name, Func<string> run)>();
+            var serial = new List<(string name, Func<string> run)>(); // run after the parallel batch, one at a time
             string fatal = null;
 
             try
@@ -87,7 +88,13 @@ namespace DLS.Bench
                         }
                     }
 
-                    if (!record) cases.AddRange(UnitCases.All(lib, chips));
+                    if (!record)
+                    {
+                        cases.AddRange(UnitCases.All(lib, chips));
+                        cases.AddRange(BuiltinCases.All());
+                        cases.AddRange(DirectedCases.All(lib, chips));
+                        serial.AddRange(ProjectCases.All(dir));
+                    }
                 }
             }
             catch (Exception e) { fatal = e.ToString(); }
@@ -102,6 +109,14 @@ namespace DLS.Bench
                     catch (Exception e) { err = "EXCEPTION " + e.GetType().Name + ": " + e.Message + " @ " + Frames(e); }
                     results.Add((c.name, err, w.Elapsed.TotalMilliseconds));
                 });
+                foreach (var c in serial)
+                {
+                    Stopwatch w = Stopwatch.StartNew();
+                    string err;
+                    try { err = c.run(); }
+                    catch (Exception e) { err = "EXCEPTION " + e.GetType().Name + ": " + e.Message + " @ " + Frames(e); }
+                    results.Add((c.name, err, w.Elapsed.TotalMilliseconds));
+                }
             }
 
             total.Stop();
