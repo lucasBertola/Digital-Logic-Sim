@@ -12,6 +12,9 @@ using Debug = UnityEngine.Debug;
 // reports ms/step, achievable steps/s, how many gates each step actually ran, and the size of the sim tree.
 //   Unity.exe -projectPath <proj> -executeMethod SimBench.Run -benchProject "PC" -benchChip "CPU" [-benchSet "OE_entree=1,ENTREE=5"] [-benchToggle "clock"] -quit -logFile <log>
 // -benchToggle flips the named 1-bit input every step (activity: a step where nothing changes costs nothing).
+// -benchBatch: step through Simulator.RunSimulationSteps (batches of 256, idle steps skipped) like the live sim thread.
+// -benchSettle: with a builtin CLOCK, measures how many steps after each clock edge the chip's pins keep changing
+//   (the minimum "steps per clock tick" the montage needs), over 40 edges, inputs as held by -benchSet.
 // -benchScenario cpu: drives the user's CPU chip through a micro-program in a loop (A = A + 1; MAR = A;
 //   RAM[MAR] = A), clock edges included, so registers, ALU, bus, decoders and RAM all work every cycle.
 //   This is the number to compare cores on: the tree walker cost the same whatever the activity.
@@ -55,6 +58,8 @@ public static class SimBench
                 }
             }
 
+            bool batch = GetArg("-benchBatch") != null;
+            if (batch) sb.Append("batched stepping (idle steps skipped)\n");
             string toggle = GetArg("-benchToggle");
             int toggleIdx = string.IsNullOrEmpty(toggle) ? -1 : Array.FindIndex(desc.InputPins, p => p.Name == toggle.Trim());
             if (!string.IsNullOrEmpty(toggle)) sb.Append($"toggling input {toggle} every step{(toggleIdx < 0 ? " (NOT FOUND)" : "")}\n");
@@ -101,6 +106,43 @@ public static class SimBench
                 scriptHold--;
             }
 
+            if (GetArg("-benchSettle") != null)
+            {
+                SimAudio a = new();
+                Simulator.stepsPerClockTransition = 400; // long enough for anything to settle
+                for (int i = 0; i < 800; i++) Simulator.RunSimulationStep(root, Array.Empty<DevPinInstance>(), a);
+                var watched = new System.Collections.Generic.List<SimPin>();
+                void Collect(SimChip c, int depth) { watched.AddRange(c.InputPins); watched.AddRange(c.OutputPins); if (depth < 1) foreach (SimChip s in c.SubChips) Collect(s, depth + 1); }
+                Collect(CircuitTester.TargetOf(root), 0);
+                var snapshot = new uint[watched.Count];
+                int worst = 0, edges = 0; var hist = new System.Collections.Generic.Dictionary<int, int>();
+                while (edges < 40)
+                {
+                    Simulator.RunSimulationStep(root, Array.Empty<DevPinInstance>(), a);
+                    if (Simulator.simulationFrame % 400 != 0) continue; // this step is a clock edge
+                    edges++;
+                    int last = 0;
+                    for (int p = 0; p < watched.Count; p++) snapshot[p] = watched[p].State;
+                    for (int t = 1; t < 380; t++)
+                    {
+                        Simulator.RunSimulationStep(root, Array.Empty<DevPinInstance>(), a);
+                        bool changed = false;
+                        for (int p = 0; p < watched.Count; p++) { uint st = watched[p].State; if ((st & 0xFFFF) != (snapshot[p] & 0xFFFF) && (st >> 16) == 0) { changed = true; snapshot[p] = st; } else snapshot[p] = st; }
+                        if (changed) last = t;
+                    }
+                    hist[last] = hist.TryGetValue(last, out int cnt) ? cnt + 1 : 1;
+                    if (last > worst) worst = last;
+                }
+                var h = new System.Collections.Generic.List<string>();
+                foreach (var kv in hist) h.Add($"{kv.Key} steps x{kv.Value}");
+                h.Sort();
+                sb.Append($"settle after a clock edge (pins of the chip and of its direct sub-chips, driven values only): worst {worst} steps over {edges} edges; {string.Join(", ", h)}\n");
+                sb.Append($"=> a safe 'steps per clock tick' for this montage is about {worst + 2} (currently {project.description.Prefs_SimStepsPerClockTick})\n");
+                Debug.Log(sb.ToString());
+                EditorApplication.Exit(0);
+                return;
+            }
+
             SimAudio audio = new();
             Simulator.stepsPerClockTransition = project.description.Prefs_SimStepsPerClockTick;
             // warm-up (first steps include the compile)
@@ -118,7 +160,8 @@ public static class SimBench
                 {
                     if (toggleIdx >= 0) { toggleState ^= 1; root.InputPins[toggleIdx].State = PinState.Make((ushort)toggleState, 0); }
                     ScenarioStep();
-                    Simulator.RunSimulationStep(root, Array.Empty<DevPinInstance>(), audio);
+                    if (batch && loop.Count == 0 && toggleIdx < 0) { i += Simulator.RunSimulationSteps(root, Array.Empty<DevPinInstance>(), audio, Math.Min(256, n - i)) - 1; }
+                    else Simulator.RunSimulationStep(root, Array.Empty<DevPinInstance>(), audio);
                     gatesRun += root.Program.GatesRunLastStep;
                 }
                 w.Stop();

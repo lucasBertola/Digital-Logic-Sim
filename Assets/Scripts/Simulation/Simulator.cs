@@ -79,6 +79,7 @@ namespace DLS.Simulation
 			pcg_rngState = (uint)(testRng ?? rng).Next();
 			canDynamicReorderThisFrame = simulationFrame % 100 == 0; // re-draw the random picks of some feedback loops
 			simulationFrame++;
+			WrapFrame();
 
 			if (needsOrderPass || rootSimChip.Program == null)
 			{
@@ -90,24 +91,67 @@ namespace DLS.Simulation
 				rootSimChip.Program.Reschedule();
 			}
 
-			// Step 1) Get player-controlled input states and copy values to the sim
-			foreach (DevPinInstance input in inputPins)
-			{
-				try
-				{
-					SimPin simPin = rootSimChip.GetSimPinFromAddress(input.Pin.Address);
-					simPin.State = input.Pin.PlayerInputState;
-				}
-				catch (Exception)
-				{
-					// Possible for sim to be temporarily out of sync since running on separate threads, so just ignore failure to find pin.
-				}
-			}
+			// Step 1) Get player-controlled input states and copy values to the sim (pins looked up once per array)
+			CopyPlayerInputs(rootSimChip, inputPins);
 
 			// Step 2) Run every gate
 			rootSimChip.Program.Step(audioState);
 
 			UpdateAudioState();
+		}
+
+		// The frame counter only matters modulo the clock period (parity of frame / period) and modulo 100 (the
+		// reschedule cadence): at 300 000 steps/s an int would overflow in two hours, so it is wrapped by a multiple
+		// of both, which changes nothing observable.
+		public const int FrameWrapAt = 1_000_000_000;
+		static void WrapFrame()
+		{
+			if (simulationFrame < FrameWrapAt) return;
+			int cycle = 200 * Math.Max(1, stepsPerClockTransition);
+			simulationFrame -= cycle * (simulationFrame / cycle - 1000);
+		}
+
+		static void CopyPlayerInputs(SimChip rootSimChip, DevPinInstance[] inputPins)
+		{
+			SimProgram prog = rootSimChip.Program;
+			if (!ReferenceEquals(prog.InputPinsArray, inputPins) || prog.InputSimPins.Length != inputPins.Length)
+			{
+				var pins = new SimPin[inputPins.Length];
+				for (int i = 0; i < inputPins.Length; i++)
+				{
+					// Possible for sim to be temporarily out of sync since running on separate threads, so just ignore failure to find pin.
+					try { pins[i] = rootSimChip.GetSimPinFromAddress(inputPins[i].Pin.Address); } catch (Exception) { pins[i] = null; }
+				}
+				prog.InputSimPins = pins;
+				prog.InputPinsArray = inputPins;
+			}
+			SimPin[] simPins = prog.InputSimPins;
+			for (int i = 0; i < simPins.Length; i++)
+			{
+				SimPin p = simPins[i];
+				if (p != null) p.State = inputPins[i].Pin.PlayerInputState;
+			}
+		}
+
+		// Runs up to maxSteps steps, SKIPPING the idle ones: when nothing is pending and no clock transition or
+		// noise re-draw is due, the state after k steps is the state now, so the frame counter just advances.
+		// Returns the number of steps accounted for (>= 1). The live sim thread uses this; tests step one by one.
+		public static int RunSimulationSteps(SimChip rootSimChip, DevPinInstance[] inputPins, SimAudio audioState, int maxSteps)
+		{
+			int done = 0;
+			while (done < maxSteps)
+			{
+				RunSimulationStep(rootSimChip, inputPins, audioState);
+				done++;
+				CopyPlayerInputs(rootSimChip, inputPins); // so that a change made meanwhile is seen by IdleSteps
+				int idle = rootSimChip.Program.IdleSteps(maxSteps - done);
+				if (idle <= 0) continue;
+				rootSimChip.Program.SkipIdleSteps(idle);
+				simulationFrame += idle;
+				WrapFrame();
+				done += idle;
+			}
+			return done;
 		}
 
 		public static void UpdateInPausedState()

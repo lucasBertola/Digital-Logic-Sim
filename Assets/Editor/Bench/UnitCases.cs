@@ -33,6 +33,11 @@ namespace DLS.Bench
             ("same seed => same outputs on a sequential fixture (Bascule D)", () => Deterministic(fixtures, fixtureChips)),
             ("live modification: adding a NOT via the sim queue is applied", LiveModification),
             ("input pin values are saved with the chip and restored on load", () => InputValuesPersist(fixtures, fixtureChips)),
+            ("batched stepping (idle skipping): clock + pulse identical to single stepping", BatchedClockPulse),
+            ("batched stepping (idle skipping): a key press is seen", BatchedKey),
+            ("batched stepping (idle skipping): clock running while an input moves (a game)", BatchedGameInput),
+            ("batched stepping (idle skipping): a bus conflict keeps re-drawing", BatchedConflictNeverIdles),
+            ("frame counter wrap keeps the clock phase", FrameWrapKeepsClockPhase),
         };
 
         // ---------------- helpers ----------------
@@ -50,6 +55,7 @@ namespace DLS.Bench
             public int OutBit(string output) => (int)(Out(output) & 1);
             public bool OutFloating(string output) => (PinState.GetTristateFlags(Out(output)) & 1) == 1;
             public void Step(int n = 1) { for (int i = 0; i < n; i++) Simulator.RunSimulationStep(root, Array.Empty<DevPinInstance>(), audio); }
+            public int StepBatched(int n) { int done = 0; while (done < n) done += Simulator.RunSimulationSteps(root, Array.Empty<DevPinInstance>(), audio, n - done); return done; }
             // value of a multi-bit output, -1 when any of its bits floats
             public int OutValue(string output)
             {
@@ -401,6 +407,141 @@ namespace DLS.Bench
                 uint expected = p.ID == ins[0].ID || p.ID == ins[2].ID ? 1u : 0u;
                 if (p.Pin.PlayerInputState != expected) return $"input {p.Name} reloaded as {p.Pin.PlayerInputState}, expected {expected}";
             }
+            return null;
+        }
+
+        // ---- batched stepping: the live sim thread skips idle steps; the state must be the one single steps give ----
+        static Circuit ClockPulseCircuit() => Build("t_batch_cp", new string[0], new[] { "C", "P" }, b =>
+        {
+            int clk = b.Add(ChipType.Clock), p = b.Add(ChipType.Pulse);
+            b.Data(p)[0] = 3;
+            b.Wire(b.Out(clk, 0), b.Output("C"));
+            b.Wire(b.Out(clk, 0), b.In(p, 0));
+            b.Wire(b.Out(p, 0), b.Output("P"));
+        });
+
+        static string BatchedClockPulse()
+        {
+            // clock period 10 steps per level: rising edge at step 21 (frame 20), pulse high for 3 steps
+            foreach (int steps in new[] { 5, 12, 21, 22, 24, 25, 40, 61 })
+            {
+                Circuit single = ClockPulseCircuit(); Simulator.stepsPerClockTransition = 10; single.Step(steps);
+                Circuit batched = ClockPulseCircuit(); Simulator.stepsPerClockTransition = 10;
+                int done = batched.StepBatched(steps);
+                if (done != steps) return $"batched run accounted {done} steps instead of {steps}";
+                if (single.OutBit("C") != batched.OutBit("C") || single.OutBit("P") != batched.OutBit("P"))
+                    return $"after {steps} steps: single C={single.OutBit("C")} P={single.OutBit("P")}, batched C={batched.OutBit("C")} P={batched.OutBit("P")}";
+            }
+            return null;
+        }
+
+        // A game: the clock runs, and an outside element (the player) moves an input at arbitrary moments.
+        // The circuit: N = NAND(A, clock), P = a 3-step pulse on N's rising edges, L = an SR latch set by A and
+        // reset by the clock. Played once step by step and once in batches, with the input changed at the same
+        // step numbers; every checkpoint must agree.
+        static Circuit GameCircuit() => Build("t_batch_game", new[] { "A" }, new[] { "N", "P", "L" }, b =>
+        {
+            int clk = b.Add(ChipType.Clock), n = b.Add(ChipType.Nand), p = b.Add(ChipType.Pulse);
+            b.Data(p)[0] = 3;
+            b.Wire(b.Input("A"), b.In(n, 0)); b.Wire(b.Out(clk, 0), b.In(n, 1));
+            b.Wire(b.Out(n, 0), b.Output("N"));
+            b.Wire(b.Out(n, 0), b.In(p, 0)); b.Wire(b.Out(p, 0), b.Output("P"));
+            // SR latch (active-low inputs): S = NAND(A, A) i.e. NOT A ; R = NAND(clock, clock)
+            int notA = b.Add(ChipType.Nand), notC = b.Add(ChipType.Nand), q = b.Add(ChipType.Nand), qn = b.Add(ChipType.Nand);
+            b.Wire(b.Input("A"), b.In(notA, 0)); b.Wire(b.Input("A"), b.In(notA, 1));
+            b.Wire(b.Out(clk, 0), b.In(notC, 0)); b.Wire(b.Out(clk, 0), b.In(notC, 1));
+            b.Wire(b.Out(notA, 0), b.In(q, 0)); b.Wire(b.Out(qn, 0), b.In(q, 1));
+            b.Wire(b.Out(notC, 0), b.In(qn, 0)); b.Wire(b.Out(q, 0), b.In(qn, 1));
+            b.Wire(b.Out(q, 0), b.Output("L"));
+        });
+
+        static string BatchedGameInput()
+        {
+            // (step, value of A): the player's moves, at moments chosen to fall before, on and after clock edges
+            var moves = new (int step, int a)[] { (0, 0), (3, 1), (9, 0), (10, 1), (17, 0), (23, 1), (24, 1), (31, 0), (44, 1), (52, 0), (75, 1) };
+            var checkpoints = new List<int> { 5, 9, 10, 11, 13, 19, 21, 23, 25, 27, 33, 40, 47, 60, 77, 90 };
+            string Play(bool batched, Dictionary<int, string> log)
+            {
+                Circuit c = GameCircuit(); Simulator.stepsPerClockTransition = 10;
+                int step = 0, m = 0;
+                var stops = new SortedSet<int>(checkpoints);
+                foreach (var mv in moves) stops.Add(mv.step);
+                foreach (int stop in stops)
+                {
+                    int run = stop - step;
+                    if (run > 0) { if (batched) { int done = c.StepBatched(run); if (done != run) return $"batched run accounted {done} of {run}"; } else c.Step(run); step = stop; }
+                    while (m < moves.Length && moves[m].step == stop) { c.Set("A", moves[m].a); m++; }
+                    if (checkpoints.Contains(stop)) log[stop] = $"N={c.OutBit("N")} P={c.OutBit("P")} L={c.OutBit("L")}";
+                }
+                return null;
+            }
+            var single = new Dictionary<int, string>(); var batch = new Dictionary<int, string>();
+            string err = Play(false, single) ?? Play(true, batch);
+            if (err != null) return err;
+            foreach (int cp in checkpoints)
+                if (single[cp] != batch[cp]) return $"at step {cp}: single {single[cp]}, batched {batch[cp]}";
+            return null;
+        }
+
+        static string BatchedKey()
+        {
+            var c = Build("t_batch_key", new string[0], new[] { "Q" }, b =>
+            {
+                int k = b.Add(ChipType.Key);
+                b.Data(k)[0] = 'K';
+                b.Wire(b.Out(k, 0), b.Output("Q"));
+            });
+            try
+            {
+                SimKeyboardHelper.SetVirtualKeys(new System.Collections.Generic.HashSet<char>());
+                c.StepBatched(300);
+                if (c.OutBit("Q") != 0) return "key output high while no key is held";
+                SimKeyboardHelper.SetVirtualKeys(new System.Collections.Generic.HashSet<char> { 'K' }); // pressed between two batches
+                c.StepBatched(300);
+                if (c.OutBit("Q") != 1) return "key press not seen by batched stepping";
+                SimKeyboardHelper.SetVirtualKeys(new System.Collections.Generic.HashSet<char>());
+                c.StepBatched(300);
+                if (c.OutBit("Q") != 0) return "key release not seen by batched stepping";
+                return null;
+            }
+            finally { SimKeyboardHelper.SetVirtualKeys(null); }
+        }
+
+        static string BatchedConflictNeverIdles()
+        {
+            // two enabled buffers drive 0 and 1 on one pin: the conflict is re-drawn every step, so over a
+            // batch every step really runs and both values are seen (the frame count is exact either way)
+            var c = Build("t_batch_conflict", new[] { "A", "B", "E" }, new[] { "Q" }, b =>
+            {
+                int bufA = b.Add(ChipType.TriStateBuffer), bufB = b.Add(ChipType.TriStateBuffer);
+                b.Wire(b.Input("A"), b.In(bufA, 0)); b.Wire(b.Input("E"), b.In(bufA, 1));
+                b.Wire(b.Input("B"), b.In(bufB, 0)); b.Wire(b.Input("E"), b.In(bufB, 1));
+                b.Wire(b.Out(bufA, 0), b.Output("Q")); b.Wire(b.Out(bufB, 0), b.Output("Q"));
+            });
+            c.Set("A", 0); c.Set("B", 1); c.Set("E", 1);
+            int zeros = 0, ones = 0;
+            for (int i = 0; i < 64; i++) { c.StepBatched(1); if (c.OutBit("Q") == 0) zeros++; else ones++; }
+            if (zeros == 0 || ones == 0) return $"conflict resolved the same way 64 times ({zeros} zeros, {ones} ones)";
+            int before = Simulator.simulationFrame;
+            int done = c.StepBatched(200);
+            return Expect(done == 200 && Simulator.simulationFrame == before + 200, "batched stepping did not account exactly 200 steps");
+        }
+
+        static string FrameWrapKeepsClockPhase()
+        {
+            // the clock level depends on frame / period: wrapping the counter must not change it
+            Circuit c = ClockPulseCircuit(); Simulator.stepsPerClockTransition = 10;
+            Simulator.simulationFrame = Simulator.FrameWrapAt - 7;
+            var levels = new System.Text.StringBuilder();
+            long unwrapped = Simulator.FrameWrapAt - 7;
+            for (int i = 0; i < 40; i++)
+            {
+                c.Step(1); unwrapped++;
+                int expected = ((unwrapped / 10) & 1) == 0 ? 1 : 0;
+                if (c.OutBit("C") != expected) return $"step {i + 1}: clock {c.OutBit("C")}, expected {expected} (frame counter {Simulator.simulationFrame})";
+                levels.Append(c.OutBit("C"));
+            }
+            if (Simulator.simulationFrame >= Simulator.FrameWrapAt) return "frame counter was not wrapped";
             return null;
         }
 

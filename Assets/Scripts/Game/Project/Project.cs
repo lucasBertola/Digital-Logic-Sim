@@ -744,7 +744,7 @@ namespace DLS.Game
 		void SimThread()
 		{
 			const int performanceTimeWindowMs = (int)(SimulationPerformanceTimeWindowSec * 1000);
-			Queue<long> tickCounterOverTimeWindow = new();
+			long perfWindowStartMs = 0, perfStepsInWindow = 0;
 			int simLastMainThreadSyncFrame = -1;
 
 			Stopwatch stopwatch = new();
@@ -804,7 +804,11 @@ namespace DLS.Game
 				Simulator.stepsPerClockTransition = stepsPerClockTransition;
 				SimChip simChip = rootSimChip;
 				if (simChip == null) continue; // Could potentially be null for a frame when switching between chips
-				Simulator.RunSimulationStep(simChip, inputPins, audioState.simAudio);
+				// Paced (a real target rate) or single-stepping: one step at a time. Unbounded: batches, idle steps skipped.
+				bool paced = targetTicksPerSecond < 100000 || advanceSingleSimStep || simPausedSingleStepCounter > 0;
+				int stepsDone = paced ? 1 : 0;
+				if (paced) Simulator.RunSimulationStep(simChip, inputPins, audioState.simAudio);
+				else stepsDone = Simulator.RunSimulationSteps(simChip, inputPins, audioState.simAudio, 256);
 
 				// ---- Wait some amount of time (if needed) to try to hit the target ticks per second ----
 				while (true)
@@ -818,25 +822,15 @@ namespace DLS.Game
 					Thread.SpinWait(10);
 				}
 
-				// ---- Update perf counter (measures average num ticks over last n seconds) ----
+				// ---- Update perf counter (average steps per second over the last window) ----
+				perfStepsInWindow += stepsDone;
 				long elapsedMsTotal = stopwatchTotal.ElapsedMilliseconds;
-				tickCounterOverTimeWindow.Enqueue(elapsedMsTotal);
-				while (tickCounterOverTimeWindow.Count > 0)
+				long windowMs = elapsedMsTotal - perfWindowStartMs;
+				if (windowMs >= performanceTimeWindowMs / 3)
 				{
-					if (elapsedMsTotal - tickCounterOverTimeWindow.Peek() > performanceTimeWindowMs)
-					{
-						tickCounterOverTimeWindow.Dequeue();
-					}
-					else break;
-				}
-
-				if (tickCounterOverTimeWindow.Count > 0)
-				{
-					double activeWindowMs = elapsedMsTotal - tickCounterOverTimeWindow.Peek();
-					if (activeWindowMs > 0)
-					{
-						simAvgTicksPerSec = tickCounterOverTimeWindow.Count / activeWindowMs * 1000;
-					}
+					simAvgTicksPerSec = perfStepsInWindow / (double)windowMs * 1000;
+					perfWindowStartMs = elapsedMsTotal;
+					perfStepsInWindow = 0;
 				}
 			}
 		}

@@ -47,6 +47,12 @@ namespace DLS.Simulation
 		SimPin[] mergeTarget = Array.Empty<SimPin>();
 		SimPin[][] mergeSources = Array.Empty<SimPin[]>();
 		int[] romGates = Array.Empty<int>();
+		int[] clockGates = Array.Empty<int>(), keyGates = Array.Empty<int>();
+		int lastClockLevel = -1;     // -1: unknown, the clock gates must run
+		int lastKeyVersion = -1;
+		public bool HasBuzzer;       // a buzzer registers its note every step: such a circuit never idles
+		// input pins of the root, as the caller passed them last time (their SimPins are looked up once)
+		public object InputPinsArray; public SimPin[] InputSimPins = Array.Empty<SimPin>();
 
 		// ---- gates, schedule order (hot fields) ----
 		byte[] sType = Array.Empty<byte>();
@@ -199,6 +205,8 @@ namespace DLS.Simulation
 			var mTarget = new List<SimPin>();
 			var mSources = new List<SimPin[]>();
 			var roms = new List<int>();
+			var clocks = new List<int>();
+			var keys = new List<int>();
 			int[] gateOfChip = new int[nc];
 			var mergeBefore = new List<int>[nc];
 			var mergeAfter = new List<int>[nc];
@@ -210,6 +218,9 @@ namespace DLS.Simulation
 				if (b.OutputPins.Length == 0 && b.ChipType != ChipType.Buzzer) continue; // pure displays: their input pins already carry the values
 				gateOfChip[b.compileIndex] = types.Count;
 				if (b.ChipType == ChipType.Rom_256x16) roms.Add(types.Count);
+				if (b.ChipType == ChipType.Clock) clocks.Add(types.Count);
+				if (b.ChipType == ChipType.Key) keys.Add(types.Count);
+				if (b.ChipType == ChipType.Buzzer) prog.HasBuzzer = true;
 				types.Add((byte)b.ChipType);
 				inStart.Add(inList.Count); inCount.Add(b.InputPins.Length);
 				outStart.Add(outList.Count); outCount.Add(b.OutputPins.Length);
@@ -247,6 +258,8 @@ namespace DLS.Simulation
 			prog.mergeTarget = mTarget.ToArray();
 			prog.mergeSources = mSources.ToArray();
 			prog.romGates = roms.ToArray();
+			prog.clockGates = clocks.ToArray();
+			prog.keyGates = keys.ToArray();
 			prog.gateOfChip = gateOfChip;
 			(prog.mergeBeforeStart, prog.mergeBeforeList) = Csr(mergeBefore);
 			(prog.mergeAfterStart, prog.mergeAfterList) = Csr(mergeAfter);
@@ -344,6 +357,20 @@ namespace DLS.Simulation
 			prog.slotConsList = consList;
 			prog.quiet = new bool[nextSlot];
 			for (int i = 0; i < n; i++) if (isConstant[i]) prog.quiet[slotOf[i]] = true;
+			// a stateless gate fed only by never-driven lines produces a constant too (a SPLIT of an unconnected
+			// 8-bit input, the RAM built on it...): its outputs are quiet as well, so nothing downstream reads noise
+			for (int k = 0; k < gc; k++)
+			{
+				int g = prog.sCanon[k];
+				byte t = prog.cType[g];
+				bool stateless = t == MergeType || t == (byte)ChipType.Nand || t == (byte)ChipType.TriStateBuffer
+					|| t == (byte)ChipType.Split_4To1Bit || t == (byte)ChipType.Split_8To1Bit || t == (byte)ChipType.Split_8To4Bit
+					|| t == (byte)ChipType.Merge_1To4Bit || t == (byte)ChipType.Merge_1To8Bit || t == (byte)ChipType.Merge_4To8Bit;
+				if (!stateless || prog.cInCount[g] == 0) continue;
+				bool allQuiet = true;
+				for (int j = 0; j < prog.cInCount[g] && allQuiet; j++) allQuiet = prog.quiet[prog.inSlots[prog.cInStart[g] + j]];
+				if (allQuiet) for (int j = 0; j < prog.cOutCount[g]; j++) prog.quiet[prog.outSlots[prog.cOutStart[g] + j]] = true;
+			}
 
 			prog.dirty = new ulong[(gc + 63) / 64];
 			prog.noiseList = new int[gc];
@@ -546,6 +573,10 @@ namespace DLS.Simulation
 			bool clockHigh = forcedClock >= 0
 				? forcedClock == 1
 				: Simulator.stepsPerClockTransition != 0 && ((Simulator.simulationFrame / Simulator.stepsPerClockTransition) & 1) == 0;
+			int clockLevel = clockHigh ? 1 : 0;
+			if (clockLevel != lastClockLevel) { lastClockLevel = clockLevel; foreach (int g in clockGates) SetDirty(posOfCanon[g]); }
+			int keyVersion = SimKeyboardHelper.Version;
+			if (keyVersion != lastKeyVersion) { lastKeyVersion = keyVersion; foreach (int g in keyGates) SetDirty(posOfCanon[g]); }
 
 			int ran = 0;
 			fixed (uint* st = states)
@@ -595,6 +626,43 @@ namespace DLS.Simulation
 		}
 
 		void SetDirty(int pos) => dirty[pos >> 6] |= 1UL << (pos & 63);
+
+		// ---- idle time ----
+		// How many steps from now can pass without anything running: no gate is pending, the root inputs did
+		// not change, no ROM was edited, and neither a clock transition nor a noise re-draw is due before then.
+		// (Keyboard changes cannot be predicted; the caller keeps spans short and the next real step sees them.)
+		public int IdleSteps(int maxSteps)
+		{
+			if (HasBuzzer || maxSteps <= 0) return 0;
+			for (int w = 0; w < dirty.Length; w++) if (dirty[w] != 0) return 0;
+			for (int i = 0; i < rootInputSlots.Length; i++) if (states[rootInputSlots[i]] != rootShadow[i]) return 0;
+			foreach (int g in romGates) if (chipOfGate[g].InternalStateEdited) return 0;
+			if (SimKeyboardHelper.Version != lastKeyVersion && keyGates.Length > 0) return 0;
+			int span = maxSteps;
+			if (noiseCount > 0)
+			{
+				int untilNoise = (NoisePeriod - noiseAccumulator + noiseCount - 1) / noiseCount; // steps until the accumulator crosses
+				if (untilNoise <= 0) return 0;
+				span = Math.Min(span, untilNoise);
+			}
+			if (clockGates.Length > 0 && Simulator.forcedClockState < 0)
+			{
+				int period = Simulator.stepsPerClockTransition;
+				if (period <= 0) return 0;
+				// the level of a step is decided by its frame / period, so the clock changes on the step whose frame is
+				// the next multiple of period: that step must be a real one, only the steps before it can be skipped
+				int f = Simulator.simulationFrame;
+				int untilClock = period - f % period - 1;
+				span = Math.Min(span, untilClock);
+			}
+			return span < 0 ? 0 : span;
+		}
+
+		// The state after `steps` idle steps is the same as now; only the noise budget accrues.
+		public void SkipIdleSteps(int steps)
+		{
+			noiseAccumulator += steps * noiseCount;
+		}
 
 		void ClearNoise()
 		{
@@ -676,9 +744,8 @@ namespace DLS.Simulation
 					}
 					break;
 
-				case (byte)ChipType.Clock:
+				case (byte)ChipType.Clock: // re-run by Step when the level changes
 					Write(states, sOut0[k], clockHigh ? PinState.LogicHigh : PinState.LogicLow);
-					SetDirty(k);
 					break;
 
 				case (byte)ChipType.Vcc: Write(states, sOut0[k], PinState.LogicHigh); break;
@@ -726,9 +793,8 @@ namespace DLS.Simulation
 					break;
 				}
 
-				case (byte)ChipType.Key:
+				case (byte)ChipType.Key: // re-run by Step when the keyboard state version changes
 					Write(states, sOut0[k], SimKeyboardHelper.KeyIsHeld((char)internalState[g][0]) ? PinState.LogicHigh : PinState.LogicLow);
-					SetDirty(k);
 					break;
 
 				case (byte)ChipType.Pulse:

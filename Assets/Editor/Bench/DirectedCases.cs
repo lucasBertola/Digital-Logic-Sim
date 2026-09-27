@@ -225,6 +225,34 @@ namespace DLS.Bench
                 return null;
             });
 
+            // The live sim thread steps in batches and skips idle steps: the result must be what single steps give.
+            Add("CPU", "batched stepping with idle skipping gives the same registers as single stepping", f =>
+            {
+                foreach (string s in new[] { "OE_ALu", "OE_entree", "We_RAM", "Oe_ram", "Load_A", "Load_B", "Load_MAR", "OP2", "OP1", "OP0" }) f.Set(s, 0);
+                Simulator.stepsPerClockTransition = 7; // a real (frame-driven) clock, short period
+                Simulator.forcedClockState = -1;
+                f.Set("Reset_all", 1); f.Tick(Settle); f.Set("Reset_all", 0); f.Tick(Settle);
+                f.Set("OE_ALu", 1); f.Set("OP1", 1); f.Set("Load_A", 1); f.Set("Load_MAR", 1); f.Tick(Settle);
+                int a0 = f.Probe("Registre A", "OUT");
+                // 20 clock cycles single-stepped, then 20 cycles in batches with idle skipping
+                f.Tick(20 * 14);
+                int a1 = f.Probe("Registre A", "OUT");
+                if (a1 != a0 + 20) return $"single stepping: A went {a0} -> {a1} over 20 cycles";
+                int batched = f.TickBatched(20 * 14);
+                int a2 = f.Probe("Registre A", "OUT");
+                if (batched != 20 * 14) return $"batched stepping accounted {batched} steps instead of 280";
+                if (a2 != a1 + 20) return $"batched stepping: A went {a1} -> {a2} over 20 cycles (expected {a1 + 20})";
+                if (f.Probe("MAR", "OUT") != a2) return f.FailProbe("MAR after batched cycles", "MAR", "OUT", a2);
+                // a game-like move while the clock runs: between two batches, load B from the input buffer
+                f.Set("OE_ALu", 0); f.Set("Load_A", 0); f.Set("Load_MAR", 0); f.Set("ENTREE", 0x5C); f.Set("OE_entree", 1); f.Set("Load_B", 1);
+                f.TickBatched(2 * 14);
+                f.Set("Load_B", 0); f.Set("OE_entree", 0);
+                f.TickBatched(14);
+                if (f.Probe("Registre B", "OUT") != 0x5C) return f.FailProbe("B loaded while the clock ran in batches", "Registre B", "OUT", 0x5C);
+                if (f.Probe("Registre A", "OUT") != a2) return f.FailProbe("A must not change once Load_A is released", "Registre A", "OUT", a2);
+                return null;
+            });
+
             // ---------------- combinational, against a model ----------------
 
             Add("ALU8", "all 8 operations and flags on chosen operands", f =>
@@ -508,6 +536,7 @@ namespace DLS.Bench
                 for (int i = 0; i < pinsMsbFirst.Length; i++) Set(pinsMsbFirst[i], value >> (pinsMsbFirst.Length - 1 - i) & 1);
             }
             public void Tick(int n) { for (int i = 0; i < n; i++) Simulator.RunSimulationStep(root, Array.Empty<DevPinInstance>(), audio); }
+            public int TickBatched(int n) { int done = 0; while (done < n) done += Simulator.RunSimulationSteps(root, Array.Empty<DevPinInstance>(), audio, n - done); return done; }
             public void Cycle(string clockPin) { Set(clockPin, 1); Tick(Settle); Set(clockPin, 0); Tick(Settle); }
             // the builtin CLOCK component(s) of the chip, held at a level (Simulator.forcedClockState)
             public void ClockLevel(int level) { Simulator.forcedClockState = level; Tick(Settle); }

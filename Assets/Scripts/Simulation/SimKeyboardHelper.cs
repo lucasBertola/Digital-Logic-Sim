@@ -24,11 +24,15 @@ namespace DLS.Simulation
 		// test sequence can "press" KEY chips deterministically. Always cleared when the test ends.
 		[System.ThreadStatic] static HashSet<char> virtualKeys;
 
+		// Bumped whenever the held keys may have changed: KEY gates re-run only then (not every step)
+		public static int Version;
+
 		public static void SetVirtualKeys(HashSet<char> keys)
 		{
 			lock (KeyLookup)
 			{
 				virtualKeys = keys;
+				Version++;
 			}
 		}
 
@@ -39,6 +43,7 @@ namespace DLS.Simulation
 			{
 				KeyLookup.Clear();
 				HasAnyInput = false;
+				Version++;
 
 				if (!InputHelper.AnyKeyOrMouseHeldThisFrame) return; // early exit if no key held
 				if (InputHelper.CtrlIsHeld || InputHelper.ShiftIsHeld || InputHelper.AltIsHeld) return; // don't trigger key chips if modifier is held
