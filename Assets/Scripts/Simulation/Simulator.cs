@@ -65,8 +65,11 @@ namespace DLS.Simulation
 		// previous step's values. A step is: copy the player inputs into their slots, then run the gates in
 		// order. See SimProgram.cs. The program is rebuilt whenever the tree changes (needsOrderPass).
 
+		[ThreadStatic] public static long RealSteps; // diagnostic: steps actually run (not skipped)
+
 		public static void RunSimulationStep(SimChip rootSimChip, DevPinInstance[] inputPins, SimAudio audioState)
 		{
+			RealSteps++;
 			Simulator.audioState = audioState;
 			audioState.InitFrame();
 

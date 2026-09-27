@@ -197,6 +197,8 @@ public static class SimBench
                 root.Program.RescheduleMs = 0;
                 Stopwatch w = Stopwatch.StartNew();
                 long gatesRun = 0;
+                long realBefore = Simulator.RealSteps;
+                long typeRunsBefore = 0; foreach (long r in root.Program.RunsByType) typeRunsBefore += r;
                 for (int i = 0; i < n; i++)
                 {
                     if (toggleIdx >= 0) { toggleState ^= 1; root.InputPins[toggleIdx].State = PinState.Make((ushort)toggleState, 0); }
@@ -207,6 +209,13 @@ public static class SimBench
                 }
                 w.Stop();
                 double msPerStep = w.Elapsed.TotalMilliseconds / n;
+                {
+                    long real = Simulator.RealSteps - realBefore;
+                    long typeRuns = 0; foreach (long r in root.Program.RunsByType) typeRuns += r;
+                    typeRuns -= typeRunsBefore;
+                    double us = w.Elapsed.TotalMilliseconds * 1000.0;
+                    sb.Append($"   real steps {real} ({real * 100.0 / n:0.0} % of steps) -> {us / Math.Max(1, real):0.00} us per real step; gate runs {typeRuns} -> {us * 1000.0 / Math.Max(1, typeRuns):0} ns per gate run (all-in), {typeRuns / (double)Math.Max(1, real):0.0} gate runs per real step\n");
+                }
                 sb.Append($"{n} steps: {w.Elapsed.TotalMilliseconds:0} ms -> {msPerStep:0.000} ms/step -> max {1000.0 / msPerStep:0} steps/s, {gatesRun / (double)n:0} gates run per step, noise list {root.Program.NoiseCount}, reschedule {root.Program.RescheduleMs:0.0} ms total\n");
                 var byType = new System.Collections.Generic.List<string>();
                 for (int t = 0; t < 256; t++) if (root.Program.RunsByType[t] > 0) byType.Add($"{(t == 255 ? "MERGE" : ((ChipType)t).ToString())}={root.Program.RunsByType[t] / (double)n:0}");
@@ -249,6 +258,10 @@ public static class SimBench
                 var runLines = new System.Collections.Generic.List<string>();
                 for (int t = 0; t < Math.Min(10, runTop.Count); t++) runLines.Add($"{runTop[t].Key}={runTop[t].Value:0.0}");
                 sb.Append("   gate runs per step by chip: " + string.Join(", ", runLines) + "\n");
+                {
+                    (int gates, int dups, long dupRuns, long totalRuns) = root.Program.DuplicateGates();
+                    sb.Append($"   duplicate NAND gates (same inputs): {dups} of {gates} gates; their runs: {dupRuns} of {totalRuns} ({(totalRuns > 0 ? dupRuns * 100.0 / totalRuns : 0):0.0} %)\n");
+                }
                 Array.Clear(root.Program.RunsByGate, 0, root.Program.RunsByGate.Length);
                 var top = new System.Collections.Generic.List<string>();
                 foreach (var kv in where) top.Add($"{kv.Key}={kv.Value}");

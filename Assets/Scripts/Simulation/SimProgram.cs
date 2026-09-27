@@ -64,6 +64,8 @@ namespace DLS.Simulation
 		// ---- who reads a slot (canonical gate ids), to mark on change ----
 		int[] slotConsStart = Array.Empty<int>(), slotConsList = Array.Empty<int>();
 		int[] slotConsPos = Array.Empty<int>(); // the same consumers as schedule positions (hot path), kept in sync with posOfCanon
+		// NAND wake-up filter: per consumer entry, the OTHER input slot of a NAND consumer and its output slot (-1 otherwise)
+		int[] slotConsOther = Array.Empty<int>(), slotConsOut = Array.Empty<int>();
 
 		// ---- root inputs: written from outside the step, change-detected against a shadow copy ----
 		// ---- noise ----
@@ -111,6 +113,24 @@ namespace DLS.Simulation
 		public readonly List<int> LastStepGates = new();
 		public bool TraceGates;
 		public (SimChip chip, byte type, uint output) GateInfo(int g) => (chipOfGate[g], cType[g], cOutCount[g] > 0 ? states[outSlots[cOutStart[g]]] : 0);
+
+		// diagnostic: duplicate gates (same type and input slots) and the runs they cost
+		public (int gates, int duplicates, long duplicateRuns, long totalRuns) DuplicateGates()
+		{
+			var seen = new Dictionary<(byte, int, int), int>();
+			int dup = 0; long dupRuns = 0, total = 0;
+			for (int g = 0; g < gateCount; g++)
+			{
+				long runs = RunsByGate.Length == gateCount ? RunsByGate[g] : 0;
+				total += runs;
+				if (cType[g] != (byte)ChipType.Nand) continue;
+				int a = inSlots[cInStart[g]], b = inSlots[cInStart[g] + 1];
+				var key = (cType[g], Math.Min(a, b), Math.Max(a, b));
+				if (seen.ContainsKey(key)) { dup++; dupRuns += runs; }
+				else seen[key] = g;
+			}
+			return (gateCount, dup, dupRuns, total);
+		}
 
 		public IEnumerable<(SimChip chip, long runs)> GateRuns()
 		{
@@ -370,6 +390,18 @@ namespace DLS.Simulation
 				for (int j = 0; j < prog.cInCount[g]; j++) { int s = prog.inSlots[prog.cInStart[g] + j]; consList[consStart[s] + cf[s]++] = g; }
 			prog.slotConsStart = consStart;
 			prog.slotConsList = consList;
+			prog.slotConsOther = new int[consList.Length]; prog.slotConsOut = new int[consList.Length];
+			for (int s = 0; s < nextSlot; s++)
+				for (int j = consStart[s]; j < consStart[s + 1]; j++)
+				{
+					int g = consList[j];
+					prog.slotConsOther[j] = -1; prog.slotConsOut[j] = -1;
+					if (prog.cType[g] != (byte)ChipType.Nand) continue;
+					int a = prog.inSlots[prog.cInStart[g]], b = prog.inSlots[prog.cInStart[g] + 1];
+					if (a == b) continue; // an inverter: both inputs are this slot
+					prog.slotConsOther[j] = a == s ? b : a;
+					prog.slotConsOut[j] = prog.outSlots[prog.cOutStart[g]];
+				}
 			prog.slotConsPos = new int[consList.Length];
 			for (int j = 0; j < consList.Length; j++) prog.slotConsPos[j] = prog.posOfCanon[consList[j]];
 			prog.quiet = new bool[nextSlot];
@@ -757,15 +789,21 @@ namespace DLS.Simulation
 		}
 
 		// a slot changed: every gate reading it runs (this step if it comes later, next step otherwise)
-		// (A "controlling value" filter — do not wake a NAND whose other input is 0 — was tried here: the 3xAND3
-		// golden and its exhaustive case caught a wrong output, and it gained nothing on the user's montage. Not done.)
+		// Controlling value: a NAND whose OTHER input is a driven 0 outputs 1 whatever this input does; if it ALREADY
+		// outputs 1, waking it changes nothing (the output check matters: right after a compile a gate may have run
+		// on a not-yet-computed floating input and hold a noise value). At a clock edge this is most of a RAM's
+		// latch-input gates: their write-enable side is 0. (First attempt read the output through slot numbers from
+		// before the renumbering — the 3xAND3 golden and exhaustive case caught it.)
 		void MarkConsumers(int slot)
 		{
-			int[] consPos = slotConsPos;
+			int[] consPos = slotConsPos, other = slotConsOther, outs = slotConsOut;
+			uint[] st = states;
 			ulong[] d = dirty;
 			ulong[] top = dirtyTop;
 			for (int j = slotConsStart[slot], e = slotConsStart[slot + 1]; j < e; j++)
 			{
+				int o = other[j];
+				if (o >= 0 && (st[o] & 0x10001u) == 0 && st[outs[j]] == 1) continue;
 				int p = consPos[j], w = p >> 6;
 				d[w] |= 1UL << (p & 63);
 				top[w >> 6] |= 1UL << (w & 63);
