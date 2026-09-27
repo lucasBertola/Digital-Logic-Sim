@@ -59,6 +59,7 @@ namespace DLS.Simulation
 		int[] sIn0 = Array.Empty<int>(), sIn1 = Array.Empty<int>(), sOut0 = Array.Empty<int>(), sCanon = Array.Empty<int>();
 		int[] posOfCanon = Array.Empty<int>();
 		ulong[] dirty = Array.Empty<ulong>();
+		ulong[] dirtyTop = Array.Empty<ulong>(); // bit w set when dirty[w] may be non-zero (cleared lazily by the step loop)
 
 		// ---- who reads a slot (canonical gate ids), to mark on change ----
 		int[] slotConsStart = Array.Empty<int>(), slotConsList = Array.Empty<int>();
@@ -98,17 +99,29 @@ namespace DLS.Simulation
 		bool[] levelHasCuts = Array.Empty<bool>();
 		readonly List<int> cutChips = new();
 		const int RedrawChipsPerReschedule = 16;
+		const int MaxRedrawSegment = 2048; // gates
 
 		public int GateCount => gateCount;
 		public int GatesRunLastStep; // diagnostic: how many gates the last step actually ran
 		public int NoiseCount => noiseCount;
 		// diagnostic: the chips whose gate currently reads a floating line (and its parent chain)
+		// diagnostic: the gates the LAST step ran (canonical ids), with their first output value
+		public readonly List<int> LastStepGates = new();
+		public bool TraceGates;
+		public (SimChip chip, byte type, uint output) GateInfo(int g) => (chipOfGate[g], cType[g], cOutCount[g] > 0 ? states[outSlots[cOutStart[g]]] : 0);
+
+		public IEnumerable<(SimChip chip, long runs)> GateRuns()
+		{
+			for (int g = 0; g < RunsByGate.Length; g++) if (RunsByGate[g] > 0) yield return (chipOfGate[g], RunsByGate[g]);
+		}
+
 		public IEnumerable<SimChip> ArmedGateChips()
 		{
 			for (int j = 0; j < noiseCount; j++) yield return chipOfGate[noiseList[j]];
 		}
 		public bool CollectStats;                       // diagnostic: count runs per gate type
 		public readonly long[] RunsByType = new long[256];
+		public long[] RunsByGate = Array.Empty<long>(); // diagnostic, by canonical gate (when CollectStats)
 		public double RescheduleMs;                     // diagnostic: time spent re-drawing the schedule
 		public int SlotCount => slotCount;
 
@@ -357,6 +370,8 @@ namespace DLS.Simulation
 			prog.slotConsList = consList;
 			prog.quiet = new bool[nextSlot];
 			for (int i = 0; i < n; i++) if (isConstant[i]) prog.quiet[slotOf[i]] = true;
+			// (root inputs are NOT quiet: they are driven by the player; a floating output computed from them — a buffer
+			// with its enable at 0 — must read as noise. The bench drives every input like the app does.)
 			// a stateless gate fed only by never-driven lines produces a constant too (a SPLIT of an unconnected
 			// 8-bit input, the RAM built on it...): its outputs are quiet as well, so nothing downstream reads noise
 			for (int k = 0; k < gc; k++)
@@ -373,6 +388,7 @@ namespace DLS.Simulation
 			}
 
 			prog.dirty = new ulong[(gc + 63) / 64];
+			prog.dirtyTop = new ulong[(prog.dirty.Length + 63) / 64];
 			prog.noiseList = new int[gc];
 			prog.noisePos = new int[gc];
 			prog.ClearNoise();
@@ -394,6 +410,7 @@ namespace DLS.Simulation
 			for (int w = 0; w < dirty.Length; w++) dirty[w] = ulong.MaxValue;
 			int rem = gateCount & 63;
 			if (rem != 0 && dirty.Length > 0) dirty[dirty.Length - 1] = (1UL << rem) - 1; // no padding bits
+			for (int w = 0; w < dirty.Length; w++) dirtyTop[w >> 6] |= 1UL << (w & 63);
 		}
 
 		// ------------------------------------------------------------------ schedule
@@ -513,6 +530,9 @@ namespace DLS.Simulation
 			{
 				int chip = cutChips[Simulator.RandomIndex(cutChips.Count)];
 				int start = segStart[chip], len = segLen[chip];
+				// a level whose subtree is the whole CPU (the bus loop) costs milliseconds to re-emit and is not a
+				// latch race: the small levels (latches, registers) are the ones worth re-drawing
+				if (len > MaxRedrawSegment) continue;
 				// the pending dirty gates of the segment keep pending at their new positions (noise list is by canonical id)
 				pendingCanon.Clear();
 				for (int k = start; k < start + len; k++)
@@ -523,6 +543,8 @@ namespace DLS.Simulation
 				nOrdered = start;
 				Emit(chip, 0);
 				CopySchedule(start, len);
+				for (int w = start >> 6; w <= (start + len - 1) >> 6 && w < dirty.Length; w++)
+					if (dirty[w] == 0) dirtyTop[w >> 6] &= ~(1UL << (w & 63));
 				foreach (int c in pendingCanon) SetDirty(posOfCanon[c]);
 			}
 			RescheduleMs += sw.Elapsed.TotalMilliseconds;
@@ -579,14 +601,22 @@ namespace DLS.Simulation
 			if (keyVersion != lastKeyVersion) { lastKeyVersion = keyVersion; foreach (int g in keyGates) SetDirty(posOfCanon[g]); }
 
 			int ran = 0;
+			if (TraceGates) LastStepGates.Clear();
 			fixed (uint* st = states)
 			fixed (byte* type = sType)
 			fixed (int* in0 = sIn0, in1 = sIn1, out0 = sOut0)
 			fixed (ulong* dirtyBits = dirty)
+			fixed (ulong* top = dirtyTop)
 			{
-				int words = dirty.Length;
-				for (int w = 0; w < words; w++)
+				int words = dirty.Length, topWords = dirtyTop.Length;
+				for (int tw = 0; tw < topWords; tw++)
 				{
+					ulong tbits = top[tw];
+					while (tbits != 0)
+					{
+					int tb = lowestBitTable[(int)(((tbits & (~tbits + 1)) * DeBruijn) >> 58)];
+					int w = (tw << 6) + tb;
+					if (w >= words) { tbits = 0; break; }
 					ulong bits = dirtyBits[w];
 					while (bits != 0)
 					{
@@ -596,7 +626,8 @@ namespace DLS.Simulation
 						int k = (w << 6) + b;
 						if (k >= gc) { bits = 0; break; }
 						ran++;
-						if (CollectStats) RunsByType[type[k]]++;
+						if (CollectStats) { RunsByType[type[k]]++; if (RunsByGate.Length != gateCount) RunsByGate = new long[gateCount]; RunsByGate[sCanon[k]]++; }
+						if (TraceGates) LastStepGates.Add(sCanon[k]);
 						if (noisePos[sCanon[k]] >= 0) DisarmNoise(k); // re-armed below if it still reads a floating bit
 
 						if (type[k] == (byte)ChipType.Nand)
@@ -620,31 +651,41 @@ namespace DLS.Simulation
 						// gates later in this word may have been marked by what just ran: take them this step
 						bits = dirtyBits[w] & (b == 63 ? 0 : ~((bit << 1) - 1));
 					}
+					if (dirtyBits[w] == 0) top[tw] &= ~(1UL << tb); // nothing left pending in this word (feedback marks keep it)
+					tbits = top[tw] & (tb == 63 ? 0 : ~((2UL << tb) - 1));
+					}
 				}
 			}
 			GatesRunLastStep = ran;
 		}
 
-		void SetDirty(int pos) => dirty[pos >> 6] |= 1UL << (pos & 63);
+		void SetDirty(int pos)
+		{
+			int w = pos >> 6;
+			dirty[w] |= 1UL << (pos & 63);
+			dirtyTop[w >> 6] |= 1UL << (w & 63);
+		}
 
 		// ---- idle time ----
 		// How many steps from now can pass without anything running: no gate is pending, the root inputs did
-		// not change, no ROM was edited, and neither a clock transition nor a noise re-draw is due before then.
+		// not change, no ROM was edited, and no clock transition is due before then.
 		// (Keyboard changes cannot be predicted; the caller keeps spans short and the next real step sees them.)
 		public int IdleSteps(int maxSteps)
 		{
 			if (HasBuzzer || maxSteps <= 0) return 0;
-			for (int w = 0; w < dirty.Length; w++) if (dirty[w] != 0) return 0;
+			for (int t = 0; t < dirtyTop.Length; t++)
+				if (dirtyTop[t] != 0)
+				{
+					// a summary bit may be stale (word emptied by a feedback-marked gate that ran later): check the words
+					for (int w = t << 6; w < Math.Min(dirty.Length, (t + 1) << 6); w++) if (dirty[w] != 0) return 0;
+					dirtyTop[t] = 0;
+				}
 			for (int i = 0; i < rootInputSlots.Length; i++) if (states[rootInputSlots[i]] != rootShadow[i]) return 0;
 			foreach (int g in romGates) if (chipOfGate[g].InternalStateEdited) return 0;
 			if (SimKeyboardHelper.Version != lastKeyVersion && keyGates.Length > 0) return 0;
+			// (noise re-draws due during the span are not an event: their budget accrues and they are all applied at
+			// the next real step — a re-draw moved by half a clock period is still "a few times a second")
 			int span = maxSteps;
-			if (noiseCount > 0)
-			{
-				int untilNoise = (NoisePeriod - noiseAccumulator + noiseCount - 1) / noiseCount; // steps until the accumulator crosses
-				if (untilNoise <= 0) return 0;
-				span = Math.Min(span, untilNoise);
-			}
 			if (clockGates.Length > 0 && Simulator.forcedClockState < 0)
 			{
 				int period = Simulator.stepsPerClockTransition;
@@ -700,10 +741,12 @@ namespace DLS.Simulation
 		{
 			int[] cons = slotConsList, pos = posOfCanon;
 			ulong[] d = dirty;
+			ulong[] top = dirtyTop;
 			for (int j = slotConsStart[slot], e = slotConsStart[slot + 1]; j < e; j++)
 			{
-				int p = pos[cons[j]];
-				d[p >> 6] |= 1UL << (p & 63);
+				int p = pos[cons[j]], w = p >> 6;
+				d[w] |= 1UL << (p & 63);
+				top[w >> 6] |= 1UL << (w & 63);
 			}
 		}
 

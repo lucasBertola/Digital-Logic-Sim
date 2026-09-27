@@ -45,6 +45,8 @@ public static class SimBench
             sb.Append($"\n=== SimBench \"{chipName}\" ({projectName}) : {chips} chips in the sim tree ({builtins} builtin leaves), {pins} pins ===\n");
             sb.Append($"project target: {project.description.Prefs_SimTargetStepsPerSecond} steps/s, {project.description.Prefs_SimStepsPerClockTick} steps per clock tick\n");
 
+            // like the app: every input pin is driven (0 unless -benchSet says otherwise)
+            for (int i = 0; i < root.InputPins.Length; i++) root.InputPins[i].State = PinState.Make(0, 0);
             string set = GetArg("-benchSet");
             if (!string.IsNullOrEmpty(set))
             {
@@ -106,6 +108,38 @@ public static class SimBench
                 scriptHold--;
             }
 
+            if (GetArg("-benchTrace") != null)
+            {
+                // print the gates run on a few consecutive steps in the middle of a clock phase
+                SimAudio a = new();
+                Simulator.stepsPerClockTransition = project.description.Prefs_SimStepsPerClockTick;
+                for (int i = 0; i < 300; i++) Simulator.RunSimulationStep(root, Array.Empty<DevPinInstance>(), a);
+                var names = new System.Collections.Generic.Dictionary<SimChip, string>();
+                void Name(SimChip c, ChipDescription d, string path)
+                {
+                    names[c] = path;
+                    for (int i = 0; i < c.SubChips.Length && i < d.SubChips.Length; i++)
+                        if (project.chipLibrary.TryGetChipDescription(d.SubChips[i].Name, out ChipDescription sd)) Name(c.SubChips[i], sd, path + "/" + d.SubChips[i].Name + (string.IsNullOrEmpty(d.SubChips[i].Label) ? "" : "[" + d.SubChips[i].Label + "]") + "#" + (d.SubChips[i].ID % 1000));
+                }
+                Name(CircuitTester.TargetOf(root), desc, chipName);
+                root.Program.TraceGates = true;
+                for (int s = 0; s < 6; s++)
+                {
+                    Simulator.RunSimulationStep(root, Array.Empty<DevPinInstance>(), a);
+                    sb.Append($"step {Simulator.simulationFrame}: {root.Program.LastStepGates.Count} gates\n");
+                    int shown = 0;
+                    foreach (int g in root.Program.LastStepGates)
+                    {
+                        (SimChip c, byte t, uint o) = root.Program.GateInfo(g);
+                        string path = c.compileParent != null && names.TryGetValue(c.compileParent, out string pn) ? pn : "?";
+                        sb.Append($"   {path} > {(t == 255 ? "MERGE" : ((ChipType)t).ToString())} out={(o & 0xFFFF)}{((o >> 16) != 0 ? "Z" : "")}\n");
+                        if (++shown >= 40) { sb.Append("   ...\n"); break; }
+                    }
+                }
+                Debug.Log(sb.ToString());
+                EditorApplication.Exit(0);
+                return;
+            }
             if (GetArg("-benchSettle") != null)
             {
                 SimAudio a = new();
@@ -150,7 +184,7 @@ public static class SimBench
             sb.Append($"program: {root.Program.GateCount} gates, {root.Program.SlotCount} state slots\n");
 
             root.Program.CollectStats = true;
-            foreach (int n in new[] { 500, 2000 })
+            foreach (int n in batch ? new[] { 20000, 200000 } : new[] { 500, 2000 })
             {
                 Array.Clear(root.Program.RunsByType, 0, 256);
                 root.Program.RescheduleMs = 0;
@@ -195,6 +229,20 @@ public static class SimBench
                     string key = (c.compileParent != null && names.TryGetValue(c.compileParent, out string pn) ? pn : "?") + " > " + (names.TryGetValue(c, out string cn) ? cn : c.ChipType.ToString());
                     where[key] = where.TryGetValue(key, out int cnt) ? cnt + 1 : 1;
                 }
+                // which chips do the running? (gate runs per step, by grandparent > parent chip)
+                var runsBy = new System.Collections.Generic.Dictionary<string, double>();
+                foreach ((SimChip c, long runs) in root.Program.GateRuns())
+                {
+                    string gp = c.compileParent != null && c.compileParent.compileParent != null && names.TryGetValue(c.compileParent.compileParent, out string gn) ? gn : "?";
+                    string key = gp + " > " + (c.compileParent != null && names.TryGetValue(c.compileParent, out string pn) ? pn : "?");
+                    runsBy[key] = (runsBy.TryGetValue(key, out double r) ? r : 0) + runs / (double)n;
+                }
+                var runTop = new System.Collections.Generic.List<System.Collections.Generic.KeyValuePair<string, double>>(runsBy);
+                runTop.Sort((x, y) => y.Value.CompareTo(x.Value));
+                var runLines = new System.Collections.Generic.List<string>();
+                for (int t = 0; t < Math.Min(10, runTop.Count); t++) runLines.Add($"{runTop[t].Key}={runTop[t].Value:0.0}");
+                sb.Append("   gate runs per step by chip: " + string.Join(", ", runLines) + "\n");
+                Array.Clear(root.Program.RunsByGate, 0, root.Program.RunsByGate.Length);
                 var top = new System.Collections.Generic.List<string>();
                 foreach (var kv in where) top.Add($"{kv.Key}={kv.Value}");
                 top.Sort((x, y) => int.Parse(y.Substring(y.LastIndexOf('=') + 1)).CompareTo(int.Parse(x.Substring(x.LastIndexOf('=') + 1))));

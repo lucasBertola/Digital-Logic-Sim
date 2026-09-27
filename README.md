@@ -33,9 +33,9 @@ cycle does A = A + 1 and stores the value in RAM — with exactly the same chip 
 |---|---|---|
 | old core | 105 | 0.75 Hz |
 | new core | 321 000 | 2.3 kHz |
-| new core, idle steps skipped (what the app does) | 865 000 | 6.2 kHz |
+| new core, idle steps skipped (what the app does) | 538 000 | 3.8 kHz |
 
-That is ×8 000 on the clock. The simulation also skips the steps where nothing can change (no pending gate, no
+That is ×5 000 on the clock. The simulation also skips the steps where nothing can change (no pending gate, no
 input moved, no clock edge or noise re-draw due) — an outside input is still seen within a fraction of a
 millisecond. And the bench can measure how many steps a montage really needs per clock tick (`-benchSettle`):
 this CPU settles in at most 11 steps after an edge, so 13 steps per tick would give another ×5 over the 70 used here. The preferences menu now shows the current clock frequency next to the current
