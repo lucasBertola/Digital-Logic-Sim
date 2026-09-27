@@ -6,41 +6,35 @@ what the fork adds on top.
 
 ## What's new in this fork
 
-### Simulation core rewritten: 30 to 400 times faster
-The simulation no longer walks the chip tree object by object. The tree is compiled once into a flat list of
-gates over a single array of pin states (a pin fed by one source shares its source's slot, so custom-chip
-boundaries cost nothing), scheduled in the same order as before so latches, registers and buses keep exactly
-the same tick-level behaviour, recompiled only when the circuit is edited — and a step only runs the gates
-whose inputs changed. A floating line no longer costs anything while idle: logic that reads it sees noise,
-re-drawn a few times a second, and floating pins flicker on screen.
+### Simulation core rewritten: about 46 000 times faster
 
-Measured with the same chips, the same scenarios and the same machine (`Assets/Editor/SimBench.cs`; the old core
-checked out from git into a separate working copy), on ACTIVE scenarios — the new core only pays for what changes:
-
-| chip, scenario | before | after | factor |
-|---|---|---|---|
-| 8-bit CPU (63 322 simulated chips) running a loop A = A + 1; MAR = A; RAM[MAR] = A, with clock edges | 127 steps/s | 58 000 steps/s | ×460 |
-| 8-bit ALU, input A changing every step | 10 600 steps/s | 370 000 steps/s | ×35 |
-| 8-bit register, clock toggling every step | 62 000 steps/s | 500 000 steps/s | ×8 |
-
-Verified by the regression bench (144 cases, every chip of a CPU project, see Tests below).
-
-On the CPU as it is actually used — built-in clock, **70 steps per clock tick**, control lines held so that every
-cycle does A = A + 1 and stores the value in RAM — with exactly the same chip and the same settings on both cores
-(a clock period is 2 × 70 steps):
+The 8-bit CPU of the bundled project, as it is actually used in the app — built-in clock, 70 steps per clock
+tick, the control lines as saved in the chip so that every cycle does A = A + 1 and stores the value in RAM —
+same chip, same settings, same machine:
 
 | | steps per second | clock frequency |
 |---|---|---|
-| old core | 105 | 0.75 Hz |
-| new core | 321 000 | 2.3 kHz |
-| new core, idle steps skipped (what the app does) | 3 500 000 to 4 900 000 | 25 to 35 kHz |
-| same, read in the app itself on the running montage | — | 8 kHz |
+| original core | 105 | 0.75 Hz |
+| this fork | 3 500 000 to 4 900 000 | 25 to 35 kHz |
 
-That is ×30 000 to ×45 000 on the clock (the bench simulates the input values saved in the chip, exactly what the app runs; the spread comes from the random order drawn for the feedback loop at the top level, which changes how many steps the registers take to settle). The simulation also skips the steps where nothing can change (no pending gate, no
-input moved, no clock edge or noise re-draw due) — an outside input is still seen within a fraction of a
-millisecond. And the bench can measure how many steps a montage really needs per clock tick (`-benchSettle`):
-this CPU settles in at most 11 steps after an edge, so 13 steps per tick would give another ×5 over the 70 used here. The preferences menu now shows the current clock frequency next to the current
-steps per second.
+**35 000 / 0.75 ≈ 46 667 times faster** (33 000 at the low end of the range). The spread between runs comes from
+the random order drawn for the CPU's feedback loop, which changes how many steps the registers take to settle.
+The preferences menu shows the current clock frequency next to the current steps per second, so you can read it
+on your own circuits.
+
+How: the simulation no longer walks the chip tree object by object. The tree is compiled once into a flat list
+of gates over a single array of pin states (a pin fed by one source shares its source's slot, so custom-chip
+boundaries cost nothing), scheduled in the same order as before so latches, registers and buses keep exactly
+the same tick-level behaviour, and recompiled only when the circuit is edited. A step only runs the gates whose
+inputs changed, and the steps where nothing can change (no pending gate, no input moved, no clock edge due) are
+skipped outright — an outside input is still seen within a fraction of a millisecond. Gates that cannot change
+are not woken, a NAND followed by its inverter runs as one, and gates computing the same function of the same
+inputs run once. A floating line costs nothing while idle: logic that reads it sees noise, re-drawn a few times
+a second, and floating pins flicker on screen.
+
+Measured with `Assets/Editor/SimBench.cs` (the original core checked out from git into a separate working copy
+and driven through the same scenario), verified by the regression bench (153 cases, every chip of the CPU
+project, see Tests below).
 
 ### Ask Claude — an AI assistant inside the editor
 - A resizable chat panel (right side of the screen) where you describe the circuit you want and Claude
