@@ -1,0 +1,2 @@
+# Projects shipped with the app (one name per line), copied from the save folder at build time.
+PC

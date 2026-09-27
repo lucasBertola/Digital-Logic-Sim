@@ -74,6 +74,10 @@ steps per second.
 - Both reports also show the circuit depth (longest gate chain from an input to an output).
 
 ### Editor quality of life
+- **A project ships with the app**: the `PC` project (an 8-bit CPU: registers, ALU, bus, RAM, all built from
+  NAND gates) is installed on first launch. If you already have a project with that name and modified it, the
+  app asks whether to keep yours or replace it (yours is moved to "Deleted Projects", nothing is lost); an
+  untouched copy is updated silently.
 - **Input values are saved**: the values set on a chip's input pins are stored with the chip and are there
   again when it is reopened (the original never saved them).
 - **Right-click on empty space** opens a menu with three entries: **IN/OUT** (the collection popup at

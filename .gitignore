@@ -75,3 +75,7 @@ crashlytics-build.properties
 # Generated at build time by BuildTools (fork version + build date shown in the main menu)
 /Assets/Resources/BuildInfo.txt
 /Assets/Resources/BuildInfo.txt.meta
+
+# Bundled projects are copied from the save folder at build time (BuildTools)
+/Assets/StreamingAssets/BundledProjects/
+/Assets/StreamingAssets/BundledProjects.meta

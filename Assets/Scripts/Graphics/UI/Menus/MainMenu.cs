@@ -118,6 +118,9 @@ namespace DLS.Graphics
 
 			switch (activePopup)
 			{
+				case PopupKind.BundledProjectConfirmation:
+					DrawBundledProjectPopup();
+					break;
 				case PopupKind.DeleteConfirmation:
 					DrawDeleteProjectConfirmationPopup();
 					break;
@@ -138,7 +141,38 @@ namespace DLS.Graphics
 			activeMenuScreen = MenuScreen.Main;
 			activePopup = PopupKind.None;
 			selectedProjectIndex = -1;
+			// projects shipped with this version: installed silently, or asked about when the local copy was modified
+			pendingBundles = DLS.SaveSystem.BundledProjects.CheckOnStartup();
+			if (pendingBundles.Count > 0) activePopup = PopupKind.BundledProjectConfirmation;
 			RefreshLoadedProjects(); // so the "Continue [last project]" button can be shown
+		}
+
+		static System.Collections.Generic.List<DLS.SaveSystem.BundledProjects.Pending> pendingBundles = new();
+
+		static void DrawBundledProjectPopup()
+		{
+			DrawSettings.UIThemeDLS theme = DrawSettings.ActiveUITheme;
+			DLS.SaveSystem.BundledProjects.Pending p = pendingBundles[0];
+			UI.StartNewLayer();
+			UI.DrawFullscreenPanel(theme.MenuBackgroundOverlayCol);
+			using (UI.BeginBoundsScope(true))
+			{
+				Draw.ID panelID = UI.ReservePanel();
+				UI.DrawText($"This version comes with the project \"{p.name}\", and you have a modified project with that name.", theme.FontRegular, theme.FontSizeRegular, UI.Centre + Vector2.up * 2, Anchor.Centre, Color.yellow);
+				UI.DrawText("REPLACE moves yours to \"Deleted Projects\" and installs the new one. KEEP leaves yours as it is.", theme.FontRegular, theme.FontSizeRegular, UI.Centre - Vector2.up * 1, Anchor.Centre, Color.white);
+				Vector2 buttonRegionTopLeft = UI.PrevBounds.BottomLeft + Vector2.down * DrawSettings.VerticalButtonSpacing;
+				float buttonRegionWidth = UI.PrevBounds.Width;
+				int buttonIndex = UI.HorizontalButtonGroup(new[] { "KEEP MINE", "REPLACE" }, theme.MainMenuButtonTheme, buttonRegionTopLeft, buttonRegionWidth, DrawSettings.HorizontalButtonSpacing, 0, Anchor.TopLeft);
+				UI.ModifyPanel(panelID, UI.GetCurrentBoundsScope().Centre, UI.GetCurrentBoundsScope().Size + Vector2.one * 2, ColHelper.MakeCol255(37, 37, 43));
+				if (buttonIndex == 0) DLS.SaveSystem.BundledProjects.Keep(p);
+				else if (buttonIndex == 1) DLS.SaveSystem.BundledProjects.Replace(p);
+				if (buttonIndex >= 0)
+				{
+					pendingBundles.RemoveAt(0);
+					if (pendingBundles.Count == 0) activePopup = PopupKind.None;
+					RefreshLoadedProjects();
+				}
+			}
 		}
 
 		static void DrawMainScreen()
@@ -527,6 +561,7 @@ namespace DLS.Graphics
 		enum PopupKind
 		{
 			None,
+			BundledProjectConfirmation,
 			DeleteConfirmation,
 			NamePopup_RenameProject,
 			NamePopup_DuplicateProject,

@@ -39,6 +39,8 @@ namespace DLS.Bench
             ("batched stepping (idle skipping): a bus conflict keeps re-drawing", BatchedConflictNeverIdles),
             ("frame counter wrap keeps the clock phase", FrameWrapKeepsClockPhase),
             ("nand with a controlling 0 on the other input: not woken, still right when it is released", NandControllingValue),
+            ("bundled project: install / silent update / ask / do nothing decision table", BundledProjectDecision),
+            ("bundled project: content hash ignores deleted chips, the conversation and markers", BundledProjectHash),
         };
 
         // ---------------- helpers ----------------
@@ -555,6 +557,59 @@ namespace DLS.Bench
             c.Set("B", 1); c.Step(2);
             if (c.OutBit("Q") != 0 || c.OutBit("R") != 1) return $"B released with A=1: Q={c.OutBit("Q")} R={c.OutBit("R")} (expected 0, 1)";
             return null;
+        }
+
+        static string BundledProjectDecision()
+        {
+            var D = DLS.SaveSystem.BundledProjects.Action.Nothing;
+            (string bundle, bool exists, string local, string marker, DLS.SaveSystem.BundledProjects.Action expected, string why)[] table =
+            {
+                ("h1", false, null, null, DLS.SaveSystem.BundledProjects.Action.Install, "no local project: install"),
+                ("h1", true, "h1", null, DLS.SaveSystem.BundledProjects.Action.Nothing, "same content already there"),
+                ("h1", true, "h1", "h1", DLS.SaveSystem.BundledProjects.Action.Nothing, "same content, marker set"),
+                ("h2", true, "h1", "h1", DLS.SaveSystem.BundledProjects.Action.Install, "untouched since install: silent update"),
+                ("h2", true, "hX", "h1", DLS.SaveSystem.BundledProjects.Action.Ask, "modified by the user: ask"),
+                ("h2", true, "hX", "h2", DLS.SaveSystem.BundledProjects.Action.Nothing, "already declined this bundle version"),
+                ("h3", true, "hX", "h2", DLS.SaveSystem.BundledProjects.Action.Ask, "a newer bundle: ask again"),
+                ("h1", true, "hX", null, DLS.SaveSystem.BundledProjects.Action.Ask, "pre-existing project of the same name, never bundled: ask"),
+                ("", true, "hX", null, DLS.SaveSystem.BundledProjects.Action.Nothing, "no bundle hash: nothing"),
+            };
+            foreach (var t in table)
+            {
+                D = DLS.SaveSystem.BundledProjects.Decide(t.bundle, t.exists, t.local, t.marker);
+                if (D != t.expected) return $"{t.why}: got {D}, expected {t.expected}";
+            }
+            return null;
+        }
+
+        static string BundledProjectHash()
+        {
+            string root = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "dls_bundle_test_" + System.Guid.NewGuid().ToString("N"));
+            try
+            {
+                string a = System.IO.Path.Combine(root, "A"), b = System.IO.Path.Combine(root, "B");
+                System.IO.Directory.CreateDirectory(System.IO.Path.Combine(a, "Chips"));
+                System.IO.Directory.CreateDirectory(System.IO.Path.Combine(b, "Chips"));
+                System.IO.Directory.CreateDirectory(System.IO.Path.Combine(b, DLS.SaveSystem.BundledProjects.DeletedChipsFolder));
+                System.IO.File.WriteAllText(System.IO.Path.Combine(a, "ProjectDescription.json"), "{p}");
+                System.IO.File.WriteAllText(System.IO.Path.Combine(b, "ProjectDescription.json"), "{p}");
+                System.IO.File.WriteAllText(System.IO.Path.Combine(a, "Chips", "X.json"), "{x}");
+                System.IO.File.WriteAllText(System.IO.Path.Combine(b, "Chips", "X.json"), "{x}");
+                // only in B: things that are not project content
+                System.IO.File.WriteAllText(System.IO.Path.Combine(b, DLS.SaveSystem.BundledProjects.DeletedChipsFolder, "Old.json"), "{old}");
+                System.IO.File.WriteAllText(System.IO.Path.Combine(b, DLS.SaveSystem.BundledProjects.ConversationFile), "[]");
+                System.IO.File.WriteAllText(System.IO.Path.Combine(b, DLS.SaveSystem.BundledProjects.MarkerFileName), "abc");
+                System.IO.File.WriteAllText(System.IO.Path.Combine(b, "Chips", "X.json.meta"), "meta");
+                string ha = DLS.SaveSystem.BundledProjects.HashDirectory(a), hb = DLS.SaveSystem.BundledProjects.HashDirectory(b);
+                if (ha != hb) return "hashes differ although the project content is the same";
+                System.IO.File.WriteAllText(System.IO.Path.Combine(b, "Chips", "X.json"), "{y}");
+                if (DLS.SaveSystem.BundledProjects.HashDirectory(b) == ha) return "a changed chip did not change the hash";
+                System.IO.File.WriteAllText(System.IO.Path.Combine(b, "Chips", "X.json"), "{x}");
+                System.IO.File.WriteAllText(System.IO.Path.Combine(b, "Chips", "Y.json"), "{y}");
+                if (DLS.SaveSystem.BundledProjects.HashDirectory(b) == ha) return "an added chip did not change the hash";
+                return null;
+            }
+            finally { try { System.IO.Directory.Delete(root, true); } catch { } }
         }
 
         static string FrameWrapKeepsClockPhase()
