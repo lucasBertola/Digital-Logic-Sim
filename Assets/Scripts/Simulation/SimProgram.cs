@@ -386,30 +386,7 @@ namespace DLS.Simulation
 			for (int i = 0; i < root.InputPins.Length; i++) { int s = slotOf[root.InputPins[i].compileIndex]; prog.rootInputSlots[i] = s; prog.rootShadow[i] = states[s]; }
 
 			// ---- consumers of every slot (canonical gate ids) ----
-			int[] nCons = new int[nextSlot];
-			for (int j = 0; j < prog.inSlots.Length; j++) nCons[prog.inSlots[j]]++;
-			int[] consStart = new int[nextSlot + 1];
-			for (int s = 0; s < nextSlot; s++) consStart[s + 1] = consStart[s] + nCons[s];
-			int[] consList = new int[consStart[nextSlot]];
-			int[] cf = new int[nextSlot];
-			for (int g = 0; g < gc; g++)
-				for (int j = 0; j < prog.cInCount[g]; j++) { int s = prog.inSlots[prog.cInStart[g] + j]; consList[consStart[s] + cf[s]++] = g; }
-			prog.slotConsStart = consStart;
-			prog.slotConsList = consList;
-			prog.slotConsOther = new int[consList.Length]; prog.slotConsOut = new int[consList.Length];
-			for (int s = 0; s < nextSlot; s++)
-				for (int j = consStart[s]; j < consStart[s + 1]; j++)
-				{
-					int g = consList[j];
-					prog.slotConsOther[j] = -1; prog.slotConsOut[j] = -1;
-					if (prog.cType[g] != (byte)ChipType.Nand) continue;
-					int a = prog.inSlots[prog.cInStart[g]], b = prog.inSlots[prog.cInStart[g] + 1];
-					if (a == b) continue; // an inverter: both inputs are this slot
-					prog.slotConsOther[j] = a == s ? b : a;
-					prog.slotConsOut[j] = prog.outSlots[prog.cOutStart[g]];
-				}
-			prog.slotConsPos = new int[consList.Length];
-			for (int j = 0; j < consList.Length; j++) prog.slotConsPos[j] = prog.posOfCanon[consList[j]];
+			prog.BuildConsumerLists();
 			prog.quiet = new bool[nextSlot];
 			for (int i = 0; i < n; i++) if (isConstant[i]) prog.quiet[slotOf[i]] = true;
 			// (root inputs are NOT quiet: they are driven by the player; a floating output computed from them — a buffer
@@ -430,6 +407,8 @@ namespace DLS.Simulation
 			}
 
 			prog.FuseInverters();
+			prog.EliminateCommonGates(pins);
+			prog.BuildConsumerLists();
 
 			prog.dirty = new ulong[(gc + 63) / 64];
 			prog.dirtyTop = new ulong[(prog.dirty.Length + 63) / 64];
@@ -483,6 +462,110 @@ namespace DLS.Simulation
 			CopySchedule(0, gc); // types and sOut1 into the hot arrays
 		}
 		public int FusedInverters; // diagnostic
+
+		// slot -> the gates reading it (canonical ids and schedule positions), plus the NAND wake-up filter data
+		void BuildConsumerLists()
+		{
+			int gc = gateCount, ns = slotCount;
+			int[] nCons = new int[ns];
+			for (int g = 0; g < gc; g++)
+				if (cType[g] != NopType) for (int j = 0; j < cInCount[g]; j++) nCons[inSlots[cInStart[g] + j]]++;
+			int[] consStart = new int[ns + 1];
+			for (int s = 0; s < ns; s++) consStart[s + 1] = consStart[s] + nCons[s];
+			int[] consList = new int[consStart[ns]];
+			int[] cf = new int[ns];
+			for (int g = 0; g < gc; g++)
+				if (cType[g] != NopType) for (int j = 0; j < cInCount[g]; j++) { int s = inSlots[cInStart[g] + j]; consList[consStart[s] + cf[s]++] = g; }
+			slotConsStart = consStart;
+			slotConsList = consList;
+			slotConsOther = new int[consList.Length]; slotConsOut = new int[consList.Length];
+			for (int s = 0; s < ns; s++)
+				for (int j = consStart[s]; j < consStart[s + 1]; j++)
+				{
+					int g = consList[j];
+					slotConsOther[j] = -1; slotConsOut[j] = -1;
+					if (cType[g] != (byte)ChipType.Nand && cType[g] != NandNotType) continue;
+					int a = inSlots[cInStart[g]], b = inSlots[cInStart[g] + 1];
+					if (a == b) continue; // an inverter: both inputs are this slot
+					slotConsOther[j] = a == s ? b : a;
+					slotConsOut[j] = outSlots[cOutStart[g]];
+				}
+			slotConsPos = new int[consList.Length];
+			for (int j = 0; j < consList.Length; j++) slotConsPos[j] = posOfCanon[consList[j]];
+		}
+
+		// Common gates: two NANDs (or NAND+inverter pairs) computing the same function of the same input slots
+		// compute the same value at all times when their inputs come from outside their common ancestor's subtree
+		// (so both read the same value, fresh or one step old, whatever the order) and their chains up to that
+		// ancestor are free of random picks (so the first one always runs before the second one's consumers).
+		// The second gate is dropped, its consumers read the first, and its pins are re-bound to the first's slots
+		// so the display stays exact. The user's 64 RAM4 decoders all compute the same minterms of the same two
+		// address bits: only the enable AND differs.
+		void EliminateCommonGates(List<SimPin> pins)
+		{
+			int gc = gateCount, ns = slotCount;
+			int[] producer = new int[ns];
+			for (int s = 0; s < ns; s++) producer[s] = -1;
+			for (int g = 0; g < gc; g++)
+			{
+				if (cType[g] == NopType) continue;
+				for (int j = 0; j < cOutCount[g]; j++) producer[outSlots[cOutStart[g] + j]] = g;
+				if (cOut1.Length == gc && cOut1[g] >= 0) producer[cOut1[g]] = g;
+			}
+			var first = new Dictionary<(byte, int, int), int>();
+			var redirect = new Dictionary<int, int>(); // dead slot -> live slot
+			var ancestors = new HashSet<SimChip>();
+			int merged = 0;
+			for (int k = 0; k < gc; k++)
+			{
+				int g = sCanon[k];
+				byte t = cType[g];
+				if (t != (byte)ChipType.Nand && t != NandNotType) continue;
+				int a = inSlots[cInStart[g]], b = inSlots[cInStart[g] + 1];
+				if (redirect.TryGetValue(a, out int ra)) a = ra;
+				if (redirect.TryGetValue(b, out int rb)) b = rb;
+				inSlots[cInStart[g]] = a; inSlots[cInStart[g] + 1] = b; // consumers of dropped gates read the kept one
+				var key = (t, Math.Min(a, b), Math.Max(a, b));
+				if (!first.TryGetValue(key, out int g1)) { first[key] = g; continue; }
+				// ---- conditions ----
+				SimChip x = chipOfGate[g1], y = chipOfGate[g];
+				ancestors.Clear();
+				for (SimChip c = x.compileParent; c != null; c = c.compileParent) ancestors.Add(c);
+				SimChip common = null;
+				for (SimChip c = y.compileParent; c != null; c = c.compileParent) if (ancestors.Contains(c)) { common = c; break; }
+				if (common == null) continue;
+				bool ok = true;
+				for (SimChip c = x.compileParent; ok && c != null; c = c.compileParent) { if (levelHasCuts[c.compileIndex]) ok = false; if (c == common) break; }
+				for (SimChip c = y.compileParent; ok && c != null; c = c.compileParent) { if (levelHasCuts[c.compileIndex]) ok = false; if (c == common) break; }
+				if (!ok) continue;
+				foreach (int s in new[] { a, b })
+				{
+					int p = producer[s];
+					if (p < 0) continue; // root input or constant: the same for both
+					bool inside = false;
+					for (SimChip c = chipOfGate[p]; c != null; c = c.compileParent) if (c == common) { inside = true; break; }
+					if (!inside) continue; // produced outside the common subtree: both read the same value, fresh or one step old
+					// produced inside it: fine if it always runs before the first gate, i.e. it precedes it now and its
+					// chain up to the common ancestor is free of random picks (its order relative to both is then fixed)
+					if (posOfCanon[p] >= posOfCanon[g1]) { ok = false; break; }
+					for (SimChip c = chipOfGate[p].compileParent; c != null; c = c.compileParent) { if (levelHasCuts[c.compileIndex]) { ok = false; break; } if (c == common) break; }
+					if (!ok) break;
+				}
+				if (!ok) continue;
+				// ---- drop g in favour of g1 ----
+				redirect[outSlots[cOutStart[g]]] = outSlots[cOutStart[g1]];
+				if (t == NandNotType) redirect[cOut1[g]] = cOut1[g1];
+				cType[g] = NopType;
+				if (cOut1.Length == gc) cOut1[g] = -1;
+				merged++;
+			}
+			// remaining readers of dropped slots (gates processed before the drop, other gate types) and the pins
+			for (int j = 0; j < inSlots.Length; j++) if (redirect.TryGetValue(inSlots[j], out int live)) inSlots[j] = live;
+			foreach (SimPin p in pins) if (redirect.TryGetValue(p.stateIndex, out int live)) p.stateIndex = live;
+			CommonGatesMerged = merged;
+			CopySchedule(0, gc);
+		}
+		public int CommonGatesMerged; // diagnostic
 
 		static (int[] start, int[] list) Csr(List<int>[] buckets)
 		{

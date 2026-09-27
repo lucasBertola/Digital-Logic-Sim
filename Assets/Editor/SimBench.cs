@@ -188,10 +188,10 @@ public static class SimBench
             Simulator.stepsPerClockTransition = project.description.Prefs_SimStepsPerClockTick;
             // warm-up (first steps include the compile)
             for (int i = 0; i < 50; i++) Simulator.RunSimulationStep(root, Array.Empty<DevPinInstance>(), audio);
-            sb.Append($"program: {root.Program.GateCount} gates, {root.Program.SlotCount} state slots, {root.Program.FusedInverters} NAND+inverter pairs fused\n");
+            sb.Append($"program: {root.Program.GateCount} gates, {root.Program.SlotCount} state slots, {root.Program.FusedInverters} NAND+inverter pairs fused, {root.Program.CommonGatesMerged} common gates merged\n");
 
             root.Program.CollectStats = true;
-            foreach (int n in batch ? new[] { 20000, 200000 } : new[] { 500, 2000 })
+            foreach (int n in batch ? new[] { 50000, 1000000 } : new[] { 500, 2000 })
             {
                 Array.Clear(root.Program.RunsByType, 0, 256);
                 root.Program.RescheduleMs = 0;
