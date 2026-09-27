@@ -86,6 +86,12 @@ namespace DLS.Simulation
 		int[] mergeBeforeStart = Array.Empty<int>(), mergeBeforeList = Array.Empty<int>(); // merge gates on a chip's input pins
 		int[] mergeAfterStart = Array.Empty<int>(), mergeAfterList = Array.Empty<int>();   // merge gates on a chip's output pins
 		bool hasCuts;
+		// per custom chip: the segment of the schedule its subtree occupies (fixed length), and whether a random
+		// pick happens at its own level — only those chips are worth re-drawing
+		int[] segStart = Array.Empty<int>(), segLen = Array.Empty<int>();
+		bool[] levelHasCuts = Array.Empty<bool>();
+		readonly List<int> cutChips = new();
+		const int RedrawChipsPerReschedule = 16;
 
 		public int GateCount => gateCount;
 		public int GatesRunLastStep; // diagnostic: how many gates the last step actually ran
@@ -305,7 +311,7 @@ namespace DLS.Simulation
 			for (int j = 0; j < prog.outSlots.Length; j++) prog.outSlots[j] = renum[prog.outSlots[j]];
 			for (int i = 0; i < n; i++) slotOf[i] = renum[slotOf[i]];
 			prog.slotCount = nextSlot;
-			prog.CopySchedule(); // hot arrays again, with the final slot numbers
+			prog.CopySchedule(0, gc); // hot arrays again, with the final slot numbers
 
 			// ---- state slots ----
 			uint[] states = previous != null && previous.states.Length >= nextSlot ? previous.states : new uint[nextSlot + nextSlot / 4 + 64];
@@ -377,26 +383,28 @@ namespace DLS.Simulation
 		{
 			int nc = chips.Length, gc = gateCount;
 			indeg ??= new int[nc];
-			Array.Copy(indegree0, indeg, nc);
 			orderBuf ??= new int[gc];
 			remaining ??= new int[nc];
 			nonBus ??= new int[nc];
 			posRem ??= new int[nc];
 			posNonBus ??= new int[nc];
+			segStart = new int[nc]; segLen = new int[nc]; levelHasCuts = new bool[nc];
 			nOrdered = 0;
 			hasCuts = false;
 			Emit(0, 0);
-			CopySchedule();
+			cutChips.Clear();
+			for (int c = 0; c < nc; c++) if (levelHasCuts[c]) cutChips.Add(c);
+			CopySchedule(0, gc);
 		}
 
-		void CopySchedule()
+		void CopySchedule(int from, int count)
 		{
 			int gc = gateCount;
 			if (sType.Length != gc)
 			{
 				sType = new byte[gc]; sIn0 = new int[gc]; sIn1 = new int[gc]; sOut0 = new int[gc]; sCanon = new int[gc]; posOfCanon = new int[gc];
 			}
-			for (int k = 0; k < gc; k++)
+			for (int k = from; k < from + count; k++)
 			{
 				int g = orderBuf[k];
 				sCanon[k] = g; posOfCanon[g] = k;
@@ -410,8 +418,11 @@ namespace DLS.Simulation
 		void Emit(int chip, int depth)
 		{
 			int cs = childStart[chip], count = childStart[chip + 1] - cs;
+			segStart[chip] = nOrdered;
+			bool cutsHere = false;
 			if (count > 0)
 			{
+				for (int k = 0; k < count; k++) { int c = childList[cs + k]; indeg[c] = indegree0[c]; }
 				if (queuePool.Count <= depth) queuePool.Add(new Queue<int>());
 				Queue<int> ready = queuePool[depth];
 				ready.Clear();
@@ -437,7 +448,7 @@ namespace DLS.Simulation
 					{
 						// feedback: one unready chip at random runs on last step's inputs — buses last, since
 						// a bus must know all its inputs to display correctly
-						hasCuts = true;
+						hasCuts = true; cutsHere = true;
 						c = nNonBus > 0 ? nonBus[cs + Simulator.RandomIndex(nNonBus)] : remaining[cs + Simulator.RandomIndex(nRemaining)];
 					}
 					// remove from both pick lists
@@ -458,20 +469,35 @@ namespace DLS.Simulation
 				}
 			}
 			for (int m = mergeAfterStart[chip]; m < mergeAfterStart[chip + 1]; m++) orderBuf[nOrdered++] = mergeAfterList[m];
+			segLen[chip] = nOrdered - segStart[chip];
+			levelHasCuts[chip] = cutsHere;
 		}
 
-		// Every 100 steps: new random picks inside feedback loops (race conditions vary, as before)
+		// Every 100 steps: new random picks inside some feedback loops (race conditions vary, as before).
+		// A few chips whose level has a random pick are re-emitted IN PLACE (a subtree's segment has a fixed
+		// length), so a CPU full of latches costs a few tiny re-emissions, not a walk of the whole tree.
+		readonly List<int> pendingCanon = new();
 		public void Reschedule()
 		{
-			if (!hasCuts) return;
+			if (!hasCuts || cutChips.Count == 0) return;
 			var sw = System.Diagnostics.Stopwatch.StartNew();
-			// the pending dirty gates keep pending at their new positions (the noise list is by canonical id)
-			int gc = gateCount;
-			var pending = new List<int>();
-			for (int k = 0; k < gc; k++) if ((dirty[k >> 6] & (1UL << (k & 63))) != 0) pending.Add(sCanon[k]);
-			Schedule();
-			Array.Clear(dirty, 0, dirty.Length);
-			foreach (int c in pending) SetDirty(posOfCanon[c]);
+			int n = Math.Min(RedrawChipsPerReschedule, cutChips.Count);
+			for (int i = 0; i < n; i++)
+			{
+				int chip = cutChips[Simulator.RandomIndex(cutChips.Count)];
+				int start = segStart[chip], len = segLen[chip];
+				// the pending dirty gates of the segment keep pending at their new positions (noise list is by canonical id)
+				pendingCanon.Clear();
+				for (int k = start; k < start + len; k++)
+				{
+					int w = k >> 6; ulong bit = 1UL << (k & 63);
+					if ((dirty[w] & bit) != 0) { pendingCanon.Add(sCanon[k]); dirty[w] &= ~bit; }
+				}
+				nOrdered = start;
+				Emit(chip, 0);
+				CopySchedule(start, len);
+				foreach (int c in pendingCanon) SetDirty(posOfCanon[c]);
+			}
 			RescheduleMs += sw.Elapsed.TotalMilliseconds;
 		}
 

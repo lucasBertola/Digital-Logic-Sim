@@ -23,7 +23,11 @@ checked out from git into a separate working copy), on ACTIVE scenarios — the 
 | 8-bit ALU, input A changing every step | 10 600 steps/s | 370 000 steps/s | ×35 |
 | 8-bit register, clock toggling every step | 62 000 steps/s | 500 000 steps/s | ×8 |
 
-Verified by the regression bench (142 cases, every chip of a CPU project, see Tests below).
+Verified by the regression bench (144 cases, every chip of a CPU project, see Tests below).
+
+In the app, on the CPU as it is actually used (built-in clock, 70 steps per clock tick, control lines held so
+that every cycle does A = A + 1 and stores the value in RAM), the clock ran at about 1 Hz on the old core and
+runs at a few kHz on the new one (the preferences menu now shows the current clock frequency).
 
 ### Ask Claude — an AI assistant inside the editor
 - A resizable chat panel (right side of the screen) where you describe the circuit you want and Claude
@@ -57,6 +61,8 @@ Verified by the regression bench (142 cases, every chip of a CPU project, see Te
 - Both reports also show the circuit depth (longest gate chain from an input to an output).
 
 ### Editor quality of life
+- **Input values are saved**: the values set on a chip's input pins are stored with the chip and are there
+  again when it is reopened (the original never saved them).
 - **Right-click on empty space** opens a menu with three entries: **IN/OUT** (the collection popup at
   the cursor, same as the bottom bar, shift-click to place several), **CLEAN UP** and **ASK CLAUDE**.
 - The IN/OUT popup ends with **MERGE/SPLIT** and **BUS** rows that open those collections in a sub-menu

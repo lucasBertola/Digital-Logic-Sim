@@ -25,7 +25,8 @@
       "Colour":0,
       "ValueDisplayMode":0,
       "LayoutCol":0,
-      "LayoutRow":0
+      "LayoutRow":0,
+      "InputState":1
     },
     {
       "Name":"OP2",
@@ -38,7 +39,8 @@
       "Colour":0,
       "ValueDisplayMode":0,
       "LayoutCol":0,
-      "LayoutRow":0
+      "LayoutRow":0,
+      "InputState":0
     },
     {
       "Name":"Load_A",
@@ -51,7 +53,8 @@
       "Colour":0,
       "ValueDisplayMode":0,
       "LayoutCol":0,
-      "LayoutRow":0
+      "LayoutRow":0,
+      "InputState":1
     },
     {
       "Name":"OP1",
@@ -64,7 +67,8 @@
       "Colour":0,
       "ValueDisplayMode":0,
       "LayoutCol":0,
-      "LayoutRow":0
+      "LayoutRow":0,
+      "InputState":1
     },
     {
       "Name":"OP0",
@@ -77,20 +81,8 @@
       "Colour":0,
       "ValueDisplayMode":0,
       "LayoutCol":0,
-      "LayoutRow":0
-    },
-    {
-      "Name":"clock",
-      "ID":1189615797,
-      "Position":{
-        "x":-9.50844,
-        "y":6.85824
-      },
-      "BitCount":1,
-      "Colour":0,
-      "ValueDisplayMode":0,
-      "LayoutCol":0,
-      "LayoutRow":0
+      "LayoutRow":0,
+      "InputState":0
     },
     {
       "Name":"Load_B",
@@ -103,7 +95,8 @@
       "Colour":0,
       "ValueDisplayMode":0,
       "LayoutCol":0,
-      "LayoutRow":0
+      "LayoutRow":0,
+      "InputState":0
     },
     {
       "Name":"Reset_all",
@@ -116,7 +109,8 @@
       "Colour":0,
       "ValueDisplayMode":0,
       "LayoutCol":0,
-      "LayoutRow":0
+      "LayoutRow":0,
+      "InputState":0
     },
     {
       "Name":"Load_MAR",
@@ -129,7 +123,8 @@
       "Colour":0,
       "ValueDisplayMode":0,
       "LayoutCol":0,
-      "LayoutRow":0
+      "LayoutRow":0,
+      "InputState":1
     },
     {
       "Name":"ENTREE",
@@ -142,7 +137,8 @@
       "Colour":0,
       "ValueDisplayMode":0,
       "LayoutCol":0,
-      "LayoutRow":0
+      "LayoutRow":0,
+      "InputState":0
     },
     {
       "Name":"OE_entree",
@@ -155,7 +151,8 @@
       "Colour":0,
       "ValueDisplayMode":0,
       "LayoutCol":0,
-      "LayoutRow":0
+      "LayoutRow":0,
+      "InputState":0
     },
     {
       "Name":"We_RAM",
@@ -168,7 +165,8 @@
       "Colour":0,
       "ValueDisplayMode":0,
       "LayoutCol":0,
-      "LayoutRow":0
+      "LayoutRow":0,
+      "InputState":1
     },
     {
       "Name":"Oe_ram",
@@ -181,7 +179,8 @@
       "Colour":0,
       "ValueDisplayMode":0,
       "LayoutCol":0,
-      "LayoutRow":0
+      "LayoutRow":0,
+      "InputState":0
     }
   ],
   "OutputPins":[],
@@ -381,6 +380,20 @@
       "LayoutCol":0,
       "LayoutRow":0,
       "ShowLabel":false
+    },
+    {
+      "Name":"CLOCK",
+      "ID":40152334,
+      "Label":"",
+      "Position":{
+        "x":-9.45876,
+        "y":6.63517
+      },
+      "OutputPinColourInfo":[{"PinColour":0,"PinID":0}],
+      "InternalData":null,
+      "LayoutCol":0,
+      "LayoutRow":0,
+      "ShowLabel":false
     }
   ],
   "Wires":[
@@ -574,48 +587,6 @@
       "TargetPinAddress":{
         "PinID":970395308,
         "PinOwnerID":1215459699
-      },
-      "ConnectionType":0,
-      "ConnectedWireIndex":-1,
-      "ConnectedWireSegmentIndex":-1,
-      "Points":[{"x":0.0,"y":0.0},{"x":0.0,"y":0.0}]
-    },
-    {
-      "SourcePinAddress":{
-        "PinID":0,
-        "PinOwnerID":1189615797
-      },
-      "TargetPinAddress":{
-        "PinID":383876816,
-        "PinOwnerID":1215459699
-      },
-      "ConnectionType":0,
-      "ConnectedWireIndex":-1,
-      "ConnectedWireSegmentIndex":-1,
-      "Points":[{"x":0.0,"y":0.0},{"x":0.0,"y":0.0}]
-    },
-    {
-      "SourcePinAddress":{
-        "PinID":0,
-        "PinOwnerID":1189615797
-      },
-      "TargetPinAddress":{
-        "PinID":383876816,
-        "PinOwnerID":444297747
-      },
-      "ConnectionType":0,
-      "ConnectedWireIndex":-1,
-      "ConnectedWireSegmentIndex":-1,
-      "Points":[{"x":0.0,"y":0.0},{"x":0.0,"y":0.0}]
-    },
-    {
-      "SourcePinAddress":{
-        "PinID":0,
-        "PinOwnerID":1189615797
-      },
-      "TargetPinAddress":{
-        "PinID":383876816,
-        "PinOwnerID":128800049
       },
       "ConnectionType":0,
       "ConnectedWireIndex":-1,
@@ -831,6 +802,48 @@
       "ConnectedWireIndex":0,
       "ConnectedWireSegmentIndex":0,
       "Points":[{"x":0.0,"y":0.0},{"x":4.57717,"y":-0.98241},{"x":4.42883,"y":-4.49324},{"x":-4.69522,"y":-4.67884}]
+    },
+    {
+      "SourcePinAddress":{
+        "PinID":0,
+        "PinOwnerID":40152334
+      },
+      "TargetPinAddress":{
+        "PinID":383876816,
+        "PinOwnerID":1215459699
+      },
+      "ConnectionType":0,
+      "ConnectedWireIndex":-1,
+      "ConnectedWireSegmentIndex":-1,
+      "Points":[{"x":0.0,"y":0.0},{"x":0.0,"y":0.0}]
+    },
+    {
+      "SourcePinAddress":{
+        "PinID":0,
+        "PinOwnerID":40152334
+      },
+      "TargetPinAddress":{
+        "PinID":383876816,
+        "PinOwnerID":444297747
+      },
+      "ConnectionType":0,
+      "ConnectedWireIndex":-1,
+      "ConnectedWireSegmentIndex":-1,
+      "Points":[{"x":0.0,"y":0.0},{"x":0.0,"y":0.0}]
+    },
+    {
+      "SourcePinAddress":{
+        "PinID":0,
+        "PinOwnerID":40152334
+      },
+      "TargetPinAddress":{
+        "PinID":383876816,
+        "PinOwnerID":128800049
+      },
+      "ConnectionType":0,
+      "ConnectedWireIndex":-1,
+      "ConnectedWireSegmentIndex":-1,
+      "Points":[{"x":0.0,"y":0.0},{"x":0.0,"y":0.0}]
     }
   ],
   "Displays": null

@@ -158,23 +158,24 @@ namespace DLS.Bench
 
             Add("CPU", "micro-program: A=5, B=3, A+B on the bus, store to RAM[9], read back, A-B", f =>
             {
-                foreach (string s in new[] { "OE_ALu", "OE_entree", "We_RAM", "Oe_ram", "Load_A", "Load_B", "Load_MAR", "OP2", "OP1", "OP0", "clock" }) f.Set(s, 0);
+                foreach (string s in new[] { "OE_ALu", "OE_entree", "We_RAM", "Oe_ram", "Load_A", "Load_B", "Load_MAR", "OP2", "OP1", "OP0" }) f.Set(s, 0);
+                f.ClockLevel(0);
                 f.Set("Reset_all", 1); f.Tick(Settle); f.Set("Reset_all", 0); f.Tick(Settle);
                 if (f.Probe("Registre A", "OUT") != 0 || f.Probe("Registre B", "OUT") != 0 || f.Probe("MAR", "OUT") != 0) return "registers not 0 after Reset_all";
 
                 // A <- 5 (from the input buffer, through the bus)
                 f.Set("ENTREE", 5); f.Set("OE_entree", 1); f.Set("Load_A", 1); f.Tick(Settle);
                 if (f.Probe("BUS-8", "BUS-8") != 5) return f.FailProbe("bus while OE_entree", "BUS-8", "BUS-8", 5);
-                f.Cycle("clock"); f.Set("Load_A", 0);
+                f.ClockCycle(); f.Set("Load_A", 0);
                 if (f.Probe("Registre A", "OUT") != 5) return f.FailProbe("A after load", "Registre A", "OUT", 5);
                 // B <- 3
-                f.Set("ENTREE", 3); f.Set("Load_B", 1); f.Tick(Settle); f.Cycle("clock"); f.Set("Load_B", 0);
+                f.Set("ENTREE", 3); f.Set("Load_B", 1); f.Tick(Settle); f.ClockCycle(); f.Set("Load_B", 0);
                 if (f.Probe("Registre B", "OUT") != 3) return f.FailProbe("B after load", "Registre B", "OUT", 3);
                 // bus <- A + B
                 f.Set("OE_entree", 0); f.Set("OE_ALu", 1); f.Tick(Settle);
                 if (f.Probe("BUS-8", "BUS-8") != 8) return f.FailProbe("bus = A + B", "BUS-8", "BUS-8", 8);
                 // MAR <- 9
-                f.Set("OE_ALu", 0); f.Set("ENTREE", 9); f.Set("OE_entree", 1); f.Set("Load_MAR", 1); f.Tick(Settle); f.Cycle("clock"); f.Set("Load_MAR", 0);
+                f.Set("OE_ALu", 0); f.Set("ENTREE", 9); f.Set("OE_entree", 1); f.Set("Load_MAR", 1); f.Tick(Settle); f.ClockCycle(); f.Set("Load_MAR", 0);
                 if (f.Probe("MAR", "OUT") != 9) return f.FailProbe("MAR after load", "MAR", "OUT", 9);
                 // RAM[MAR] <- bus (A + B)
                 f.Set("OE_entree", 0); f.Set("OE_ALu", 1); f.Tick(Settle); f.Set("We_RAM", 1); f.Tick(Settle); f.Set("We_RAM", 0); f.Set("OE_ALu", 0); f.Tick(Settle);
@@ -183,11 +184,44 @@ namespace DLS.Bench
                 f.Set("Oe_ram", 1); f.Tick(Settle);
                 if (f.Probe("BUS-8", "BUS-8") != 8) return f.FailProbe("bus = RAM[9]", "BUS-8", "BUS-8", 8);
                 // A <- RAM[9] (=8), then bus <- A - B = 5
-                f.Set("Load_A", 1); f.Tick(Settle); f.Cycle("clock"); f.Set("Load_A", 0); f.Set("Oe_ram", 0);
+                f.Set("Load_A", 1); f.Tick(Settle); f.ClockCycle(); f.Set("Load_A", 0); f.Set("Oe_ram", 0);
                 if (f.Probe("Registre A", "OUT") != 8) return f.FailProbe("A after loading from RAM", "Registre A", "OUT", 8);
                 f.Set("OP0", 1); f.Set("OE_ALu", 1); f.Tick(Settle);
                 if (f.Probe("BUS-8", "BUS-8") != 5) return f.FailProbe("bus = A - B", "BUS-8", "BUS-8", 5);
                 if (f.Probe("ALU8", "Z") != 0 || f.Probe("ALU8", "N") != 0) return "ALU flags after 8 - 3";
+                return null;
+            });
+
+            // The user's running montage: control lines held so that every clock cycle does A <- A + 1 (ALU INC on the
+            // bus) and MAR <- A + 1; after the cycle settles, MAR = A and the bus already shows A + 1, and a We_RAM
+            // pulse stores it: RAM[k] = k + 1. (We_RAM must be PULSED once the cycle has settled: held high, the RAM
+            // also captures the transients of the A -> A + 1 transition — e.g. RAM[15] = 32 while A goes 15 -> 16 —
+            // which is the montage's behaviour, not a simulator error.)
+            Add("CPU", "clocked loop: A = A + 1 every cycle, every value stored in RAM (user's montage)", f =>
+            {
+                const int cycles = 20;
+                foreach (string s in new[] { "OE_ALu", "OE_entree", "We_RAM", "Oe_ram", "Load_A", "Load_B", "Load_MAR", "OP2", "OP1", "OP0" }) f.Set(s, 0);
+                f.ClockLevel(0);
+                f.Set("Reset_all", 1); f.Tick(Settle); f.Set("Reset_all", 0); f.Tick(Settle);
+                f.Set("OE_ALu", 1); f.Set("OP1", 1); f.Set("Load_A", 1); f.Set("Load_MAR", 1); f.Tick(Settle);
+                if (f.Probe("BUS-8", "BUS-8") != 1) return f.FailProbe("bus = A + 1 before the first cycle", "BUS-8", "BUS-8", 1);
+                for (int i = 1; i <= cycles; i++)
+                {
+                    f.ClockCycle();
+                    if (f.Probe("Registre A", "OUT") != i) return f.FailProbe($"A after {i} cycles", "Registre A", "OUT", i);
+                    if (f.Probe("MAR", "OUT") != i) return f.FailProbe($"MAR after {i} cycles", "MAR", "OUT", i);
+                    if (f.Probe("BUS-8", "BUS-8") != i + 1) return f.FailProbe($"bus after {i} cycles", "BUS-8", "BUS-8", i + 1);
+                    f.Set("We_RAM", 1); f.Tick(Settle); f.Set("We_RAM", 0); f.Tick(Settle); // RAM[i] <- i + 1
+                }
+                // stop the loop, then read the RAM back: MAR <- k through the input buffer, Oe_ram, check the bus
+                f.Set("Load_A", 0); f.Set("OE_ALu", 0); f.Tick(Settle);
+                for (int k = 1; k <= cycles; k++)
+                {
+                    f.Set("Oe_ram", 0); f.Set("ENTREE", k); f.Set("OE_entree", 1); f.Set("Load_MAR", 1); f.Tick(Settle); f.ClockCycle();
+                    f.Set("Load_MAR", 0); f.Set("OE_entree", 0); f.Set("Oe_ram", 1); f.Tick(Settle);
+                    if (f.Probe("MAR", "OUT") != k) return f.FailProbe($"MAR while reading back", "MAR", "OUT", k);
+                    if (f.Probe("BUS-8", "BUS-8") != k + 1) return f.FailProbe($"RAM[{k}]", "BUS-8", "BUS-8", k + 1);
+                }
                 return null;
             });
 
@@ -475,6 +509,9 @@ namespace DLS.Bench
             }
             public void Tick(int n) { for (int i = 0; i < n; i++) Simulator.RunSimulationStep(root, Array.Empty<DevPinInstance>(), audio); }
             public void Cycle(string clockPin) { Set(clockPin, 1); Tick(Settle); Set(clockPin, 0); Tick(Settle); }
+            // the builtin CLOCK component(s) of the chip, held at a level (Simulator.forcedClockState)
+            public void ClockLevel(int level) { Simulator.forcedClockState = level; Tick(Settle); }
+            public void ClockCycle() { ClockLevel(1); ClockLevel(0); }
 
             uint OutState(string output)
             {
