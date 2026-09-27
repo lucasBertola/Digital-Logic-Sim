@@ -9,24 +9,49 @@ namespace DLS.Simulation
 {
 	public static class Simulator
 	{
+		// ---- Per-run state is THREAD-STATIC ----
+		// The live simulation runs on its own thread; the QA harness (CircuitTester, truth tables) runs on the
+		// main thread while that thread is paused; and the regression bench (Assets/Editor/Bench) runs many
+		// isolated simulations IN PARALLEL. Each of those must have its own frame counter, clock override,
+		// RNG and ordering flag, otherwise a step on one thread corrupts another (SimPin.ReceiveInput resets
+		// its input counter when it sees a new frame number). Fields that are set on one thread and consumed
+		// on another (the modification queue, the audio state) stay shared.
 		public static readonly Random rng = new();
 		static readonly Stopwatch stopwatch = Stopwatch.StartNew();
-		public static int stepsPerClockTransition;
-		public static int simulationFrame;
+		[ThreadStatic] public static int stepsPerClockTransition;
+		[ThreadStatic] public static int simulationFrame;
 
 		// QA harness override (CircuitTester): -1 = normal time-based clock, 0/1 = every CLOCK chip is held
 		// at that level. Lets a test drive clock edges deterministically instead of waiting for real time.
 		// All clock chips share the same phase in this simulator, so one global level is faithful.
-		public static int forcedClockState = -1;
-		static uint pcg_rngState;
+		// (Stored +1 so that a fresh thread's default of 0 means "normal".)
+		public static int forcedClockState { get => forcedClockStatePlusOne - 1; set => forcedClockStatePlusOne = value + 1; }
+		[ThreadStatic] static int forcedClockStatePlusOne;
+		[ThreadStatic] static uint pcg_rngState;
+
+		// Seeded RNG for tests: when set on the current thread, the per-step PCG reseed comes from it instead
+		// of the shared time-seeded Random, so a run is reproducible (and threads don't share a Random).
+		[ThreadStatic] static Random testRng;
 
 		// When sim is first built, or whenever modified, it needs to run a less efficient pass in which the traversal order of the chips is determined
-		public static bool needsOrderPass;
+		[ThreadStatic] public static bool needsOrderPass;
 
 		// Every n frames the simulation permits some random modifications to traversal order of sequential chips (to randomize outcome of race conditions)
-		public static bool canDynamicReorderThisFrame;
+		[ThreadStatic] public static bool canDynamicReorderThisFrame;
 
-		static SimChip prevRootSimChip;
+		[ThreadStatic] static SimChip prevRootSimChip;
+
+		// Test support: fresh, reproducible per-thread run state.
+		public static void ResetForTests(int seed)
+		{
+			simulationFrame = 0;
+			forcedClockState = -1;
+			needsOrderPass = true;
+			prevRootSimChip = null;
+			testRng = new Random(seed);
+		}
+
+		public static void ClearTestSeed() => testRng = null;
 		static double elapsedSecondsOld;
 		static double deltaTime;
 		static SimAudio audioState;
@@ -61,7 +86,7 @@ namespace DLS.Simulation
 				prevRootSimChip = rootSimChip;
 			}
 
-			pcg_rngState = (uint)rng.Next();
+			pcg_rngState = (uint)(testRng ?? rng).Next();
 			canDynamicReorderThisFrame = simulationFrame % 100 == 0;
 			simulationFrame++; //
 
@@ -199,7 +224,7 @@ namespace DLS.Simulation
 			// Step 4) if no sub chip is ready to be processed, pick one at random (but save buses for last)
 			if (noSubChipsReady)
 			{
-				nextSubChipIndex = rng.Next(0, num);
+				nextSubChipIndex = RandomIndex(num);
 
 				// If processing in random order, save buses for last (since we must know all their inputs to display correctly)
 				if (isNonBusChipRemaining)
@@ -227,6 +252,22 @@ namespace DLS.Simulation
 			uint result = ((pcg_rngState >> (int)((pcg_rngState >> 28) + 4)) ^ pcg_rngState) * 277803737;
 			result = (result >> 22) ^ result;
 			return (ushort)result;
+		}
+
+		// Random index in [0, n), from the same seeded stream (so a seeded test run is exactly reproducible)
+		public static int RandomIndex(int n)
+		{
+			pcg_rngState = pcg_rngState * 747796405 + 2891336453;
+			uint result = ((pcg_rngState >> (int)((pcg_rngState >> 28) + 4)) ^ pcg_rngState) * 277803737;
+			result = (result >> 22) ^ result;
+			return (int)(result % (uint)n);
+		}
+
+		// Random bytes for one-off initialisation (RAM contents): the test seed when one is set, else the shared Random
+		public static void NextBytes(Span<byte> bytes)
+		{
+			if (testRng != null) testRng.NextBytes(bytes);
+			else lock (rng) rng.NextBytes(bytes);
 		}
 
 		public static bool RandomBool()

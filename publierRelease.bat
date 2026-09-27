@@ -21,6 +21,12 @@ set "REPO=lucasBertola/Digital-Logic-Sim"
 
 if not exist "%SRC%\DigitalLogicSim.exe" ( echo Aucun build dans Builds\Windows : compile d'abord ^(Tools ^> Build Windows Player^). & pause & exit /b 1 )
 
+REM --- Banc de regression : rien n'est publie si un test echoue (NOTESTS=1 pour sauter, deconseille) ---
+if not defined NOTESTS (
+  call "%~dp0runTests.bat"
+  if errorlevel 1 ( echo. & echo Le banc de test echoue : publication annulee. & pause & exit /b 1 )
+)
+
 REM --- gh : dans le PATH, sinon aux emplacements d'installation habituels ---
 set "GH="
 where gh >nul 2>&1 && set "GH=gh"

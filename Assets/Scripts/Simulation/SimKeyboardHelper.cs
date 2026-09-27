@@ -22,7 +22,7 @@ namespace DLS.Simulation
 
 		// When non-null, replaces the real keyboard: used by the offline QA harness (CircuitTester) so a
 		// test sequence can "press" KEY chips deterministically. Always cleared when the test ends.
-		static HashSet<char> virtualKeys;
+		[System.ThreadStatic] static HashSet<char> virtualKeys;
 
 		public static void SetVirtualKeys(HashSet<char> keys)
 		{

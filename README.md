@@ -87,7 +87,16 @@ automatically if the code changed since the last build. `publierRelease.bat` has
 previous release, write the release notes and propose the version number (V<major>.<minor>.<patch>,
 according to how big the changes are; needs `ANTHROPIC_API_KEY`, otherwise plain commit list and minor+1),
 then after one Enter it pushes, zips the build and publishes the GitHub Release with the `gh` CLI (one-time
-`gh auth login`); without `gh` it opens the release page prefilled, with the zip ready to attach. See `CLAUDE.md` for the architecture notes.
+`gh auth login`); without `gh` it opens the release page prefilled, with the zip ready to attach. Publishing first runs
+the regression bench and aborts if it fails. See `CLAUDE.md` for the architecture notes.
+
+### Tests
+`runTests.bat` runs the regression bench (`Assets/Editor/Bench/`): every chip of a fixture project committed under
+`TestData/Bench/` (a copy of a CPU project: ALU, RAM, registers, latches, generated packages…) is simulated on a
+seeded random stimulus and compared to recorded goldens (outputs and the output pins of every sub-chip), plus
+hand-written cases for the simulator rules (tri-state, floating lines, clock, latches, live modification) and a
+reload round-trip of every chip. All cases are seeded and run in parallel: about 2 s for the cases, plus Unity
+start-up. `runTests.bat record` re-records the goldens after an intended behaviour change.
 
 ---
 

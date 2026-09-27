@@ -116,7 +116,7 @@ namespace DLS.Game
 				anyElementFailedToLoad |= failed;
 			}
 
-			instance.RegenerateParentChipNamesHash();
+			instance.RegenerateParentChipNamesHash(library);
 
 			return (instance, anyElementFailedToLoad);
 		}
@@ -545,10 +545,10 @@ namespace DLS.Game
 			return Elements.OfType<DevPinInstance>().Where(p => !p.IsInputPin);
 		}
 
-		void RegenerateParentChipNamesHash()
+		void RegenerateParentChipNamesHash(ChipLibrary library = null)
 		{
 			AllParentChipNames.Clear();
-			GetAllParentChipNames(LastSavedDescription.Name, Project.ActiveProject.chipLibrary, AllParentChipNames);
+			GetAllParentChipNames(LastSavedDescription.Name, library ?? Project.ActiveProject.chipLibrary, AllParentChipNames);
 		}
 
 		// Recursively get the names of all the chips which contain this chip (either directly, or inside of some other subchip)
