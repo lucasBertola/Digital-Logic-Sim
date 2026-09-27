@@ -13,7 +13,30 @@ namespace DLS.Game
 	{
 		public static readonly Version DLSVersion = new(2, 1, 6);
 		public static readonly Version DLSVersion_EarliestCompatible = new(2, 0, 0);
-		public const string LastUpdatedString = "5 May 2025";
+		public const string LastUpdatedString = "5 May 2025"; // upstream save-format date (DLSVersion is the FILE format version)
+
+		// The fork's release version and build date, written by BuildTools into Resources/BuildInfo.txt at build
+		// time ("V1.2.0 | 27 Sep 2026", or "V1.2.0-3-gabc123 | ..." for a build past the last release tag).
+		static string buildInfo;
+		public static string BuildInfoString
+		{
+			get
+			{
+				if (buildInfo == null)
+				{
+					TextAsset t = Resources.Load<TextAsset>("BuildInfo");
+					string raw = t != null ? t.text.Trim() : "";
+					string[] parts = raw.Split('|');
+					string version = parts.Length > 0 && parts[0].Trim().Length > 0 ? parts[0].Trim() : "dev";
+					string date = parts.Length > 1 ? parts[1].Trim() : "";
+					// "V1.2.0-3-gabc123" -> "V1.2.0 +3 (abc123)"
+					var m = System.Text.RegularExpressions.Regex.Match(version, @"^(.*)-(\d+)-g([0-9a-f]+)(-dirty)?$");
+					if (m.Success) version = $"{m.Groups[1].Value} +{m.Groups[2].Value} ({m.Groups[3].Value}{(m.Groups[4].Success ? ", modified" : "")})";
+					buildInfo = date.Length > 0 ? $"{version}, built {date}" : version;
+				}
+				return buildInfo;
+			}
+		}
 		public static AppSettings ActiveAppSettings;
 
 		public static Project ActiveProject { get; private set; }

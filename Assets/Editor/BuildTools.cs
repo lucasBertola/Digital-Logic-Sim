@@ -34,10 +34,36 @@ public static class BuildTools
         EditorUtility.DisplayDialog(ok ? "Build reussi" : "Build echoue", msg, "OK");
     }
 
+    // The main menu banner shows the fork's release version and the build date, not the upstream save-format
+    // version. Written at build time into a Resources text asset (git-ignored): "<git describe> | <date>".
+    const string BuildInfoPath = "Assets/Resources/BuildInfo.txt";
+
+    static void WriteBuildInfo()
+    {
+        string version = "dev";
+        try
+        {
+            var psi = new System.Diagnostics.ProcessStartInfo("git", "describe --tags --always --dirty")
+            {
+                WorkingDirectory = Path.GetDirectoryName(Application.dataPath),
+                RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true
+            };
+            using var p = System.Diagnostics.Process.Start(psi);
+            string outp = p.StandardOutput.ReadToEnd().Trim();
+            p.WaitForExit(5000);
+            if (p.ExitCode == 0 && outp.Length > 0) version = outp;
+        }
+        catch (Exception) { /* no git: "dev" */ }
+        Directory.CreateDirectory(Path.GetDirectoryName(BuildInfoPath));
+        File.WriteAllText(BuildInfoPath, version + " | " + DateTime.Now.ToString("d MMM yyyy", System.Globalization.CultureInfo.InvariantCulture));
+        AssetDatabase.ImportAsset(BuildInfoPath, ImportAssetOptions.ForceSynchronousImport);
+    }
+
     static (bool ok, string msg) BuildCore(string outputDir)
     {
         string exePath = Path.Combine(outputDir, ExeName);
         Directory.CreateDirectory(outputDir);
+        WriteBuildInfo();
 
         BuildPlayerOptions options = new()
         {

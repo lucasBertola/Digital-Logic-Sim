@@ -75,7 +75,7 @@ namespace DLS.Graphics
 		static int lastProjectClickIndex = -1;
 		static float lastProjectClickTime;
 
-		static readonly string versionString = $"Version: {Main.DLSVersion} ({Main.LastUpdatedString})";
+		static readonly string versionString = $"Version {Main.BuildInfoString}";
 		static string SelectedProjectName => allProjectDescriptions[selectedProjectIndex].ProjectName;
 
 		static string FormatButtonString(string s) => capitalize ? s.ToUpper() : s;

@@ -89,7 +89,23 @@ if "!TAG!"=="" set "TAG=!NEXT!"
 echo.
 echo ==== !TAG! ====
 
-REM l'app en cours d'execution verrouille des fichiers du build : on la ferme avant de zipper
+REM --- Le tag est cree AVANT le build, pour que le bandeau de version de l'app affiche exactement !TAG! ---
+set "UNITY=C:\Program Files\Unity\Hub\Editor\6000.0.46f1\Editor\Unity.exe"
+if not exist "%UNITY%" ( echo Editeur Unity introuvable : %UNITY% & pause & exit /b 1 )
+tasklist /FI "IMAGENAME eq DigitalLogicSim.exe" 2>nul | find /I "DigitalLogicSim.exe" >nul && ( echo Fermeture de l'application en cours... & taskkill /IM DigitalLogicSim.exe /F >nul 2>&1 & timeout /t 2 >nul )
+if not defined DRYRUN (
+  git tag -a "!TAG!" -m "!TAG!"
+  if errorlevel 1 ( echo ECHEC de la creation du tag !TAG! ^(existe deja ?^). & pause & exit /b 1 )
+)
+echo Build de la version !TAG! ^(quelques dizaines de secondes^)...
+"%UNITY%" -projectPath "%~dp0." -executeMethod BuildTools.BuildWindows -buildOutput "%~dp0Builds\Windows" -quit -logFile "%~dp0Builds\build.log"
+findstr /C:"BUILD SUCCEEDED" "%~dp0Builds\build.log" >nul 2>&1
+if errorlevel 1 (
+  echo ECHEC du build ^(voir Builds\build.log^).
+  if not defined DRYRUN git tag -d "!TAG!" >nul 2>&1
+  pause & exit /b 1
+)
+
 tasklist /FI "IMAGENAME eq DigitalLogicSim.exe" 2>nul | find /I "DigitalLogicSim.exe" >nul && ( echo Fermeture de l'application en cours... & taskkill /IM DigitalLogicSim.exe /F >nul 2>&1 & timeout /t 2 >nul )
 echo Creation du zip...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; if(Test-Path '%ZIP%'){Remove-Item '%ZIP%'}; Compress-Archive -Path '%SRC%\*' -DestinationPath '%ZIP%' -CompressionLevel Optimal"
@@ -106,8 +122,10 @@ if errorlevel 1 (
   if errorlevel 1 ( echo Connexion echouee. & pause & exit /b 1 )
 )
 
-echo Push des commits...
+echo Push des commits et du tag...
 git push
+if errorlevel 1 ( echo ECHEC du push. & pause & exit /b 1 )
+git push origin "!TAG!"
 if errorlevel 1 ( echo ECHEC du push. & pause & exit /b 1 )
 
 echo Publication de la Release !TAG!...
