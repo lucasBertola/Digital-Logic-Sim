@@ -15,7 +15,11 @@ namespace DLS.Description
 		public int LayoutCol;
 		public int LayoutRow;
 
-		public PinDescription(string name, int id, Vector2 position, PinBitCount bitCount, PinColour colour, PinValueDisplayMode valueDisplayMode, int layoutCol = 0, int layoutRow = 0)
+		// Value the user set on an INPUT pin (its bits), saved with the chip so it is there again after a reload.
+		// Additive (default 0), so older files load unchanged.
+		public uint InputState;
+
+		public PinDescription(string name, int id, Vector2 position, PinBitCount bitCount, PinColour colour, PinValueDisplayMode valueDisplayMode, int layoutCol = 0, int layoutRow = 0, uint inputState = 0)
 		{
 			Name = name;
 			ID = id;
@@ -25,6 +29,7 @@ namespace DLS.Description
 			ValueDisplayMode = valueDisplayMode;
 			LayoutCol = layoutCol;
 			LayoutRow = layoutRow;
+			InputState = inputState;
 		}
 	}
 

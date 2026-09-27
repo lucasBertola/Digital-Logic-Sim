@@ -36,6 +36,7 @@ namespace DLS.Game
 			pinValueDisplayMode = pinDescription.ValueDisplayMode;
 			LayoutCol = pinDescription.LayoutCol;
 			LayoutRow = pinDescription.LayoutRow;
+			if (isInput) Pin.PlayerInputState = pinDescription.InputState & 0xFFFF; // the saved input value
 
 			// Calculate layout info
 			faceDir = new Vector2(IsInputPin ? 1 : -1, 0);

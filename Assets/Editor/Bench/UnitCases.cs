@@ -32,6 +32,7 @@ namespace DLS.Bench
             ("merge 1->4 then split 4->1 round trip", MergeSplitRoundTrip),
             ("same seed => same outputs on a sequential fixture (Bascule D)", () => Deterministic(fixtures, fixtureChips)),
             ("live modification: adding a NOT via the sim queue is applied", LiveModification),
+            ("input pin values are saved with the chip and restored on load", () => InputValuesPersist(fixtures, fixtureChips)),
         };
 
         // ---------------- helpers ----------------
@@ -378,6 +379,29 @@ namespace DLS.Bench
             }
             finally { Simulator.ClearTestSeed(); }
             return sb.ToString();
+        }
+
+        // The value the user sets on an input pin is part of the chip: it survives save + reload (user request).
+        static string InputValuesPersist(ChipLibrary lib, ChipDescription[] chips)
+        {
+            ChipDescription desc = chips.FirstOrDefault(c => ChipDescription.NameMatch(c.Name, "Add4"));
+            if (desc == null) return "fixture chip Add4 missing";
+            (DevChipInstance dev, bool failed) = DevChipInstance.LoadFromDescriptionTest(desc, lib);
+            if (failed) return "Add4 failed to load";
+            DevPinInstance[] ins = dev.GetInputPins();
+            ins[0].Pin.PlayerInputState = 1;
+            ins[2].Pin.PlayerInputState = 1;
+            // save (through the real serializer) and load again
+            string json = Saver.CreateSerializedChipDescription(DescriptionCreator.CreateChipDescription(dev));
+            ChipDescription back = Serializer.DeserializeChipDescription(json);
+            (DevChipInstance dev2, bool failed2) = DevChipInstance.LoadFromDescriptionTest(back, lib);
+            if (failed2) return "reloaded Add4 failed to load";
+            foreach (DevPinInstance p in dev2.GetInputPins())
+            {
+                uint expected = p.ID == ins[0].ID || p.ID == ins[2].ID ? 1u : 0u;
+                if (p.Pin.PlayerInputState != expected) return $"input {p.Name} reloaded as {p.Pin.PlayerInputState}, expected {expected}";
+            }
+            return null;
         }
 
         // The live editor mutates a running sim through Simulator.AddSubChip/AddConnection + ApplyModifications.

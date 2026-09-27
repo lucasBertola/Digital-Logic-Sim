@@ -163,7 +163,9 @@ namespace DLS.SaveSystem
 				devPin.IsInputPin ? devPin.Pin.Colour : default,
 				devPin.pinValueDisplayMode,
 				devPin.LayoutCol,
-				devPin.LayoutRow
+				devPin.LayoutRow,
+				// the value the user set on an input pin is part of the chip (bits only, an input is never floating)
+				devPin.IsInputPin ? devPin.Pin.PlayerInputState & 0xFFFF : 0
 			);
 
 		static Color RandomInitialChipColour()
