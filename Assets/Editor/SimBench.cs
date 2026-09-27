@@ -45,8 +45,15 @@ public static class SimBench
             sb.Append($"\n=== SimBench \"{chipName}\" ({projectName}) : {chips} chips in the sim tree ({builtins} builtin leaves), {pins} pins ===\n");
             sb.Append($"project target: {project.description.Prefs_SimTargetStepsPerSecond} steps/s, {project.description.Prefs_SimStepsPerClockTick} steps per clock tick\n");
 
-            // like the app: every input pin is driven (0 unless -benchSet says otherwise)
-            for (int i = 0; i < root.InputPins.Length; i++) root.InputPins[i].State = PinState.Make(0, 0);
+            // like the app: every input pin is driven, with the value SAVED in the chip (what the user set), unless -benchSet overrides it
+            var saved = new System.Collections.Generic.List<string>();
+            for (int i = 0; i < root.InputPins.Length; i++)
+            {
+                ushort v = (ushort)(desc.InputPins[i].InputState & 0xFFFF);
+                root.InputPins[i].State = PinState.Make(v, 0);
+                if (v != 0) saved.Add(desc.InputPins[i].Name + "=" + v);
+            }
+            sb.AppendLine("inputs as saved in the chip: " + (saved.Count == 0 ? "(all 0)" : string.Join(", ", saved)));
             string set = GetArg("-benchSet");
             if (!string.IsNullOrEmpty(set))
             {
