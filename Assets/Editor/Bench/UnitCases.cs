@@ -265,8 +265,11 @@ namespace DLS.Bench
             });
             c.Set("EN", 0); c.Set("D", 1);
             int zeros = 0, ones = 0;
-            for (int s = 0; s < 64; s++) { c.Step(1); if (c.OutBit("Q") == 0) zeros++; else ones++; }
-            return Expect(zeros > 0 && ones > 0, $"a gate fed by a floating line gave a constant value over 64 steps ({zeros} zeros, {ones} ones)");
+            // a gate reading a floating line re-draws its noise about every SimProgram.NoisePeriod steps (user rule:
+            // "it may change randomly about once a second"), so sample long enough to see several re-draws
+            int steps = SimProgram.NoisePeriod * 20;
+            for (int s = 0; s < steps; s++) { c.Step(1); if (c.OutBit("Q") == 0) zeros++; else ones++; }
+            return Expect(zeros > 0 && ones > 0, $"a gate fed by a floating line gave a constant value over {steps} steps ({zeros} zeros, {ones} ones)");
         }
 
         static string ClockPattern()

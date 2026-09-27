@@ -12,38 +12,70 @@ namespace DLS.Simulation
 	//   * every pin is resolved to a SLOT in one contiguous uint[] of pin states. A pin fed by exactly one
 	//     source shares its source's slot (no copy: a signal crossing custom-chip boundaries costs nothing),
 	//     a pin fed by several sources is a MERGE node with its own slot, a builtin output pin or a root input
-	//     pin owns a slot, an unconnected pin gets a slot holding "floating, low" forever;
-	//   * every builtin chip becomes a GATE reading and writing slots directly; custom chips vanish from the
-	//     step, but not from the ORDER: gates are emitted by walking the tree exactly as the original stepper
-	//     did — at every level the sub-chips run in the order they become ready (all their inputs produced by
-	//     already-run siblings), and when none is ready (a feedback loop) one of the unready non-bus chips is
-	//     picked at random and runs on last step's values. So the timing of latches, registers and buses is
-	//     the same as before, and the random picks are re-drawn every 100 steps so race conditions vary.
+	//     pin owns a slot, an unconnected pin gets a slot holding "floating, low" forever. Slots are numbered
+	//     in the order the step first touches them, so a step streams through memory;
+	//   * every builtin chip becomes a GATE reading and writing slots directly (hot fields in struct-of-arrays
+	//     form, in schedule order); custom chips vanish from the step, but not from the ORDER: gates are
+	//     emitted by walking the tree exactly as the original stepper did — at every level the sub-chips run
+	//     in the order they become ready (all their inputs produced by already-run siblings), and when none is
+	//     ready (a feedback loop) one of the unready non-bus chips is picked at random and runs on last step's
+	//     values. So the timing of latches, registers and buses is the same as before, and the random picks
+	//     are re-drawn every 100 steps so race conditions vary;
+	//   * a step only runs the gates whose inputs changed (a dirty bit per gate, set by whoever writes one of
+	//     its input slots to a different value, cleared when it runs — in schedule order, so a change made by
+	//     an earlier gate is seen in the same step, and one made by a later gate — feedback — on the next).
+	//     Gates with a life of their own (clock, key, buzzer, a merge with a conflict to re-draw, a pulse
+	//     counting down) re-arm themselves; a floating output (disabled 3-state buffer, floating pulse) joins
+	//     the noise list and is re-drawn now and then (NoisePeriod).
 	// SimPin.State reads through to the slot, so everything that looks at pins (UI sync, harness probes,
 	// tests) sees the live values without any write-back.
 	public sealed class SimProgram
 	{
-		const int MergeType = -1;
+		const byte MergeType = 255;
 		static int compileStampCounter;
-
-		struct Gate
-		{
-			public int type;              // ChipType, or MergeType
-			public int in0, in1, out0;    // first slots (hot path)
-			public int inStart, inCount;  // all input slots, in inSlots
-			public int outStart, outCount;
-			public int canon;             // index into the side arrays (internal state, merge info)
-		}
 
 		public uint[] states = Array.Empty<uint>();
 		int slotCount;
 
-		Gate[] canonical = Array.Empty<Gate>();  // gates in creation order
-		Gate[] gates = Array.Empty<Gate>();      // gates in schedule order (copied from canonical)
+		// ---- gates, canonical order (cold fields) ----
+		int gateCount;
+		byte[] cType = Array.Empty<byte>();
+		int[] cInStart = Array.Empty<int>(), cInCount = Array.Empty<int>(), cOutStart = Array.Empty<int>(), cOutCount = Array.Empty<int>();
 		int[] inSlots = Array.Empty<int>(), outSlots = Array.Empty<int>();
 		uint[][] internalState = Array.Empty<uint[]>();
+		SimChip[] chipOfGate = Array.Empty<SimChip>();
 		SimPin[] mergeTarget = Array.Empty<SimPin>();
 		SimPin[][] mergeSources = Array.Empty<SimPin[]>();
+		int[] romGates = Array.Empty<int>();
+
+		// ---- gates, schedule order (hot fields) ----
+		byte[] sType = Array.Empty<byte>();
+		int[] sIn0 = Array.Empty<int>(), sIn1 = Array.Empty<int>(), sOut0 = Array.Empty<int>(), sCanon = Array.Empty<int>();
+		int[] posOfCanon = Array.Empty<int>();
+		ulong[] dirty = Array.Empty<ulong>();
+
+		// ---- who reads a slot (canonical gate ids), to mark on change ----
+		int[] slotConsStart = Array.Empty<int>(), slotConsList = Array.Empty<int>();
+
+		// ---- root inputs: written from outside the step, change-detected against a shadow copy ----
+		// ---- noise ----
+		// A floating (high-impedance) line carries no value: its slot holds tri flags and bits 0, and costs
+		// nothing while nobody reads it (a RAM made of 2 048 disabled buffers is idle). Noise appears where
+		// LOGIC reads a floating bit: the reading gate substitutes a random bit and joins the noise list, from
+		// which it is re-run with probability 1/NoisePeriod per step (a few times a second — the display
+		// only shows 60 frames a second, and draws floating pins as flicker itself). So whatever a floating
+		// line feeds sees unpredictable values, as before, and an idle floating bus is free.
+		// (user rule, 2026-09-27: "it may change randomly about once a second" — at a few thousand steps per
+		// second, 1/1024 per step is a few times a second)
+		public const int NoisePeriod = 1024;
+		int[] noiseList = Array.Empty<int>(), noisePos = Array.Empty<int>(); // canonical gate ids (survive a reschedule)
+		int noiseAccumulator;
+		// slots nobody ever drives (unconnected pins): floating, but read as a quiet 0, never as noise
+		bool[] quiet = Array.Empty<bool>();
+		int noiseCount;
+
+		int[] rootInputSlots = Array.Empty<int>();
+		uint[] rootShadow = Array.Empty<uint>();
 
 		// ---- the tree, for scheduling (indices into `chips`, pre-order) ----
 		SimChip[] chips = Array.Empty<SimChip>();
@@ -55,7 +87,17 @@ namespace DLS.Simulation
 		int[] mergeAfterStart = Array.Empty<int>(), mergeAfterList = Array.Empty<int>();   // merge gates on a chip's output pins
 		bool hasCuts;
 
-		public int GateCount => canonical.Length;
+		public int GateCount => gateCount;
+		public int GatesRunLastStep; // diagnostic: how many gates the last step actually ran
+		public int NoiseCount => noiseCount;
+		// diagnostic: the chips whose gate currently reads a floating line (and its parent chain)
+		public IEnumerable<SimChip> ArmedGateChips()
+		{
+			for (int j = 0; j < noiseCount; j++) yield return chipOfGate[noiseList[j]];
+		}
+		public bool CollectStats;                       // diagnostic: count runs per gate type
+		public readonly long[] RunsByType = new long[256];
+		public double RescheduleMs;                     // diagnostic: time spent re-drawing the schedule
 		public int SlotCount => slotCount;
 
 		// ------------------------------------------------------------------ compile
@@ -79,6 +121,10 @@ namespace DLS.Simulation
 			int n = pins.Count, nc = chipList.Count;
 			SimChip[] chips = chipList.ToArray();
 			prog.chips = chips;
+
+			// snapshot every pin's current value BEFORE anything is rebound (the state array may be reused)
+			uint[] old = new uint[n];
+			for (int i = 0; i < n; i++) old[i] = pins[i].State;
 
 			// ---- sources of every pin (CSR) ----
 			int[] nSrc = new int[n];
@@ -135,32 +181,18 @@ namespace DLS.Simulation
 				int slot = slotOf[cur];
 				foreach (int p in path) { slotOf[p] = slot; onPath[p] = false; }
 			}
-			prog.slotCount = nextSlot;
 
-			// ---- state slots: keep every pin's current value (snapshot BEFORE rebinding, the array may be reused) ----
-			uint[] old = new uint[n];
-			for (int i = 0; i < n; i++) old[i] = pins[i].State;
-			uint[] states = previous != null && previous.states.Length >= nextSlot ? previous.states : new uint[nextSlot + nextSlot / 4 + 64];
-			for (int i = 0; i < n; i++)
-				if (isDriver[i]) states[slotOf[i]] = isConstant[i] ? PinState.FloatingLow : old[i];
-			prog.states = states;
-			for (int i = 0; i < n; i++)
-			{
-				SimPin p = pins[i];
-				p.stateIndex = slotOf[i];
-				p.stateArray = states;
-				// display colouring: where this pin's value comes from (a merge updates it while stepping)
-				if (nSrc[i] == 1) { SimPin s = pins[srcList[srcStart[i]]]; p.latestSourceID = s.ID; p.latestSourceParentChipID = s.parentChip.ID; }
-				else if (nSrc[i] == 0) { p.latestSourceID = -1; p.latestSourceParentChipID = -1; }
-			}
-
-			// ---- gates ----
-			var gl = new List<Gate>(nc);
+			// ---- gates (canonical order) ----
+			var types = new List<byte>(nc);
+			var inStart = new List<int>(nc); var inCount = new List<int>(nc);
+			var outStart = new List<int>(nc); var outCount = new List<int>(nc);
 			var inList = new List<int>(nc * 3);
 			var outList = new List<int>(nc);
 			var stateList = new List<uint[]>(nc);
+			var chipList2 = new List<SimChip>(nc);
 			var mTarget = new List<SimPin>();
 			var mSources = new List<SimPin[]>();
+			var roms = new List<int>();
 			int[] gateOfChip = new int[nc];
 			var mergeBefore = new List<int>[nc];
 			var mergeAfter = new List<int>[nc];
@@ -170,14 +202,14 @@ namespace DLS.Simulation
 				if (!b.IsBuiltin) continue;
 				if (ChipTypeHelper.IsBusType(b.ChipType)) continue; // origin = wire, terminus = nothing
 				if (b.OutputPins.Length == 0 && b.ChipType != ChipType.Buzzer) continue; // pure displays: their input pins already carry the values
-				Gate g = new() { type = (int)b.ChipType, canon = gl.Count, inStart = inList.Count, inCount = b.InputPins.Length, outStart = outList.Count, outCount = b.OutputPins.Length };
+				gateOfChip[b.compileIndex] = types.Count;
+				if (b.ChipType == ChipType.Rom_256x16) roms.Add(types.Count);
+				types.Add((byte)b.ChipType);
+				inStart.Add(inList.Count); inCount.Add(b.InputPins.Length);
+				outStart.Add(outList.Count); outCount.Add(b.OutputPins.Length);
 				foreach (SimPin p in b.InputPins) inList.Add(slotOf[p.compileIndex]);
 				foreach (SimPin p in b.OutputPins) outList.Add(slotOf[p.compileIndex]);
-				g.in0 = g.inCount > 0 ? inList[g.inStart] : 0;
-				g.in1 = g.inCount > 1 ? inList[g.inStart + 1] : 0;
-				g.out0 = g.outCount > 0 ? outList[g.outStart] : 0;
-				gateOfChip[b.compileIndex] = gl.Count;
-				gl.Add(g); stateList.Add(b.InternalState); mTarget.Add(null); mSources.Add(null);
+				stateList.Add(b.InternalState); chipList2.Add(b); mTarget.Add(null); mSources.Add(null);
 			}
 			for (int i = 0; i < n; i++)
 			{
@@ -185,22 +217,30 @@ namespace DLS.Simulation
 				SimPin target = pins[i];
 				SimChip owner = target.parentChip;
 				if (owner.IsBuiltin && !target.isInput) continue; // (a builtin output with sources: ignore them)
-				Gate g = new() { type = MergeType, canon = gl.Count, inStart = inList.Count, inCount = nSrc[i], outStart = outList.Count, outCount = 1 };
+				int g = types.Count;
+				types.Add(MergeType);
+				inStart.Add(inList.Count); inCount.Add(nSrc[i]);
+				outStart.Add(outList.Count); outCount.Add(1);
 				var srcs = new SimPin[nSrc[i]];
 				for (int k = 0; k < nSrc[i]; k++) { int s = srcList[srcStart[i] + k]; inList.Add(slotOf[s]); srcs[k] = pins[s]; }
 				outList.Add(slotOf[i]);
-				g.in0 = inList[g.inStart]; g.in1 = inList[g.inStart + 1]; g.out0 = slotOf[i];
+				stateList.Add(null); chipList2.Add(owner); mTarget.Add(target); mSources.Add(srcs);
 				// the merged value must be complete when its owner runs: right before it (input pin) or at its end (output pin)
 				ref List<int> bucket = ref (target.isInput ? ref mergeBefore[owner.compileIndex] : ref mergeAfter[owner.compileIndex]);
-				(bucket ??= new List<int>()).Add(gl.Count);
-				gl.Add(g); stateList.Add(null); mTarget.Add(target); mSources.Add(srcs);
+				(bucket ??= new List<int>()).Add(g);
 			}
-			prog.canonical = gl.ToArray();
+			int gc = types.Count;
+			prog.gateCount = gc;
+			prog.cType = types.ToArray();
+			prog.cInStart = inStart.ToArray(); prog.cInCount = inCount.ToArray();
+			prog.cOutStart = outStart.ToArray(); prog.cOutCount = outCount.ToArray();
 			prog.inSlots = inList.ToArray();
 			prog.outSlots = outList.ToArray();
 			prog.internalState = stateList.ToArray();
+			prog.chipOfGate = chipList2.ToArray();
 			prog.mergeTarget = mTarget.ToArray();
 			prog.mergeSources = mSources.ToArray();
+			prog.romGates = roms.ToArray();
 			prog.gateOfChip = gateOfChip;
 			(prog.mergeBeforeStart, prog.mergeBeforeList) = Csr(mergeBefore);
 			(prog.mergeAfterStart, prog.mergeAfterList) = Csr(mergeAfter);
@@ -249,7 +289,61 @@ namespace DLS.Simulation
 			prog.edgeStart = edgeStart; prog.edgeList = edgeList;
 			prog.indegree0 = indeg;
 
+			// ---- first schedule, then number the slots in the order the step touches them (memory locality) ----
 			prog.Schedule();
+			int[] renum = new int[nextSlot];
+			for (int s = 0; s < nextSlot; s++) renum[s] = -1;
+			int next = 0;
+			for (int k = 0; k < gc; k++)
+			{
+				int g = prog.sCanon[k];
+				for (int j = 0; j < prog.cInCount[g]; j++) { int s = prog.inSlots[prog.cInStart[g] + j]; if (renum[s] < 0) renum[s] = next++; }
+				for (int j = 0; j < prog.cOutCount[g]; j++) { int s = prog.outSlots[prog.cOutStart[g] + j]; if (renum[s] < 0) renum[s] = next++; }
+			}
+			for (int s = 0; s < nextSlot; s++) if (renum[s] < 0) renum[s] = next++;
+			for (int j = 0; j < prog.inSlots.Length; j++) prog.inSlots[j] = renum[prog.inSlots[j]];
+			for (int j = 0; j < prog.outSlots.Length; j++) prog.outSlots[j] = renum[prog.outSlots[j]];
+			for (int i = 0; i < n; i++) slotOf[i] = renum[slotOf[i]];
+			prog.slotCount = nextSlot;
+			prog.CopySchedule(); // hot arrays again, with the final slot numbers
+
+			// ---- state slots ----
+			uint[] states = previous != null && previous.states.Length >= nextSlot ? previous.states : new uint[nextSlot + nextSlot / 4 + 64];
+			for (int i = 0; i < n; i++)
+				if (isDriver[i]) states[slotOf[i]] = isConstant[i] ? PinState.FloatingLow : old[i];
+			prog.states = states;
+			for (int i = 0; i < n; i++)
+			{
+				SimPin p = pins[i];
+				p.stateIndex = slotOf[i];
+				p.stateArray = states;
+				// display colouring: where this pin's value comes from (a merge updates it while stepping)
+				if (nSrc[i] == 1) { SimPin s = pins[srcList[srcStart[i]]]; p.latestSourceID = s.ID; p.latestSourceParentChipID = s.parentChip.ID; }
+				else if (nSrc[i] == 0) { p.latestSourceID = -1; p.latestSourceParentChipID = -1; }
+			}
+			prog.rootInputSlots = new int[root.InputPins.Length];
+			prog.rootShadow = new uint[root.InputPins.Length];
+			for (int i = 0; i < root.InputPins.Length; i++) { int s = slotOf[root.InputPins[i].compileIndex]; prog.rootInputSlots[i] = s; prog.rootShadow[i] = states[s]; }
+
+			// ---- consumers of every slot (canonical gate ids) ----
+			int[] nCons = new int[nextSlot];
+			for (int j = 0; j < prog.inSlots.Length; j++) nCons[prog.inSlots[j]]++;
+			int[] consStart = new int[nextSlot + 1];
+			for (int s = 0; s < nextSlot; s++) consStart[s + 1] = consStart[s] + nCons[s];
+			int[] consList = new int[consStart[nextSlot]];
+			int[] cf = new int[nextSlot];
+			for (int g = 0; g < gc; g++)
+				for (int j = 0; j < prog.cInCount[g]; j++) { int s = prog.inSlots[prog.cInStart[g] + j]; consList[consStart[s] + cf[s]++] = g; }
+			prog.slotConsStart = consStart;
+			prog.slotConsList = consList;
+			prog.quiet = new bool[nextSlot];
+			for (int i = 0; i < n; i++) if (isConstant[i]) prog.quiet[slotOf[i]] = true;
+
+			prog.dirty = new ulong[(gc + 63) / 64];
+			prog.noiseList = new int[gc];
+			prog.noisePos = new int[gc];
+			prog.ClearNoise();
+			prog.MarkAllDirty();
 			return prog;
 		}
 
@@ -262,6 +356,15 @@ namespace DLS.Simulation
 			return (start, list);
 		}
 
+		void MarkAllDirty()
+		{
+			for (int w = 0; w < dirty.Length; w++) dirty[w] = ulong.MaxValue;
+			int rem = gateCount & 63;
+			if (rem != 0 && dirty.Length > 0) dirty[dirty.Length - 1] = (1UL << rem) - 1; // no padding bits
+		}
+
+		// ------------------------------------------------------------------ schedule
+
 		// Emits the gates in the order the tree stepper visited the chips: per level, chips as they become
 		// ready; when none is (feedback), a random unready chip — a non-bus one while any remains — runs with
 		// last step's inputs. A merge node runs right before the chip that owns the pin.
@@ -272,7 +375,7 @@ namespace DLS.Simulation
 
 		void Schedule()
 		{
-			int nc = chips.Length, gc = canonical.Length;
+			int nc = chips.Length, gc = gateCount;
 			indeg ??= new int[nc];
 			Array.Copy(indegree0, indeg, nc);
 			orderBuf ??= new int[gc];
@@ -283,8 +386,25 @@ namespace DLS.Simulation
 			nOrdered = 0;
 			hasCuts = false;
 			Emit(0, 0);
-			if (gates.Length != gc) gates = new Gate[gc];
-			for (int k = 0; k < gc; k++) gates[k] = canonical[orderBuf[k]];
+			CopySchedule();
+		}
+
+		void CopySchedule()
+		{
+			int gc = gateCount;
+			if (sType.Length != gc)
+			{
+				sType = new byte[gc]; sIn0 = new int[gc]; sIn1 = new int[gc]; sOut0 = new int[gc]; sCanon = new int[gc]; posOfCanon = new int[gc];
+			}
+			for (int k = 0; k < gc; k++)
+			{
+				int g = orderBuf[k];
+				sCanon[k] = g; posOfCanon[g] = k;
+				sType[k] = cType[g];
+				sIn0[k] = cInCount[g] > 0 ? inSlots[cInStart[g]] : 0;
+				sIn1[k] = cInCount[g] > 1 ? inSlots[cInStart[g] + 1] : 0;
+				sOut0[k] = cOutCount[g] > 0 ? outSlots[cOutStart[g]] : 0;
+			}
 		}
 
 		void Emit(int chip, int depth)
@@ -343,225 +463,376 @@ namespace DLS.Simulation
 		// Every 100 steps: new random picks inside feedback loops (race conditions vary, as before)
 		public void Reschedule()
 		{
-			if (hasCuts) Schedule();
+			if (!hasCuts) return;
+			var sw = System.Diagnostics.Stopwatch.StartNew();
+			// the pending dirty gates keep pending at their new positions (the noise list is by canonical id)
+			int gc = gateCount;
+			var pending = new List<int>();
+			for (int k = 0; k < gc; k++) if ((dirty[k >> 6] & (1UL << (k & 63))) != 0) pending.Add(sCanon[k]);
+			Schedule();
+			Array.Clear(dirty, 0, dirty.Length);
+			foreach (int c in pending) SetDirty(posOfCanon[c]);
+			RescheduleMs += sw.Elapsed.TotalMilliseconds;
 		}
 
 		// ------------------------------------------------------------------ step
 
-		public void Step(SimAudio audio)
+		// index of the lowest set bit (no BitOperations under this runtime)
+		static readonly int[] lowestBitTable = BuildLowestBitTable();
+		const ulong DeBruijn = 0x03f79d71b4ca8b09UL;
+
+		static int[] BuildLowestBitTable()
 		{
-			uint[] st = states;
-			Gate[] gs = gates;
-			int[] ins = inSlots, outs = outSlots;
+			var t = new int[64];
+			for (int i = 0; i < 64; i++) t[(int)(((1UL << i) * DeBruijn) >> 58)] = i;
+			return t;
+		}
+
+		public unsafe void Step(SimAudio audio)
+		{
+			int gc = gateCount;
+			if (gc == 0) return;
+			uint[] states = this.states;
+
+			// external edits of an internal state (ROM contents): re-run that gate
+			foreach (int g in romGates)
+			{
+				SimChip c = chipOfGate[g];
+				if (c.InternalStateEdited) { c.InternalStateEdited = false; SetDirty(posOfCanon[g]); }
+			}
+			// root inputs were written from outside the step: mark what changed
+			for (int i = 0; i < rootInputSlots.Length; i++)
+			{
+				int s = rootInputSlots[i];
+				uint v = states[s];
+				if (v != rootShadow[i]) { rootShadow[i] = v; MarkConsumers(s); }
+			}
+
+			// noise readers: on average noiseCount / NoisePeriod of them re-run this step, picked at random
+			noiseAccumulator += noiseCount;
+			while (noiseAccumulator >= NoisePeriod && noiseCount > 0)
+			{
+				noiseAccumulator -= NoisePeriod;
+				SetDirty(posOfCanon[noiseList[Simulator.RandomIndex(noiseCount)]]);
+			}
+
 			int forcedClock = Simulator.forcedClockState;
 			bool clockHigh = forcedClock >= 0
 				? forcedClock == 1
 				: Simulator.stepsPerClockTransition != 0 && ((Simulator.simulationFrame / Simulator.stepsPerClockTransition) & 1) == 0;
 
-			for (int k = 0; k < gs.Length; k++)
+			int ran = 0;
+			fixed (uint* st = states)
+			fixed (byte* type = sType)
+			fixed (int* in0 = sIn0, in1 = sIn1, out0 = sOut0)
+			fixed (ulong* dirtyBits = dirty)
 			{
-				ref Gate g = ref gs[k];
-				switch (g.type)
+				int words = dirty.Length;
+				for (int w = 0; w < words; w++)
 				{
-					case (int)ChipType.Nand:
-						st[g.out0] = (1 ^ (st[g.in0] & st[g.in1])) & 1;
-						break;
-
-					case MergeType:
-						Merge(ref g, st, ins);
-						break;
-
-					case (int)ChipType.TriStateBuffer:
-						// disabled: floats (noise). If something else drives its net, the merge node of that net
-						// writes the net's value back into this slot right after (a floating output reads its net).
-						if ((st[g.in1] & 1) == PinState.LogicHigh) st[g.out0] = st[g.in0];
-						else st[g.out0] = Simulator.RandomBits16() | 0xFFFF0000u;
-						break;
-
-					case (int)ChipType.Clock:
-						st[g.out0] = clockHigh ? PinState.LogicHigh : PinState.LogicLow;
-						break;
-
-					case (int)ChipType.Vcc: st[g.out0] = PinState.LogicHigh; break;
-					case (int)ChipType.Gnd: st[g.out0] = PinState.LogicLow; break;
-
-					case (int)ChipType.Split_4To1Bit:
+					ulong bits = dirtyBits[w];
+					while (bits != 0)
 					{
-						uint v = st[g.in0];
-						st[outs[g.outStart]] = (v >> 3) & PinState.SingleBitMask;
-						st[outs[g.outStart + 1]] = (v >> 2) & PinState.SingleBitMask;
-						st[outs[g.outStart + 2]] = (v >> 1) & PinState.SingleBitMask;
-						st[outs[g.outStart + 3]] = v & PinState.SingleBitMask;
-						break;
-					}
-					case (int)ChipType.Merge_1To4Bit:
-					{
-						int i = g.inStart;
-						st[g.out0] = (st[ins[i + 3]] & PinState.SingleBitMask) | (st[ins[i + 2]] & PinState.SingleBitMask) << 1 | (st[ins[i + 1]] & PinState.SingleBitMask) << 2 | (st[ins[i]] & PinState.SingleBitMask) << 3;
-						break;
-					}
-					case (int)ChipType.Merge_1To8Bit:
-					{
-						int i = g.inStart;
-						uint r = 0;
-						for (int b = 0; b < 8; b++) r |= (st[ins[i + 7 - b]] & PinState.SingleBitMask) << b;
-						st[g.out0] = r;
-						break;
-					}
-					case (int)ChipType.Merge_4To8Bit:
-					{
-						uint r = 0;
-						PinState.Set8BitFrom4BitSources(ref r, st[g.in1], st[g.in0]);
-						st[g.out0] = r;
-						break;
-					}
-					case (int)ChipType.Split_8To4Bit:
-					{
-						uint v = st[g.in0], a = 0, b = 0;
-						PinState.Set4BitFrom8BitSource(ref a, v, false);
-						PinState.Set4BitFrom8BitSource(ref b, v, true);
-						st[outs[g.outStart]] = a;
-						st[outs[g.outStart + 1]] = b;
-						break;
-					}
-					case (int)ChipType.Split_8To1Bit:
-					{
-						uint v = st[g.in0];
-						for (int b = 0; b < 8; b++) st[outs[g.outStart + b]] = (v >> (7 - b)) & PinState.SingleBitMask;
-						break;
-					}
+						int b = lowestBitTable[(int)(((bits & (~bits + 1)) * DeBruijn) >> 58)];
+						ulong bit = 1UL << b;
+						dirtyBits[w] &= ~bit; // cleared before running: a gate may re-arm itself
+						int k = (w << 6) + b;
+						if (k >= gc) { bits = 0; break; }
+						ran++;
+						if (CollectStats) RunsByType[type[k]]++;
+						if (noisePos[sCanon[k]] >= 0) DisarmNoise(k); // re-armed below if it still reads a floating bit
 
-					case (int)ChipType.Key:
-						st[g.out0] = SimKeyboardHelper.KeyIsHeld((char)internalState[g.canon][0]) ? PinState.LogicHigh : PinState.LogicLow;
-						break;
-
-					case (int)ChipType.Pulse:
-					{
-						uint[] mem = internalState[g.canon];
-						uint input = st[g.in0];
-						bool inputHigh = PinState.FirstBitHigh(input);
-						uint remaining = mem[1];
-						if (remaining == 0 && inputHigh && mem[2] == 0) { remaining = mem[0]; mem[1] = remaining; }
-						uint o = PinState.LogicLow;
-						if (remaining > 0) { mem[1]--; o = PinState.LogicHigh; }
-						else if (PinState.GetTristateFlags(input) != 0) o = Simulator.RandomBits16() | 0xFFFF0000u;
-						st[g.out0] = o;
-						mem[2] = inputHigh ? 1u : 0;
-						break;
-					}
-
-					case (int)ChipType.DisplayRGB:
-					{
-						uint[] mem = internalState[g.canon];
-						int i = g.inStart;
-						uint address = st[ins[i]], red = st[ins[i + 1]], green = st[ins[i + 2]], blue = st[ins[i + 3]];
-						uint reset = st[ins[i + 4]], write = st[ins[i + 5]], refresh = st[ins[i + 6]], clock = st[ins[i + 7]];
-						bool high = PinState.FirstBitHigh(clock);
-						bool rising = high && mem[^1] == 0;
-						mem[^1] = high ? 1u : 0;
-						if (rising)
+						if (type[k] == (byte)ChipType.Nand)
 						{
-							if (PinState.FirstBitHigh(reset)) for (int a = 0; a < 256; a++) mem[a + 256] = 0;
-							else if (PinState.FirstBitHigh(write))
-								mem[PinState.GetBitStates(address) + 256] = (uint)(PinState.GetBitStates(red) | (PinState.GetBitStates(green) << 4) | (PinState.GetBitStates(blue) << 8));
-							if (PinState.FirstBitHigh(refresh)) for (int a = 0; a < 256; a++) mem[a] = mem[a + 256];
+							int ia = in0[k], ic = in1[k];
+							uint a = st[ia], c = st[ic];
+							if (((a | c) & 0x10000) != 0)
+							{
+								bool[] q = quiet;
+								bool na = (a & 0x10000) != 0 && !q[ia], ncc = (c & 0x10000) != 0 && !q[ic];
+								if (na) a = Noisy(a);
+								if (ncc) c = Noisy(c);
+								if (na || ncc) ArmNoise(k);
+							}
+							uint v = (1 ^ (a & c)) & 1;
+							int o = out0[k];
+							if (st[o] != v) { st[o] = v; MarkConsumers(o); }
 						}
-						uint col = mem[PinState.GetBitStates(address)];
-						st[outs[g.outStart]] = (col >> 0) & 0b1111;
-						st[outs[g.outStart + 1]] = (col >> 4) & 0b1111;
-						st[outs[g.outStart + 2]] = (col >> 8) & 0b1111;
-						break;
-					}
+						else RunGate(k, st, clockHigh, audio);
 
-					case (int)ChipType.DisplayDot:
-					{
-						uint[] mem = internalState[g.canon];
-						int i = g.inStart;
-						uint address = st[ins[i]], pixel = st[ins[i + 1]], reset = st[ins[i + 2]], write = st[ins[i + 3]], refresh = st[ins[i + 4]], clock = st[ins[i + 5]];
-						bool high = PinState.FirstBitHigh(clock);
-						bool rising = high && mem[^1] == 0;
-						mem[^1] = high ? 1u : 0;
-						if (rising)
-						{
-							if (PinState.FirstBitHigh(reset)) for (int a = 0; a < 256; a++) mem[a + 256] = 0;
-							else if (PinState.FirstBitHigh(write)) mem[PinState.GetBitStates(address) + 256] = PinState.GetBitStates(pixel);
-							if (PinState.FirstBitHigh(refresh)) for (int a = 0; a < 256; a++) mem[a] = mem[a + 256];
-						}
-						st[g.out0] = (ushort)mem[PinState.GetBitStates(address)];
-						break;
+						// gates later in this word may have been marked by what just ran: take them this step
+						bits = dirtyBits[w] & (b == 63 ? 0 : ~((bit << 1) - 1));
 					}
-
-					case (int)ChipType.dev_Ram_8Bit:
-					{
-						uint[] mem = internalState[g.canon];
-						int i = g.inStart;
-						uint address = st[ins[i]], data = st[ins[i + 1]], we = st[ins[i + 2]], reset = st[ins[i + 3]], clock = st[ins[i + 4]];
-						bool high = PinState.FirstBitHigh(clock);
-						bool rising = high && mem[^1] == 0;
-						mem[^1] = high ? 1u : 0;
-						if (rising)
-						{
-							if (PinState.FirstBitHigh(reset)) for (int a = 0; a < 256; a++) mem[a] = 0;
-							else if (PinState.FirstBitHigh(we)) mem[PinState.GetBitStates(address)] = PinState.GetBitStates(data);
-						}
-						st[g.out0] = (ushort)mem[PinState.GetBitStates(address)];
-						break;
-					}
-
-					case (int)ChipType.Rom_256x16:
-					{
-						uint data = internalState[g.canon][PinState.GetBitStates(st[g.in0])];
-						st[outs[g.outStart]] = (data >> 8) & 0xFF;
-						st[outs[g.outStart + 1]] = data & 0xFF;
-						break;
-					}
-
-					case (int)ChipType.Buzzer:
-						audio.RegisterNote(PinState.GetBitStates(st[g.in0]), PinState.GetBitStates(st[g.in1]));
-						break;
 				}
+			}
+			GatesRunLastStep = ran;
+		}
+
+		void SetDirty(int pos) => dirty[pos >> 6] |= 1UL << (pos & 63);
+
+		void ClearNoise()
+		{
+			for (int k = 0; k < noisePos.Length; k++) noisePos[k] = -1;
+			noiseCount = 0;
+			noiseAccumulator = 0;
+		}
+
+		// gate at schedule position pos reads a floating line: re-run it now and then (see NoisePeriod)
+		void ArmNoise(int pos)
+		{
+			int c = sCanon[pos];
+			if (noisePos[c] >= 0) return;
+			noisePos[c] = noiseCount; noiseList[noiseCount++] = c;
+		}
+
+		// the value a gate reads from a slot: floating bits become random bits (tri flags kept)
+		static uint Noisy(uint s)
+		{
+			uint tri = s >> 16;
+			return tri == 0 ? s : (s & 0xFFFF & ~tri) | (Simulator.RandomBits16() & tri) | (tri << 16);
+		}
+
+		void DisarmNoise(int pos)
+		{
+			int c = sCanon[pos];
+			int p = noisePos[c];
+			if (p < 0) return;
+			int last = noiseList[noiseCount - 1];
+			noiseList[p] = last; noisePos[last] = p; noiseCount--; noisePos[c] = -1;
+		}
+
+		// a slot changed: every gate reading it runs (this step if it comes later, next step otherwise)
+		void MarkConsumers(int slot)
+		{
+			int[] cons = slotConsList, pos = posOfCanon;
+			ulong[] d = dirty;
+			for (int j = slotConsStart[slot], e = slotConsStart[slot + 1]; j < e; j++)
+			{
+				int p = pos[cons[j]];
+				d[p >> 6] |= 1UL << (p & 63);
+			}
+		}
+
+		void Write(uint[] st, int slot, uint v)
+		{
+			if (st[slot] != v) { st[slot] = v; MarkConsumers(slot); }
+		}
+
+		// a logic input of gate k: floating bits read as noise, and the gate joins the noise list
+		unsafe uint In(uint* st, int slot, int k)
+		{
+			uint s = st[slot];
+			if ((s & 0xFFFF0000u) == 0 || quiet[slot]) return s;
+			ArmNoise(k);
+			return Noisy(s);
+		}
+
+		unsafe void RunGate(int k, uint* st, bool clockHigh, SimAudio audio)
+		{
+			uint[] states = this.states;
+			int g = sCanon[k];
+			int[] ins = inSlots, outs = outSlots;
+			int i = cInStart[g], os = cOutStart[g];
+			switch (sType[k])
+			{
+				case MergeType:
+					Merge(k, g, states);
+					break;
+
+				case (byte)ChipType.TriStateBuffer:
+					// disabled: floats (noise), so it re-arms every step. If something else drives its net, the
+					// merge node of that net writes the net's value back into this slot right after.
+					// disabled: floats. If something else drives its net, the merge node of that net writes the
+					// net's value back into this slot right after (a floating output reads its net).
+					{
+						uint en = In(st, sIn1[k], k); // floating enable: random
+						Write(states, sOut0[k], (en & 1) == PinState.LogicHigh ? st[sIn0[k]] : PinState.FloatingLow);
+					}
+					break;
+
+				case (byte)ChipType.Clock:
+					Write(states, sOut0[k], clockHigh ? PinState.LogicHigh : PinState.LogicLow);
+					SetDirty(k);
+					break;
+
+				case (byte)ChipType.Vcc: Write(states, sOut0[k], PinState.LogicHigh); break;
+				case (byte)ChipType.Gnd: Write(states, sOut0[k], PinState.LogicLow); break;
+
+				case (byte)ChipType.Split_4To1Bit:
+				{
+					uint v = st[sIn0[k]];
+					Write(states, outs[os], (v >> 3) & PinState.SingleBitMask);
+					Write(states, outs[os + 1], (v >> 2) & PinState.SingleBitMask);
+					Write(states, outs[os + 2], (v >> 1) & PinState.SingleBitMask);
+					Write(states, outs[os + 3], v & PinState.SingleBitMask);
+					break;
+				}
+				case (byte)ChipType.Merge_1To4Bit:
+					Write(states, sOut0[k], (st[ins[i + 3]] & PinState.SingleBitMask) | (st[ins[i + 2]] & PinState.SingleBitMask) << 1 | (st[ins[i + 1]] & PinState.SingleBitMask) << 2 | (st[ins[i]] & PinState.SingleBitMask) << 3);
+					break;
+				case (byte)ChipType.Merge_1To8Bit:
+				{
+					uint r = 0;
+					for (int b = 0; b < 8; b++) r |= (st[ins[i + 7 - b]] & PinState.SingleBitMask) << b;
+					Write(states, sOut0[k], r);
+					break;
+				}
+				case (byte)ChipType.Merge_4To8Bit:
+				{
+					uint r = 0;
+					PinState.Set8BitFrom4BitSources(ref r, st[sIn1[k]], st[sIn0[k]]);
+					Write(states, sOut0[k], r);
+					break;
+				}
+				case (byte)ChipType.Split_8To4Bit:
+				{
+					uint v = st[sIn0[k]], a = 0, b = 0;
+					PinState.Set4BitFrom8BitSource(ref a, v, false);
+					PinState.Set4BitFrom8BitSource(ref b, v, true);
+					Write(states, outs[os], a);
+					Write(states, outs[os + 1], b);
+					break;
+				}
+				case (byte)ChipType.Split_8To1Bit:
+				{
+					uint v = st[sIn0[k]];
+					for (int b = 0; b < 8; b++) Write(states, outs[os + b], (v >> (7 - b)) & PinState.SingleBitMask);
+					break;
+				}
+
+				case (byte)ChipType.Key:
+					Write(states, sOut0[k], SimKeyboardHelper.KeyIsHeld((char)internalState[g][0]) ? PinState.LogicHigh : PinState.LogicLow);
+					SetDirty(k);
+					break;
+
+				case (byte)ChipType.Pulse:
+				{
+					uint[] mem = internalState[g];
+					uint input = st[sIn0[k]];
+					bool floating = PinState.GetTristateFlags(input) != 0;
+					if (floating) input = In(st, sIn0[k], k);
+					bool inputHigh = PinState.FirstBitHigh(input);
+					uint remaining = mem[1];
+					if (remaining == 0 && inputHigh && mem[2] == 0) { remaining = mem[0]; mem[1] = remaining; }
+					uint o = PinState.LogicLow;
+					if (remaining > 0) { mem[1]--; o = PinState.LogicHigh; }
+					else if (floating) o = PinState.FloatingLow;
+					Write(states, sOut0[k], o);
+					mem[2] = inputHigh ? 1u : 0;
+					if (remaining > 0) SetDirty(k); // counting down
+					break;
+				}
+
+				case (byte)ChipType.DisplayRGB:
+				{
+					uint[] mem = internalState[g];
+					uint address = In(st, ins[i], k), red = In(st, ins[i + 1], k), green = In(st, ins[i + 2], k), blue = In(st, ins[i + 3], k);
+					uint reset = In(st, ins[i + 4], k), write = In(st, ins[i + 5], k), refresh = In(st, ins[i + 6], k), clock = In(st, ins[i + 7], k);
+					bool high = PinState.FirstBitHigh(clock);
+					bool rising = high && mem[^1] == 0;
+					mem[^1] = high ? 1u : 0;
+					if (rising)
+					{
+						if (PinState.FirstBitHigh(reset)) for (int a = 0; a < 256; a++) mem[a + 256] = 0;
+						else if (PinState.FirstBitHigh(write))
+							mem[(address & 0xFF) + 256] = (red & 0xF) | ((green & 0xF) << 4) | ((blue & 0xF) << 8);
+						if (PinState.FirstBitHigh(refresh)) for (int a = 0; a < 256; a++) mem[a] = mem[a + 256];
+					}
+					uint col = mem[address & 0xFF];
+					Write(states, outs[os], (col >> 0) & 0b1111);
+					Write(states, outs[os + 1], (col >> 4) & 0b1111);
+					Write(states, outs[os + 2], (col >> 8) & 0b1111);
+					break;
+				}
+
+				case (byte)ChipType.DisplayDot:
+				{
+					uint[] mem = internalState[g];
+					uint address = In(st, ins[i], k), pixel = In(st, ins[i + 1], k), reset = In(st, ins[i + 2], k), write = In(st, ins[i + 3], k), refresh = In(st, ins[i + 4], k), clock = In(st, ins[i + 5], k);
+					bool high = PinState.FirstBitHigh(clock);
+					bool rising = high && mem[^1] == 0;
+					mem[^1] = high ? 1u : 0;
+					if (rising)
+					{
+						if (PinState.FirstBitHigh(reset)) for (int a = 0; a < 256; a++) mem[a + 256] = 0;
+						else if (PinState.FirstBitHigh(write)) mem[(address & 0xFF) + 256] = pixel & 1;
+						if (PinState.FirstBitHigh(refresh)) for (int a = 0; a < 256; a++) mem[a] = mem[a + 256];
+					}
+					Write(states, sOut0[k], (ushort)mem[address & 0xFF]);
+					break;
+				}
+
+				case (byte)ChipType.dev_Ram_8Bit:
+				{
+					uint[] mem = internalState[g];
+					uint address = In(st, ins[i], k), data = In(st, ins[i + 1], k), we = In(st, ins[i + 2], k), reset = In(st, ins[i + 3], k), clock = In(st, ins[i + 4], k);
+					bool high = PinState.FirstBitHigh(clock);
+					bool rising = high && mem[^1] == 0;
+					mem[^1] = high ? 1u : 0;
+					if (rising)
+					{
+						if (PinState.FirstBitHigh(reset)) for (int a = 0; a < 256; a++) mem[a] = 0;
+						else if (PinState.FirstBitHigh(we)) mem[address & 0xFF] = data & 0xFF;
+					}
+					Write(states, sOut0[k], (ushort)mem[address & 0xFF]);
+					break;
+				}
+
+				case (byte)ChipType.Rom_256x16:
+				{
+					uint data = internalState[g][In(st, sIn0[k], k) & 0xFF];
+					Write(states, outs[os], (data >> 8) & 0xFF);
+					Write(states, outs[os + 1], data & 0xFF);
+					break;
+				}
+
+				case (byte)ChipType.Buzzer:
+					audio.RegisterNote((int)(In(st, sIn0[k], k) & 0xFF), In(st, sIn1[k], k) & 0xF);
+					SetDirty(k); // the note must be registered every step
+					break;
 			}
 		}
 
 		// Several sources on one pin, merged PER BIT: a driven source always beats a floating one, driven
-		// sources in conflict are resolved at random for the step, all-floating stays floating (carrying
-		// the last source's noise). Floating sources on a driven bit then take the net's value (a disabled
+		// sources in conflict are resolved at random for the step, all-floating stays floating (no value).
+		// Floating sources on a driven bit then take the net's value (a disabled
 		// 3-state buffer's output pin, and the wire from it, read the voltage of the line they sit on).
-		void Merge(ref Gate g, uint[] st, int[] ins)
+		void Merge(int k, int g, uint[] st)
 		{
-			int start = g.inStart, count = g.inCount;
-			uint drivenAny = 0, orBits = 0, andBits = 0xFFFF, lastBits = 0;
-			for (int k = 0; k < count; k++)
+			int[] ins = inSlots;
+			int start = cInStart[g], count = cInCount[g];
+			uint drivenAny = 0, orBits = 0, andBits = 0xFFFF;
+			for (int j = 0; j < count; j++)
 			{
-				uint s = st[ins[start + k]];
+				uint s = st[ins[start + j]];
 				uint bits = s & 0xFFFF, tri = s >> 16, drv = ~tri & 0xFFFF;
 				orBits |= bits & drv;
 				andBits &= bits | tri;
 				drivenAny |= drv;
-				lastBits = bits;
 			}
 			uint conflict = (orBits ^ andBits) & drivenAny;
 			uint chosen = conflict != 0 && Simulator.RandomBool() ? orBits : andBits;
 			uint resTri = ~drivenAny & 0xFFFF;
-			uint resBits = (chosen & drivenAny) | (lastBits & resTri);
-			st[g.out0] = resBits | (resTri << 16);
+			uint resBits = chosen & drivenAny;
+			Write(st, sOut0[k], resBits | (resTri << 16));
+			if (conflict != 0) SetDirty(k); // re-drawn every step while the conflict lasts
 
 			if (drivenAny != 0)
 			{
 				SimPin winner = null;
-				SimPin[] srcs = mergeSources[g.canon];
-				for (int k = 0; k < count; k++)
+				SimPin[] srcs = mergeSources[g];
+				for (int j = 0; j < count; j++)
 				{
-					int slot = ins[start + k];
+					int slot = ins[start + j];
 					uint s = st[slot];
 					uint tri = s >> 16;
 					uint take = tri & drivenAny;
-					if (take != 0) st[slot] = ((s & 0xFFFF & ~take) | (resBits & take)) | (tri << 16);
-					else if (winner == null && (~tri & 0xFFFF) != 0) winner = srcs[k];
+					if (take != 0) Write(st, slot, ((s & 0xFFFF & ~take) | (resBits & take)) | (tri << 16));
+					else if (winner == null && (~tri & 0xFFFF) != 0) winner = srcs[j];
 				}
 				if (winner != null)
 				{
-					SimPin t = mergeTarget[g.canon];
+					SimPin t = mergeTarget[g];
 					t.latestSourceID = winner.ID;
 					t.latestSourceParentChipID = winner.parentChip.ID;
 				}

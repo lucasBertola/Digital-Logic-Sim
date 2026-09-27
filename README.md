@@ -6,18 +6,22 @@ what the fork adds on top.
 
 ## What's new in this fork
 
-### Simulation core rewritten: 15 to 27 times faster
+### Simulation core rewritten: 30 to 400 times faster
 The simulation no longer walks the chip tree object by object. The tree is compiled once into a flat list of
 gates over a single array of pin states (a pin fed by one source shares its source's slot, so custom-chip
 boundaries cost nothing), scheduled in the same order as before so latches, registers and buses keep exactly
-the same tick-level behaviour, and recompiled only when the circuit is edited. Measured with the same chips
-on the same machine (`Assets/Editor/SimBench.cs`):
+the same tick-level behaviour, recompiled only when the circuit is edited — and a step only runs the gates
+whose inputs changed. A floating line no longer costs anything while idle: logic that reads it sees noise,
+re-drawn a few times a second, and floating pins flicker on screen.
 
-| chip | before | after | factor |
+Measured with the same chips, the same scenarios and the same machine (`Assets/Editor/SimBench.cs`; the old core
+checked out from git into a separate working copy), on ACTIVE scenarios — the new core only pays for what changes:
+
+| chip, scenario | before | after | factor |
 |---|---|---|---|
-| 8-bit CPU (63 322 simulated chips) | 136 steps/s | 2 900 steps/s | ×21 |
-| 8-bit ALU | 10 700 steps/s | 296 000 steps/s | ×27 |
-| 8-bit register | 64 000 steps/s | 940 000 steps/s | ×15 |
+| 8-bit CPU (63 322 simulated chips) running a loop A = A + 1; MAR = A; RAM[MAR] = A, with clock edges | 127 steps/s | 58 000 steps/s | ×460 |
+| 8-bit ALU, input A changing every step | 10 600 steps/s | 370 000 steps/s | ×35 |
+| 8-bit register, clock toggling every step | 62 000 steps/s | 500 000 steps/s | ×8 |
 
 Verified by the regression bench (142 cases, every chip of a CPU project, see Tests below).
 

@@ -25,7 +25,7 @@ namespace DLS.Simulation
 
 		// Compile scratch (SimProgram.Compile)
 		internal int compileIndex;
-		internal SimChip compileParent;
+		public SimChip compileParent;
 
 		public SimChip()
 		{
@@ -91,7 +91,15 @@ namespace DLS.Simulation
 			}
 		}
 
-		public void UpdateInternalState(uint[] source) => Array.Copy(source, InternalState, InternalState.Length);
+		// Set when the internal state was edited from outside the step (ROM contents): the compiled program
+		// re-runs the chip's gate on the next step even though its inputs did not change.
+		public volatile bool InternalStateEdited;
+
+		public void UpdateInternalState(uint[] source)
+		{
+			Array.Copy(source, InternalState, InternalState.Length);
+			InternalStateEdited = true;
+		}
 
 		public (bool success, SimChip chip) TryGetSubChipFromID(int id)
 		{

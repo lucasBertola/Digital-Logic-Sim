@@ -42,6 +42,7 @@ namespace DLS.Bench
     {
         // BuildIsolatedSim temporarily rewires the library's SimOverride: builds must not overlap.
         static readonly object buildLock = new();
+        const int RecordRuns = 16;
 
         public static int StepsFor(ChipDescription desc, ChipLibrary lib)
         {
@@ -95,11 +96,15 @@ namespace DLS.Bench
                 rec.inputVectors.Add(v);
             }
 
-            // five runs with different sim seeds: only what agrees is asserted (a random conflict that happened
-            // to resolve the same way in every run would otherwise be recorded as a fact)
+            // sixteen runs with different sim seeds: only what agrees is asserted (a bus conflict resolved at random
+            // that happened to come out the same way in every run would otherwise be recorded as a fact: with 8
+            // runs that is a 1/128 chance per conflict step, and it happened), and never a floating bit
             var runs = new List<Trace>();
-            foreach (int simSeed in new[] { rec.seed, rec.seed + 101, rec.seed + 202, rec.seed + 303, rec.seed + 404 })
+            for (int r = 0; r < RecordRuns; r++)
+            {
+                int simSeed = rec.seed + r * 101;
                 runs.Add(Play(desc, lib, rec, simSeed));
+            }
 
             rec.clockComponent = runs[0].hasClock;
             rec.simChips = runs[0].simChips;
@@ -120,7 +125,7 @@ namespace DLS.Bench
         {
             var st = new bool[runs[0].bits.Length];
             for (int j = 0; j < st.Length; j++)
-                st[j] = runs.All(r => r.bits[j] == runs[0].bits[j] && r.tri[j] == runs[0].tri[j]);
+                st[j] = runs.All(r => r.bits[j] == runs[0].bits[j] && r.tri[j] == runs[0].tri[j]) && runs[0].tri[j] == 0; // a floating bit is noise: never asserted
             return st;
         }
 

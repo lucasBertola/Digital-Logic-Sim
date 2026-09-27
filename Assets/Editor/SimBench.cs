@@ -9,8 +9,14 @@ using UnityEditor;
 using Debug = UnityEngine.Debug;
 
 // Diagnostic: how fast can the simulator step a given chip? Builds the isolated sim, runs N steps and
-// reports ms/step, achievable steps/s and the size of the sim tree (chips / pins at every level).
-//   Unity.exe -projectPath <proj> -executeMethod SimBench.Run -benchProject "PC" -benchChip "CPU" -quit -logFile <log>
+// reports ms/step, achievable steps/s, how many gates each step actually ran, and the size of the sim tree.
+//   Unity.exe -projectPath <proj> -executeMethod SimBench.Run -benchProject "PC" -benchChip "CPU" [-benchSet "OE_entree=1,ENTREE=5"] [-benchToggle "clock"] -quit -logFile <log>
+// -benchToggle flips the named 1-bit input every step (activity: a step where nothing changes costs nothing).
+// -benchScenario cpu: drives the user's CPU chip through a micro-program in a loop (A = A + 1; MAR = A;
+//   RAM[MAR] = A), clock edges included, so registers, ALU, bus, decoders and RAM all work every cycle.
+//   This is the number to compare cores on: the tree walker cost the same whatever the activity.
+// -benchSet holds root input pins at the given values for the whole run (e.g. to drive a bus instead of
+// leaving it floating, which makes everything downstream recompute the noise every step).
 public static class SimBench
 {
     public static void Run()
@@ -36,18 +42,120 @@ public static class SimBench
             sb.Append($"\n=== SimBench \"{chipName}\" ({projectName}) : {chips} chips in the sim tree ({builtins} builtin leaves), {pins} pins ===\n");
             sb.Append($"project target: {project.description.Prefs_SimTargetStepsPerSecond} steps/s, {project.description.Prefs_SimStepsPerClockTick} steps per clock tick\n");
 
+            string set = GetArg("-benchSet");
+            if (!string.IsNullOrEmpty(set))
+            {
+                foreach (string kv in set.Split(','))
+                {
+                    string[] parts = kv.Split('=');
+                    if (parts.Length != 2) continue;
+                    int idx = Array.FindIndex(desc.InputPins, p => p.Name == parts[0].Trim());
+                    if (idx >= 0) root.InputPins[idx].State = PinState.Make(ushort.Parse(parts[1].Trim()), 0);
+                    sb.Append($"input {parts[0].Trim()} = {parts[1].Trim()}{(idx < 0 ? " (NOT FOUND)" : "")}\n");
+                }
+            }
+
+            string toggle = GetArg("-benchToggle");
+            int toggleIdx = string.IsNullOrEmpty(toggle) ? -1 : Array.FindIndex(desc.InputPins, p => p.Name == toggle.Trim());
+            if (!string.IsNullOrEmpty(toggle)) sb.Append($"toggling input {toggle} every step{(toggleIdx < 0 ? " (NOT FOUND)" : "")}\n");
+            uint toggleState = 0;
+
+            // scenario: a cyclic list of (assignments, steps to hold them)
+            string scenario = GetArg("-benchScenario");
+            var script = new System.Collections.Generic.List<(string set, int steps)>();
+            if (scenario == "cpu")
+            {
+                const string idle = "OE_ALu=0,OE_entree=0,We_RAM=0,Oe_ram=0,Load_A=0,Load_B=0,Load_MAR=0";
+                script.Add((idle + ",Reset_all=1,clock=0", 3)); script.Add(("Reset_all=0", 3));
+                sb.Append("scenario cpu: loop { A = A + 1 ; MAR = A ; RAM[MAR] = A } with clock edges\n");
+            }
+            var loop = new System.Collections.Generic.List<(string set, int steps)>();
+            if (scenario == "cpu")
+            {
+                // A <- A + 1 : ALU INC (OP=2) on the bus, Load_A, clock pulse
+                loop.Add(("OE_ALu=1,OP2=0,OP1=1,OP0=0,Load_A=1", 3)); loop.Add(("clock=1", 3)); loop.Add(("clock=0,Load_A=0", 3));
+                // MAR <- A : ALU pass A (OP=4), Load_MAR, clock pulse
+                loop.Add(("OP2=1,OP1=0,OP0=0,Load_MAR=1", 3)); loop.Add(("clock=1", 3)); loop.Add(("clock=0,Load_MAR=0", 3));
+                // RAM[MAR] <- bus (A) : We_RAM pulse while the ALU drives the bus
+                loop.Add(("We_RAM=1", 3)); loop.Add(("We_RAM=0,OE_ALu=0", 3));
+            }
+            void Apply(string set)
+            {
+                foreach (string kv in set.Split(','))
+                {
+                    string[] parts = kv.Split('=');
+                    int idx = Array.FindIndex(desc.InputPins, p => p.Name == parts[0].Trim());
+                    if (idx >= 0) root.InputPins[idx].State = PinState.Make(ushort.Parse(parts[1].Trim()), 0);
+                }
+            }
+            int scriptPos = 0, scriptHold = 0;
+            void ScenarioStep()
+            {
+                if (loop.Count == 0) return;
+                if (scriptHold == 0)
+                {
+                    var cur = script.Count > 0 ? script[0] : loop[scriptPos % loop.Count];
+                    if (script.Count > 0) script.RemoveAt(0); else scriptPos++;
+                    Apply(cur.set); scriptHold = cur.steps;
+                }
+                scriptHold--;
+            }
+
             SimAudio audio = new();
             Simulator.stepsPerClockTransition = project.description.Prefs_SimStepsPerClockTick;
-            // warm-up (first steps include the ordering pass)
+            // warm-up (first steps include the compile)
             for (int i = 0; i < 50; i++) Simulator.RunSimulationStep(root, Array.Empty<DevPinInstance>(), audio);
+            sb.Append($"program: {root.Program.GateCount} gates, {root.Program.SlotCount} state slots\n");
 
+            root.Program.CollectStats = true;
             foreach (int n in new[] { 500, 2000 })
             {
+                Array.Clear(root.Program.RunsByType, 0, 256);
+                root.Program.RescheduleMs = 0;
                 Stopwatch w = Stopwatch.StartNew();
-                for (int i = 0; i < n; i++) Simulator.RunSimulationStep(root, Array.Empty<DevPinInstance>(), audio);
+                long gatesRun = 0;
+                for (int i = 0; i < n; i++)
+                {
+                    if (toggleIdx >= 0) { toggleState ^= 1; root.InputPins[toggleIdx].State = PinState.Make((ushort)toggleState, 0); }
+                    ScenarioStep();
+                    Simulator.RunSimulationStep(root, Array.Empty<DevPinInstance>(), audio);
+                    gatesRun += root.Program.GatesRunLastStep;
+                }
                 w.Stop();
                 double msPerStep = w.Elapsed.TotalMilliseconds / n;
-                sb.Append($"{n} steps: {w.Elapsed.TotalMilliseconds:0} ms -> {msPerStep:0.000} ms/step -> max {1000.0 / msPerStep:0} steps/s\n");
+                sb.Append($"{n} steps: {w.Elapsed.TotalMilliseconds:0} ms -> {msPerStep:0.000} ms/step -> max {1000.0 / msPerStep:0} steps/s, {gatesRun / (double)n:0} gates run per step, noise list {root.Program.NoiseCount}, reschedule {root.Program.RescheduleMs:0.0} ms total\n");
+                var byType = new System.Collections.Generic.List<string>();
+                for (int t = 0; t < 256; t++) if (root.Program.RunsByType[t] > 0) byType.Add($"{(t == 255 ? "MERGE" : ((ChipType)t).ToString())}={root.Program.RunsByType[t] / (double)n:0}");
+                sb.Append("   per step by type: " + string.Join(", ", byType) + "\n");
+                if (scenario == "cpu")
+                {
+                    SimChip target = CircuitTester.TargetOf(root);
+                    foreach (SubChipDescription sd in desc.SubChips)
+                    {
+                        if (string.IsNullOrEmpty(sd.Label) || !project.chipLibrary.TryGetChipDescription(sd.Name, out ChipDescription d)) continue;
+                        (bool ok, SimChip sc) = target.TryGetSubChipFromID(sd.ID);
+                        if (ok && sc.OutputPins.Length > 0) sb.Append($"   {sd.Label}.{d.OutputPins[0].Name} = {PinState.GetBitStates(sc.OutputPins[0].State) & 0xFF}\n");
+                    }
+                }
+                // where are the gates that read a floating line? (parent chip name / grandparent)
+                var names = new System.Collections.Generic.Dictionary<SimChip, string>();
+                void Name(SimChip c, ChipDescription d, string path)
+                {
+                    names[c] = path;
+                    for (int i = 0; i < c.SubChips.Length && i < d.SubChips.Length; i++)
+                        if (project.chipLibrary.TryGetChipDescription(d.SubChips[i].Name, out ChipDescription sd)) Name(c.SubChips[i], sd, d.SubChips[i].Name);
+                }
+                Name(CircuitTester.TargetOf(root), desc, chipName);
+                var where = new System.Collections.Generic.Dictionary<string, int>();
+                foreach (SimChip c in root.Program.ArmedGateChips())
+                {
+                    string key = (c.compileParent != null && names.TryGetValue(c.compileParent, out string pn) ? pn : "?") + " > " + (names.TryGetValue(c, out string cn) ? cn : c.ChipType.ToString());
+                    where[key] = where.TryGetValue(key, out int cnt) ? cnt + 1 : 1;
+                }
+                var top = new System.Collections.Generic.List<string>();
+                foreach (var kv in where) top.Add($"{kv.Key}={kv.Value}");
+                top.Sort((x, y) => int.Parse(y.Substring(y.LastIndexOf('=') + 1)).CompareTo(int.Parse(x.Substring(x.LastIndexOf('=') + 1))));
+                sb.Append("   noise readers (parent > chip): " + string.Join(", ", top.GetRange(0, Math.Min(12, top.Count))) + "\n");
             }
         }
         catch (Exception e) { sb.Append("EXCEPTION: " + e + "\n"); }

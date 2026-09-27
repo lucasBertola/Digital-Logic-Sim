@@ -36,7 +36,7 @@ namespace DLS.Simulation
 		// compiled program is rebuilt at the top of the next step.
 		[ThreadStatic] public static bool needsOrderPass;
 
-		// Every n frames the cut points inside feedback loops are re-drawn (to randomize outcome of race conditions)
+		// Every 1000 frames the random picks inside feedback loops are re-drawn (to randomize outcome of race conditions)
 		[ThreadStatic] public static bool canDynamicReorderThisFrame;
 
 		[ThreadStatic] static SimChip prevRootSimChip;
@@ -77,7 +77,7 @@ namespace DLS.Simulation
 			}
 
 			pcg_rngState = (uint)(testRng ?? rng).Next();
-			canDynamicReorderThisFrame = simulationFrame % 100 == 0;
+			canDynamicReorderThisFrame = simulationFrame % 1000 == 0; // re-draw the random picks of feedback loops
 			simulationFrame++;
 
 			if (needsOrderPass || rootSimChip.Program == null)
