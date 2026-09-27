@@ -114,6 +114,14 @@ namespace DLS.Graphics
 				Vector2 tickLabelRight = MenuHelper.DrawLabelSectionOfLabelInputPair(labelPosCurr, entrySize, "Steps per second (current)", labelCol * 0.75f, true);
 				UI.DrawPanel(tickLabelRight, settingFieldSize, new Color(0.18f, 0.18f, 0.18f), Anchor.CentreRight);
 				UI.DrawText(currentSimSpeedString, theme.FontBold, theme.FontSizeRegular, tickLabelRight + new Vector2(inputTextPad - settingFieldSize.x, 0), Anchor.TextCentreLeft, currentSimSpeedStringColour);
+				AddSpacing();
+				// Real clock frequency: a clock period is two transitions of "steps per clock tick" steps each
+				int.TryParse(clockSpeedInputFieldState.text, out int stepsPerTickForFreq);
+				double clockHz = stepsPerTickForFreq > 0 && !project.simPaused ? simAvgTicksPerSec_delayedRefreshForUI / (2.0 * stepsPerTickForFreq) : 0;
+				string clockHzString = clockHz >= 1000 ? $"{clockHz / 1000:0.##} kHz" : clockHz >= 10 ? $"{clockHz:0.#} Hz" : $"{clockHz:0.##} Hz";
+				Vector2 freqLabelRight = MenuHelper.DrawLabelSectionOfLabelInputPair(labelPosCurr, entrySize, "Clock frequency (current)", labelCol * 0.75f, true);
+				UI.DrawPanel(freqLabelRight, settingFieldSize, new Color(0.18f, 0.18f, 0.18f), Anchor.CentreRight);
+				UI.DrawText(clockHzString, theme.FontBold, theme.FontSizeRegular, freqLabelRight + new Vector2(inputTextPad - settingFieldSize.x, 0), Anchor.TextCentreLeft, currentSimSpeedStringColour);
 
 				// Draw cancel/confirm buttons
 				Vector2 buttonTopLeft = new(labelPosCurr.x, UI.PrevBounds.Bottom);
