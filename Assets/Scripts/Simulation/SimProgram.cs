@@ -512,7 +512,9 @@ namespace DLS.Simulation
 				for (int j = 0; j < cOutCount[g]; j++) producer[outSlots[cOutStart[g] + j]] = g;
 				if (cOut1.Length == gc && cOut1[g] >= 0) producer[cOut1[g]] = g;
 			}
-			var first = new Dictionary<(byte, int, int), int>();
+			// several representatives per key: a gate that cannot be merged with the first one (their common ancestor
+			// level has random picks — the user's register splitters vs the RAM's) may still merge with a later one
+			var first = new Dictionary<(byte, int, int), List<int>>();
 			var redirect = new Dictionary<int, int>(); // dead slot -> live slot
 			var ancestors = new HashSet<SimChip>();
 			int merged = 0;
@@ -520,26 +522,40 @@ namespace DLS.Simulation
 			{
 				int g = sCanon[k];
 				byte t = cType[g];
-				if (t != (byte)ChipType.Nand && t != NandNotType) continue;
-				int a = inSlots[cInStart[g]], b = inSlots[cInStart[g] + 1];
+				bool twoIn = t == (byte)ChipType.Nand || t == NandNotType;
+				bool oneIn = t == (byte)ChipType.Split_8To1Bit || t == (byte)ChipType.Split_4To1Bit || t == (byte)ChipType.Split_8To4Bit; // pure routing: the user's 256 RAM words all split the same bus
+				if (!twoIn && !oneIn) continue;
+				int a = inSlots[cInStart[g]], b = twoIn ? inSlots[cInStart[g] + 1] : -1;
 				if (redirect.TryGetValue(a, out int ra)) a = ra;
-				if (redirect.TryGetValue(b, out int rb)) b = rb;
-				inSlots[cInStart[g]] = a; inSlots[cInStart[g] + 1] = b; // consumers of dropped gates read the kept one
+				if (twoIn && redirect.TryGetValue(b, out int rb)) b = rb;
+				inSlots[cInStart[g]] = a; if (twoIn) inSlots[cInStart[g] + 1] = b; // consumers of dropped gates read the kept one
 				var key = (t, Math.Min(a, b), Math.Max(a, b));
-				if (!first.TryGetValue(key, out int g1)) { first[key] = g; continue; }
-				// ---- conditions ----
+				if (!first.TryGetValue(key, out List<int> reps)) { first[key] = new List<int> { g }; continue; }
+				int g1 = -1;
+				foreach (int cand in reps) if (CanMergeInto(cand, g, a, b, producer, ancestors)) { g1 = cand; break; }
+				if (g1 < 0) { reps.Add(g); continue; }
+				// ---- drop g in favour of g1 (every output) ----
+				for (int j = 0; j < cOutCount[g]; j++) redirect[outSlots[cOutStart[g] + j]] = outSlots[cOutStart[g1] + j];
+				if (t == NandNotType) redirect[cOut1[g]] = cOut1[g1];
+				MergedByType[t]++;
+				cType[g] = NopType;
+				if (cOut1.Length == gc) cOut1[g] = -1;
+				merged++;
+			}
+			// (conditions as a function so several representatives can be tried)
+			bool CanMergeInto(int g1, int g, int a, int b, int[] producer, HashSet<SimChip> ancestors)
+			{
 				SimChip x = chipOfGate[g1], y = chipOfGate[g];
 				ancestors.Clear();
 				for (SimChip c = x.compileParent; c != null; c = c.compileParent) ancestors.Add(c);
 				SimChip common = null;
 				for (SimChip c = y.compileParent; c != null; c = c.compileParent) if (ancestors.Contains(c)) { common = c; break; }
-				if (common == null) continue;
-				bool ok = true;
-				for (SimChip c = x.compileParent; ok && c != null; c = c.compileParent) { if (levelHasCuts[c.compileIndex]) ok = false; if (c == common) break; }
-				for (SimChip c = y.compileParent; ok && c != null; c = c.compileParent) { if (levelHasCuts[c.compileIndex]) ok = false; if (c == common) break; }
-				if (!ok) continue;
+				if (common == null) return false;
+				for (SimChip c = x.compileParent; c != null; c = c.compileParent) { if (levelHasCuts[c.compileIndex]) return false; if (c == common) break; }
+				for (SimChip c = y.compileParent; c != null; c = c.compileParent) { if (levelHasCuts[c.compileIndex]) return false; if (c == common) break; }
 				foreach (int s in new[] { a, b })
 				{
+					if (s < 0) continue;
 					int p = producer[s];
 					if (p < 0) continue; // root input or constant: the same for both
 					bool inside = false;
@@ -547,17 +563,10 @@ namespace DLS.Simulation
 					if (!inside) continue; // produced outside the common subtree: both read the same value, fresh or one step old
 					// produced inside it: fine if it always runs before the first gate, i.e. it precedes it now and its
 					// chain up to the common ancestor is free of random picks (its order relative to both is then fixed)
-					if (posOfCanon[p] >= posOfCanon[g1]) { ok = false; break; }
-					for (SimChip c = chipOfGate[p].compileParent; c != null; c = c.compileParent) { if (levelHasCuts[c.compileIndex]) { ok = false; break; } if (c == common) break; }
-					if (!ok) break;
+					if (posOfCanon[p] >= posOfCanon[g1]) return false;
+					for (SimChip c = chipOfGate[p].compileParent; c != null; c = c.compileParent) { if (levelHasCuts[c.compileIndex]) return false; if (c == common) break; }
 				}
-				if (!ok) continue;
-				// ---- drop g in favour of g1 ----
-				redirect[outSlots[cOutStart[g]]] = outSlots[cOutStart[g1]];
-				if (t == NandNotType) redirect[cOut1[g]] = cOut1[g1];
-				cType[g] = NopType;
-				if (cOut1.Length == gc) cOut1[g] = -1;
-				merged++;
+				return true;
 			}
 			// remaining readers of dropped slots (gates processed before the drop, other gate types) and the pins
 			for (int j = 0; j < inSlots.Length; j++) if (redirect.TryGetValue(inSlots[j], out int live)) inSlots[j] = live;
@@ -566,6 +575,7 @@ namespace DLS.Simulation
 			CopySchedule(0, gc);
 		}
 		public int CommonGatesMerged; // diagnostic
+		public readonly int[] MergedByType = new int[256];
 
 		static (int[] start, int[] list) Csr(List<int>[] buckets)
 		{
