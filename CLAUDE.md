@@ -239,6 +239,10 @@ Each was implemented, measured on the ALU project, and removed because it gained
 The lesson: search effort is **not** the limiting factor, and neither is the AIG structure. Every real
 gain came from the don't-care pass or from the two package-aware passes.
 
+#### Simulation speed bench
+
+`Assets/Editor/SimBench.cs` (`-executeMethod SimBench.Run -benchProject "PC" -benchChip "CPU"`) builds the isolated sim of a chip, counts the sim tree and times 500 / 2000 steps. Measured 2026-09-27: `CPU` = 63 322 sim chips (44 408 builtin leaves, 213 294 pins), 7.3 ms/step → ~136 steps/s max against a 2000 target; `ALU8` 0.09 ms/step (~10 700/s); `Registre8` 0.016 ms/step (~64 000/s). Every step visits every chip of the tree, so cost is proportional to the flattened size.
+
 #### Regression bench
 
 `Assets/Editor/NandBench.cs` (editor-only, nothing written to disk):
