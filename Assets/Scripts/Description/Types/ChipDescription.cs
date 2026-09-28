@@ -21,6 +21,7 @@ namespace DLS.Description
 		public SubChipDescription[] SubChips;
 		public WireDescription[] Wires;
 		public DisplayDescription[] Displays;
+		public ChipMemoryState MemoryState; // saved memory contents (additive, null when never captured)
 
 		// ---- Convenience Functions ----
 		public bool HasDisplay() => Displays != null && Displays.Length > 0;

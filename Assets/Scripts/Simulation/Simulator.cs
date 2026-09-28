@@ -251,6 +251,9 @@ namespace DLS.Simulation
 				simChip.AddConnection(chipDesc.Wires[i].SourcePinAddress, chipDesc.Wires[i].TargetPinAddress);
 			}
 
+			// Saved memory state of this chip (children were built first, so a parent's own saved state wins)
+			if (chipDesc.MemoryState != null) MemorySnapshot.Apply(simChip, chipDesc.MemoryState);
+
 			return simChip;
 		}
 

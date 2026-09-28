@@ -113,16 +113,27 @@ namespace DLS.Bench
                 });
             }
 
-            Add("PC", "reset then count 20 clock cycles (wraps at 16)", f =>
+            // The user's PC (redesigned 2026-09-28: 8-bit counter with a jump input; the old 4-bit one had pins Clock/Reset
+            // and Address3..0): counts on every clock cycle, loads AdressJump when Jump is set, wraps at 256.
+            Add("PC", "8-bit program counter: reset, count, jump, wrap", f =>
             {
-                f.Set("Reset", 1); f.Set("Clock", 0); f.Tick(Settle); f.Set("Reset", 0); f.Tick(Settle);
-                if (f.Word("Address3", "Address2", "Address1", "Address0") != 0) return f.Fail("after reset", "Address", 0);
+                f.Set("Jump", 0); f.Set("AdressJump", 0); f.Set("clck", 0);
+                f.Set("Reset", 1); f.Tick(Settle); f.Set("Reset", 0); f.Tick(Settle);
+                if (f.Value("OUT") != 0) return f.Fail("after reset", "OUT", 0);
                 for (int i = 1; i <= 20; i++)
                 {
-                    f.Cycle("Clock");
-                    int got = f.Word("Address3", "Address2", "Address1", "Address0");
-                    if (got != (i & 15)) return $"after {i} cycles: Address = {got}, expected {i & 15}";
+                    f.Cycle("clck");
+                    if (f.Value("OUT") != i) return $"after {i} cycles: OUT = {f.Value("OUT")}, expected {i}";
                 }
+                f.Set("AdressJump", 200); f.Set("Jump", 1); f.Tick(Settle); f.Cycle("clck");
+                if (f.Value("OUT") != 200) return f.Fail("jump to 200", "OUT", 200);
+                f.Set("Jump", 0); f.Tick(Settle); f.Cycle("clck");
+                if (f.Value("OUT") != 201) return f.Fail("count after the jump", "OUT", 201);
+                f.Set("AdressJump", 254); f.Set("Jump", 1); f.Tick(Settle); f.Cycle("clck"); f.Set("Jump", 0); f.Tick(Settle);
+                f.Cycle("clck");
+                if (f.Value("OUT") != 255) return f.Fail("254 + 1", "OUT", 255);
+                f.Cycle("clck");
+                if (f.Value("OUT") != 0) return f.Fail("wrap after 255", "OUT", 0);
                 return null;
             });
 
@@ -499,6 +510,7 @@ namespace DLS.Bench
             static readonly object buildLock = new();
             readonly ChipDescription desc;
             readonly SimChip root, target;
+            public SimChip Target => target;
             readonly SimAudio audio = new();
             readonly Dictionary<string, int> inIdx = new(), outIdx = new();
             readonly Dictionary<string, (SimChip chip, ChipDescription desc)> probes = new();

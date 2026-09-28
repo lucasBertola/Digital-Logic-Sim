@@ -354,34 +354,6 @@
       "ShowLabel":false
     },
     {
-      "Name":"RAM256",
-      "ID":193688503,
-      "Label":"",
-      "Position":{
-        "x":8.14303,
-        "y":-2.64697
-      },
-      "OutputPinColourInfo":[{"PinColour":0,"PinID":503728955}],
-      "InternalData":null,
-      "LayoutCol":0,
-      "LayoutRow":0,
-      "ShowLabel":false
-    },
-    {
-      "Name":"RAM256",
-      "ID":1133383348,
-      "Label":"",
-      "Position":{
-        "x":6.87677,
-        "y":1.39531
-      },
-      "OutputPinColourInfo":[{"PinColour":0,"PinID":503728955}],
-      "InternalData":null,
-      "LayoutCol":0,
-      "LayoutRow":0,
-      "ShowLabel":false
-    },
-    {
       "Name":"CLOCK",
       "ID":40152334,
       "Label":"",
@@ -391,6 +363,34 @@
       },
       "OutputPinColourInfo":[{"PinColour":0,"PinID":0}],
       "InternalData":null,
+      "LayoutCol":0,
+      "LayoutRow":0,
+      "ShowLabel":false
+    },
+    {
+      "Name":"PC",
+      "ID":342691203,
+      "Label":"",
+      "Position":{
+        "x":-6.56463,
+        "y":3.58133
+      },
+      "OutputPinColourInfo":[{"PinColour":0,"PinID":1164819355}],
+      "InternalData":null,
+      "LayoutCol":0,
+      "LayoutRow":0,
+      "ShowLabel":false
+    },
+    {
+      "Name":"ROM 256×16",
+      "ID":342556528,
+      "Label":"",
+      "Position":{
+        "x":9.12422,
+        "y":6.86109
+      },
+      "OutputPinColourInfo":[{"PinColour":0,"PinID":1},{"PinColour":0,"PinID":2}],
+      "InternalData":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
       "LayoutCol":0,
       "LayoutRow":0,
       "ShowLabel":false
@@ -839,6 +839,34 @@
       "TargetPinAddress":{
         "PinID":383876816,
         "PinOwnerID":128800049
+      },
+      "ConnectionType":0,
+      "ConnectedWireIndex":-1,
+      "ConnectedWireSegmentIndex":-1,
+      "Points":[{"x":0.0,"y":0.0},{"x":0.0,"y":0.0}]
+    },
+    {
+      "SourcePinAddress":{
+        "PinID":0,
+        "PinOwnerID":40152334
+      },
+      "TargetPinAddress":{
+        "PinID":1120824625,
+        "PinOwnerID":342691203
+      },
+      "ConnectionType":0,
+      "ConnectedWireIndex":-1,
+      "ConnectedWireSegmentIndex":-1,
+      "Points":[{"x":0.0,"y":0.0},{"x":0.0,"y":0.0}]
+    },
+    {
+      "SourcePinAddress":{
+        "PinID":0,
+        "PinOwnerID":931264466
+      },
+      "TargetPinAddress":{
+        "PinID":758338622,
+        "PinOwnerID":342691203
       },
       "ConnectionType":0,
       "ConnectedWireIndex":-1,

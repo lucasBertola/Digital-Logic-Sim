@@ -172,9 +172,24 @@ namespace DLS.Game
 		}
 
 
+		static bool SameSubChips(SimChip live, ChipDescription desc)
+		{
+			if (desc.SubChips == null || live.SubChips.Length != desc.SubChips.Length) return false;
+			var ids = new HashSet<int>();
+			foreach (SimChip c in live.SubChips) if (c != null) ids.Add(c.ID);
+			foreach (SubChipDescription s in desc.SubChips) if (!ids.Contains(s.ID)) return false;
+			return true;
+		}
+
 		public void SaveFromDescription(ChipDescription saveChipDescription, SaveMode saveMode = SaveMode.Normal)
 		{
 			ChipDescription oldSavedBaseline = ViewedChip.LastSavedDescription; // for reconciling open parents
+
+			// The memory state (latches, RAM...) is saved with the chip, edited or not: captured from the live simulation
+			// of the chip being saved (only when that simulation is indeed this description's: same sub-chip IDs).
+			SimChip live = editModeChip?.SimChip;
+			if (live != null && SameSubChips(live, saveChipDescription))
+				RunWithSimulationPaused(() => saveChipDescription.MemoryState = MemorySnapshot.Capture(live));
 
 			// If this chip hasn't been saved before, it can't have been used anyway so no need to update anything
 			// (same thing if saving a new version of it)

@@ -102,6 +102,19 @@ namespace DLS.Bench
             return pins;
         }
 
+        // The same circuit built again from another description (e.g. one carrying a saved memory state)
+        internal static Circuit Rebuild(Circuit c, ChipDescription desc, int seed = 2)
+        {
+            Simulator.ResetForTests(seed);
+            Simulator.stepsPerClockTransition = 250;
+            var r = new Circuit { desc = desc, lib = c.lib };
+            lock (buildLock) r.root = CircuitTester.BuildIsolatedSim(desc, c.lib);
+            r.target = CircuitTester.TargetOf(r.root);
+            foreach (var kv in c.inIdx) r.inIdx[kv.Key] = kv.Value;
+            foreach (var kv in c.outIdx) r.outIdx[kv.Key] = kv.Value;
+            return r;
+        }
+
         internal class Builder
         {
             public readonly ChipLibrary lib;
@@ -112,6 +125,7 @@ namespace DLS.Bench
             public Builder(ChipLibrary lib) { this.lib = lib; }
 
             public int Add(ChipType type) => ChipEmitHelper.AddSubChip(subChips, ref nextID, ChipTypeHelper.GetName(type), type);
+            public int AddCustom(string chipName) => ChipEmitHelper.AddSubChip(subChips, ref nextID, chipName, ChipType.Custom);
             ChipDescription Desc(int id) => lib.GetChipDescription(subChips.First(s => s.ID == id).Name);
             public PinAddress In(int chipID, int pin) => new(chipID, Desc(chipID).InputPins[pin].ID);
             public PinAddress Out(int chipID, int pin) => new(chipID, Desc(chipID).OutputPins[pin].ID);

@@ -43,7 +43,9 @@ namespace DLS.SaveSystem
 				OutputPins = outputPins,
 				Wires = chip.Wires.Select(CreateWireDescription).ToArray(),
 				Displays = displays,
-				ChipType = ChipType.Custom
+				ChipType = ChipType.Custom,
+				// carried over; replaced by the live state when the chip is saved (Project.SaveFromDescription)
+				MemoryState = hasSavedDesc ? descOld.MemoryState : null
 			};
 		}
 
