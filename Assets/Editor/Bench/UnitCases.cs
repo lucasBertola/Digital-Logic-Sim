@@ -40,6 +40,7 @@ namespace DLS.Bench
             ("frame counter wrap keeps the clock phase", FrameWrapKeepsClockPhase),
             ("nand with a controlling 0 on the other input: not woken, still right when it is released", NandControllingValue),
             ("bundled project: install / silent update / ask / do nothing decision table", BundledProjectDecision),
+            ("display: an unconnected output shows 0 (no flicker), a disabled buffer still shows floating", DisplayOfUnconnected),
             ("bundled project: content hash ignores deleted chips, the conversation and markers", BundledProjectHash),
         };
 
@@ -610,6 +611,26 @@ namespace DLS.Bench
                 return null;
             }
             finally { try { System.IO.Directory.Delete(root, true); } catch { } }
+        }
+
+        static string DisplayOfUnconnected()
+        {
+            var c = Build("t_disp", new[] { "E" }, new[] { "EMPTY", "BUS" }, b =>
+            {
+                int buf = b.Add(ChipType.TriStateBuffer);
+                b.Wire(b.Input("E"), b.In(buf, 1));
+                b.Wire(b.Out(buf, 0), b.Output("BUS"));
+            });
+            c.Set("E", 0);
+            for (int i = 0; i < 50; i++)
+            {
+                c.Step(1);
+                uint empty = c.target.OutputPins[c.outIdx["EMPTY"]].DisplayState;
+                if (empty != 0) return $"unconnected output displays {empty:X} (expected a driven 0)";
+            }
+            uint bus = c.target.OutputPins[c.outIdx["BUS"]].DisplayState;
+            if ((bus >> 16) == 0) return "an output fed by a disabled buffer must still display as floating";
+            return null;
         }
 
         static string FrameWrapKeepsClockPhase()

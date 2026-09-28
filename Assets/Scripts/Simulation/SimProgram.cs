@@ -406,6 +406,7 @@ namespace DLS.Simulation
 				if (allQuiet) for (int j = 0; j < prog.cOutCount[g]; j++) prog.quiet[prog.outSlots[prog.cOutStart[g] + j]] = true;
 			}
 
+			foreach (SimPin p in pins) p.quietArray = prog.quiet; // display: a never-driven pin shows 0, not flicker
 			prog.FuseInverters();
 			prog.EliminateCommonGates(pins);
 			prog.BuildConsumerLists();

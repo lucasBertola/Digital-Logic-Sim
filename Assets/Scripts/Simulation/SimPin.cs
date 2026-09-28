@@ -22,6 +22,7 @@ namespace DLS.Simulation
 		// shared with every pin on the same net; before that (a pin just created) it lives here.
 		uint localState;
 		internal uint[] stateArray;
+		internal bool[] quietArray; // slots nobody can ever drive (compile)
 		internal int stateIndex;
 
 		// Compile scratch (SimProgram.Compile)
@@ -43,5 +44,19 @@ namespace DLS.Simulation
 		}
 
 		public bool FirstBitHigh => PinState.FirstBitHigh(State);
+
+		// What the editor displays. A pin that nothing can ever drive (an unconnected output or input) reads as a
+		// driven 0, like logic reads it; only a line that CAN be driven but is not right now (a disabled 3-state
+		// buffer...) is shown floating, i.e. flickering.
+		public uint DisplayState
+		{
+			get
+			{
+				uint s = State;
+				if ((s >> 16) == 0) return s;
+				bool[] q = quietArray;
+				return q != null && stateArray != null && stateIndex < q.Length && q[stateIndex] ? 0u : s;
+			}
+		}
 	}
 }

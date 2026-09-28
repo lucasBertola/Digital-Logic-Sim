@@ -433,7 +433,7 @@ namespace DLS.Game
 						if (devPin.IsInputPin && !updateInputPins) continue;
 
 						SimPin simPin = simChip.GetSimPinFromAddress(devPin.Pin.Address);
-						devPin.Pin.State = simPin.State;
+						devPin.Pin.State = simPin.DisplayState;
 
 						if (devPin.IsInputPin || simPin.latestSourceID == -1) continue;
 
@@ -449,14 +449,14 @@ namespace DLS.Game
 						foreach (PinInstance subChipInputPin in subChip.InputPins)
 						{
 							SimPin simInPin = simChip.GetSimPinFromAddress(subChipInputPin.Address);
-							subChipInputPin.State = simInPin.State;
+							subChipInputPin.State = simInPin.DisplayState;
 						}
 
 						// Update the state of each output pin on the subchip to match the state of corresponding pin in the simulation
 						foreach (PinInstance subChipOutputPin in subChip.OutputPins)
 						{
 							SimPin simPin = simChip.GetSimPinFromAddress(subChipOutputPin.Address);
-							subChipOutputPin.State = simPin.State;
+							subChipOutputPin.State = simPin.DisplayState;
 
 							// If is bus, copy colour from the input source
 							if (ChipTypeHelper.IsBusOriginType(subChip.ChipType))
