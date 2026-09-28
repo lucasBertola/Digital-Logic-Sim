@@ -276,6 +276,7 @@ namespace DLS.Bench
                 banks.First(b => b.Name == "Registre A").Write(0, 0xA5, f.RootProgram);
                 banks.First(b => b.Name == "RAM").Write(200, 0x3C, f.RootProgram);
                 banks.First(b => b.Name == "PC").Write(0, 7, f.RootProgram);
+                banks.First(b => b.Builtin != null && b.Builtin.ChipType == ChipType.Rom_256x16).Write(5, 0xF27C, f.RootProgram);
                 f.Tick(6);
                 saved = Serializer.DeserializeChipDescription(Serializer.SerializeChipDescription(cpu));
                 saved.MemoryState = MemorySnapshot.Capture(f.Target);
@@ -290,6 +291,8 @@ namespace DLS.Bench
                 if (rb.First(b => b.Name == "Registre A").Read(0) != 0xA5) return "register A lost its edited value after reload";
                 if (rb.First(b => b.Name == "RAM").Read(200) != 0x3C) return "RAM[200] lost its edited value after reload";
                 if (rb.First(b => b.Name == "PC").Read(0) != 7) return "PC lost its edited value after reload";
+                MemoryBank rom = rb.First(b => b.Builtin != null && b.Builtin.ChipType == ChipType.Rom_256x16);
+                if (rom.Read(5) != 0xF27C) return $"ROM word 5 edited from the CPU's memory editor came back as {rom.Read(5):X4} (found by the self-test in the built app)";
                 return null;
             }
             finally { r.Dispose(); }

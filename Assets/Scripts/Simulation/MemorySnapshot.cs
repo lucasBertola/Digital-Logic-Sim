@@ -12,7 +12,9 @@ namespace DLS.Simulation
 	// same description gives the same order even after runtime edits reordered the live one.
 	public static class MemorySnapshot
 	{
-		static bool IsStateful(ChipType t) => t is ChipType.dev_Ram_8Bit or ChipType.DisplayRGB or ChipType.DisplayDot or ChipType.Pulse;
+		// (the ROM too: its contents can be edited from the memory editor of an enclosing chip, which only writes the
+		// simulation — its own InternalData is the chip's default, the saved state carries the edit)
+		static bool IsStateful(ChipType t) => t is ChipType.dev_Ram_8Bit or ChipType.Rom_256x16 or ChipType.DisplayRGB or ChipType.DisplayDot or ChipType.Pulse;
 
 		static void Walk(SimChip chip, StringBuilder sig, List<SimChip> nands, List<SimChip> stateful)
 		{

@@ -49,10 +49,12 @@ namespace DLS.Game
 			SavePaths.EnsureDirectoryExists(SavePaths.ProjectsPath);
 			SaveAndApplyAppSettings(Loader.LoadAppSettings());
 			Main.audioState = audioState;
+			PlayerSelfTest.CheckArgs();
 		}
 
 		public static void Update()
 		{
+			if (PlayerSelfTest.Active) { PlayerSelfTest.Update(); return; }
 			if (UIDrawer.ActiveMenu != UIDrawer.MenuType.MainMenu)
 			{
 				ActiveProject.HandleNavigationInput(); // chip switch first, so the camera below already targets the new chip
