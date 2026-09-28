@@ -55,6 +55,7 @@ namespace DLS.Bench
                 ("memory editor: a chip without memory has no cell", () => NoMemory(lib, chips)),
                 ("memory editor: structure hash ignores positions, sees wiring", () => StructureHash(lib, chips)),
                 ("memory editor: cache entry JSON round trip", CacheRoundTrip),
+                ("memory editor: no reflection-based JSON in the memory editor (the player build strips it)", NoReflectionJson),
             };
             foreach (string type in new[] { "MOT8", "RAM4", "RAM16", "RAM64", "RAM256", "Registre8", "PC" })
             {
@@ -122,11 +123,25 @@ namespace DLS.Bench
         {
             var e = new MemoryLayout.CacheEntry { hash = "h", rules = Parse() };
             e.polarity["Bascule D"] = new[] { 1, 0 };
-            string json = Newtonsoft.Json.JsonConvert.SerializeObject(new Dictionary<string, MemoryLayout.CacheEntry> { ["CPU"] = e });
-            var back = Newtonsoft.Json.JsonConvert.DeserializeObject<Dictionary<string, MemoryLayout.CacheEntry>>(json);
+            // the code path the app uses (hand-written JSON: the player build strips reflection constructors)
+            string json = MemoryLayout.CacheToJson(new Dictionary<string, MemoryLayout.CacheEntry> { ["CPU"] = e });
+            var back = MemoryLayout.CacheFromJson(json);
             MemoryLayout.CacheEntry b = back["CPU"];
             if (b.hash != "h" || b.rules.types.Count != e.rules.types.Count || b.rules.banks.Count != 5) return "cache entry changed by the round trip";
             if (!b.polarity.TryGetValue("Bascule D", out int[] p) || p.Length != 2 || p[0] != 1) return "polarity lost by the round trip";
+            return null;
+        }
+
+        // The player build strips the constructors Newtonsoft's reflection needs; the editor does not, so a
+        // JsonConvert.DeserializeObject on our own classes passes every test here and fails in the app (it did).
+        static string NoReflectionJson()
+        {
+            string dir = System.IO.Path.Combine(BenchProject.RepoRoot, "Assets", "Scripts", "Game", "Project");
+            foreach (string f in new[] { "MemoryLayout.cs", "MemoryLayoutClaude.cs" })
+            {
+                string src = System.IO.File.ReadAllText(System.IO.Path.Combine(dir, f));
+                if (src.Contains("JsonConvert.DeserializeObject") || src.Contains("JsonConvert.SerializeObject")) return f + " uses reflection-based JSON";
+            }
             return null;
         }
 

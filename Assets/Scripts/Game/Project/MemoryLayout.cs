@@ -8,6 +8,7 @@ using DLS.Description;
 using DLS.SaveSystem;
 using DLS.Simulation;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace DLS.Game
 {
@@ -486,7 +487,7 @@ namespace DLS.Game
 			try
 			{
 				string p = CachePath(projectName);
-				if (File.Exists(p)) return JsonConvert.DeserializeObject<Dictionary<string, CacheEntry>>(File.ReadAllText(p)) ?? new();
+				if (File.Exists(p)) return CacheFromJson(File.ReadAllText(p));
 			}
 			catch (Exception) { /* a broken cache is only a cache */ }
 			return new Dictionary<string, CacheEntry>(StringComparer.OrdinalIgnoreCase);
@@ -494,7 +495,7 @@ namespace DLS.Game
 
 		public static void SaveCache(string projectName, Dictionary<string, CacheEntry> cache)
 		{
-			try { File.WriteAllText(CachePath(projectName), JsonConvert.SerializeObject(cache, Formatting.Indented)); }
+			try { File.WriteAllText(CachePath(projectName), CacheToJson(cache)); }
 			catch (Exception) { /* ignore */ }
 		}
 
@@ -525,14 +526,75 @@ namespace DLS.Game
 			return BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(sb.ToString()))).Replace("-", "").ToLowerInvariant();
 		}
 
+		// ---- JSON, by hand: the player build strips the constructors reflection-based deserialisation needs
+		// ("Unable to find a constructor to use for type DLS.Game.MemoryRules"), the editor does not ----
+
+		static string Str(JToken t) => t == null || t.Type == JTokenType.Null ? null : (string)t;
+		static string[] Strs(JToken t) => t is JArray a ? a.Select(x => (string)x).ToArray() : Array.Empty<string>();
+
+		public static MemoryRules RulesFromJObject(JObject o)
+		{
+			var r = new MemoryRules();
+			foreach (JToken b in o["banks"] as JArray ?? new JArray())
+				r.banks.Add(new MemoryBankRef { name = Str(b["name"]), path = Strs(b["path"]) });
+			foreach (JToken t in o["types"] as JArray ?? new JArray())
+				r.types.Add(new MemoryTypeRule { type = Str(t["type"]), kind = Str(t["kind"]), children = Strs(t["children"]) });
+			foreach (JToken t in o["reads"] as JArray ?? new JArray())
+			{
+				var rr = new MemoryReadRule { type = Str(t["type"]), output = Strs(t["output"]) };
+				foreach (JToken pv in t["inputs"] as JArray ?? new JArray()) rr.inputs.Add(new MemoryPinValue { pin = Str(pv["pin"]), value = Str(pv["value"]) });
+				r.reads.Add(rr);
+			}
+			return r;
+		}
+
+		public static JObject RulesToJObject(MemoryRules r) => new JObject
+		{
+			["banks"] = new JArray(r.banks.Select(b => new JObject { ["name"] = b.name, ["path"] = new JArray(b.path ?? Array.Empty<string>()) })),
+			["types"] = new JArray(r.types.Select(t => new JObject { ["type"] = t.type, ["kind"] = t.kind, ["children"] = new JArray(t.children ?? Array.Empty<string>()) })),
+			["reads"] = new JArray(r.reads.Select(t => new JObject
+			{
+				["type"] = t.type,
+				["inputs"] = new JArray((t.inputs ?? new List<MemoryPinValue>()).Select(p => new JObject { ["pin"] = p.pin, ["value"] = p.value })),
+				["output"] = new JArray(t.output ?? Array.Empty<string>())
+			}))
+		};
+
+		public static string CacheToJson(Dictionary<string, CacheEntry> cache)
+		{
+			var root = new JObject();
+			foreach (var kv in cache)
+			{
+				var pol = new JObject();
+				foreach (var p in kv.Value.polarity ?? new Dictionary<string, int[]>()) pol[p.Key] = new JArray(p.Value);
+				root[kv.Key] = new JObject { ["hash"] = kv.Value.hash, ["rules"] = kv.Value.rules == null ? null : RulesToJObject(kv.Value.rules), ["polarity"] = pol };
+			}
+			return root.ToString(Formatting.Indented);
+		}
+
+		public static Dictionary<string, CacheEntry> CacheFromJson(string json)
+		{
+			var cache = new Dictionary<string, CacheEntry>(StringComparer.OrdinalIgnoreCase);
+			JObject root = JObject.Parse(json);
+			foreach (var prop in root.Properties())
+			{
+				if (prop.Value is not JObject e) continue;
+				var entry = new CacheEntry { hash = Str(e["hash"]), rules = e["rules"] is JObject ro ? RulesFromJObject(ro) : null };
+				if (e["polarity"] is JObject pol)
+					foreach (var p in pol.Properties()) entry.polarity[p.Name] = p.Value is JArray a ? a.Select(x => (int)x).ToArray() : Array.Empty<int>();
+				cache[prop.Name] = entry;
+			}
+			return cache;
+		}
+
 		// Parses Claude's structured answer
 		public static MemoryRules ParseRules(string json, out string error)
 		{
 			error = null;
 			try
 			{
-				MemoryRules r = JsonConvert.DeserializeObject<MemoryRules>(json);
-				if (r == null) { error = "empty answer"; return null; }
+				if (string.IsNullOrWhiteSpace(json)) { error = "empty answer"; return null; }
+				MemoryRules r = RulesFromJObject(JObject.Parse(json));
 				r.banks ??= new List<MemoryBankRef>();
 				r.types ??= new List<MemoryTypeRule>();
 				r.reads ??= new List<MemoryReadRule>();

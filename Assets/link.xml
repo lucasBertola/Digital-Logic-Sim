@@ -1,0 +1,14 @@
+<!-- Managed code stripping removes constructors only reached by reflection (Newtonsoft). Keep the data classes the
+     save files and the memory-editor cache are made of. (The memory editor parses its JSON by hand anyway.) -->
+<linker>
+  <assembly fullname="DLS.Description">
+    <type fullname="DLS.Description.ChipMemoryState" preserve="all"/>
+  </assembly>
+  <assembly fullname="DLS">
+    <type fullname="DLS.Game.MemoryRules" preserve="all"/>
+    <type fullname="DLS.Game.MemoryBankRef" preserve="all"/>
+    <type fullname="DLS.Game.MemoryTypeRule" preserve="all"/>
+    <type fullname="DLS.Game.MemoryReadRule" preserve="all"/>
+    <type fullname="DLS.Game.MemoryPinValue" preserve="all"/>
+  </assembly>
+</linker>
