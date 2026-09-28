@@ -22,6 +22,7 @@ namespace DLS.Game
 	{
 		public static bool Active { get; private set; }
 		static bool withClaude;
+		static string claudeChipName = "Registre8";
 		static readonly StringBuilder report = new();
 		static int failures;
 		static int phase;
@@ -36,6 +37,8 @@ namespace DLS.Game
 			string[] args = Environment.GetCommandLineArgs();
 			Active = args.Any(a => a.Equals("-selftest", StringComparison.OrdinalIgnoreCase));
 			withClaude = args.Any(a => a.Equals("-selftest-claude", StringComparison.OrdinalIgnoreCase));
+			int i = Array.FindIndex(args, a => a.Equals("-selftest-chip", StringComparison.OrdinalIgnoreCase));
+			if (i >= 0 && i + 1 < args.Length) claudeChipName = args[i + 1];
 		}
 
 		static void Check(string name, Func<string> test)
@@ -60,7 +63,7 @@ namespace DLS.Game
 					return lib.TryGetChipDescription("CPU", out _) ? null : "no CPU chip";
 				});
 				if (lib != null) SyncChecks();
-				if (withClaude && lib != null && lib.TryGetChipDescription("PC", out claudeChip))
+				if (withClaude && lib != null && lib.TryGetChipDescription(claudeChipName, out claudeChip))
 				{
 					attempt = 1;
 					started = Time.realtimeSinceStartup;
@@ -191,6 +194,36 @@ namespace DLS.Game
 					if (b2.Read(w) != v) return $"{b.Name}[{w}] = {b2.Read(w)} after reload, expected {v}";
 				}
 				return null;
+			});
+			Check("memory editor: reversed register bits corrected by simulation", () =>
+			{
+				MemoryRules r = MemoryLayout.RulesFromJObject(MemoryLayout.RulesToJObject(rules));
+				MemoryTypeRule reg = r.types.First(t => t.type == "Registre8");
+				string[] right = reg.children.ToArray();
+				reg.children = right.Reverse().ToArray();
+				string e = MemoryLayout.Verify("Registre8", r, lib, new Dictionary<string, int[]>());
+				if (e != null) return "not corrected: " + e;
+				return reg.children.SequenceEqual(right) ? null : "corrected to the wrong order";
+			});
+			Check("memory editor: Registre8 reuses the CPU's analysis (no Claude call)", () =>
+			{
+				var cache = new Dictionary<string, MemoryLayout.CacheEntry> { ["CPU"] = new MemoryLayout.CacheEntry { hash = "h", rules = rules, polarity = pol } };
+				lib.TryGetChipDescription("Registre8", out ChipDescription reg);
+				MemoryRules r = MemoryLayout.RulesFromCache(reg, cache, lib, out var p2);
+				return r == null ? "not found in the cache" : MemoryLayout.Verify("Registre8", r, lib, p2);
+			});
+			Check("memory editor: long messages wrapped", () => DLS.Graphics.MemoryEditMenu.Wrap(new string('w', 5) + " " + string.Join(" ", Enumerable.Repeat("word", 80)), 90).Split('\n').All(l => l.Length <= 90) ? null : "line too long");
+			Check("memory editor: 8-bit field accepts FF / 255, refuses 100 / 256", () =>
+				DLS.Graphics.MemoryEditMenu.FitsWord("FF", 8, 0) && DLS.Graphics.MemoryEditMenu.FitsWord("255", 8, 1) && !DLS.Graphics.MemoryEditMenu.FitsWord("100", 8, 0) && !DLS.Graphics.MemoryEditMenu.FitsWord("256", 8, 1) ? null : "wrong width check");
+			Check("memory editor: decimal 3 shown as binary 00000011", () => DLS.Graphics.MemoryEditMenu.ConvertText("3", 8, 1, 2) == "00000011" ? null : "conversion wrong");
+			Check("memory editor: a word changed by the circuit updates its field", () =>
+			{
+				var orig = banks.Select(b => Enumerable.Range(0, b.WordCount).Select(w => b.Read(w)).ToArray()).ToArray();
+				var txt = banks.Select((b, i) => orig[i].Select(v => v.ToString()).ToArray()).ToArray();
+				banks[0].Write(0, (orig[0][0] + 1) & 0xFF, root.Program);
+				Step(root, 1);
+				var ch = DLS.Graphics.MemoryEditMenu.Follow(banks, orig, txt, 1);
+				return ch.Contains((0, 0)) && txt[0][0] == banks[0].Read(0).ToString() ? null : $"field says {txt[0][0]}, circuit {banks[0].Read(0)}";
 			});
 			Check("memory editor: cache JSON round trip", () =>
 			{

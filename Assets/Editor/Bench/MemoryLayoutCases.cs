@@ -62,7 +62,16 @@ namespace DLS.Bench
                 string t = type;
                 cases.Add(($"[PC] memory editor: correct rules for {t} are verified", () => Verify(lib, t, Parse())));
             }
-            cases.Add(("[PC] memory editor: register bits reversed -> rejected", () => MustReject(lib, "Registre8", r => Rule(r, "Registre8").children = Rule(r, "Registre8").children.Reverse().ToArray())));
+            // Behaviour change 2026-09-28: a wrong BIT ORDER is no longer rejected but corrected by simulation (Claude
+            // reversed the register bits on its first try every time); the corrected rule must be exactly the right one.
+            cases.Add(("[PC] memory editor: register bits reversed -> corrected by simulation", () => MustCorrect(lib, "Registre8", r => Rule(r, "Registre8").children = Rule(r, "Registre8").children.Reverse().ToArray())));
+            cases.Add(("[PC] memory editor: counter bits scrambled -> corrected by simulation", () => MustCorrect(lib, "PC", r => { var c = Rule(r, "PC").children; Rule(r, "PC").children = new[] { c[3], c[0], c[7], c[1], c[6], c[2], c[5], c[4] }; })));
+            cases.Add(("[PC] memory editor: RAM word bits reversed (deep inside the RAM) -> corrected by simulation", () => MustCorrect(lib, "RAM4", r => Rule(r, "MOT8").children = Rule(r, "MOT8").children.Reverse().ToArray())));
+            cases.Add(("[PC] memory editor: a known type is reused for another chip of that type without Claude", () => Reuse(lib, chips)));
+            cases.Add(("memory editor: long messages are wrapped", WrapCase));
+            cases.Add(("memory editor: a field only accepts values of the word's width", FitsWordCase));
+            cases.Add(("memory editor: changing the base shows the typed value in the new base", ConvertCase));
+            cases.Add(("[PC] memory editor: words follow the circuit live (clock edge), edited words are kept", () => FollowCase(lib, chips)));
             cases.Add(("[PC] memory editor: RAM blocks in the wrong order -> rejected", () => MustReject(lib, "RAM4", r => Rule(r, "RAM4").children = new[] { "MOT8#1", "MOT8#2", "MOT8#3", "MOT8#4" })));
             cases.Add(("[PC] memory editor: wrong read pin -> rejected", () => MustReject(lib, "Registre8", r => r.reads.First(x => x.type == "Registre8").output = new[] { "NOPE" })));
             cases.Add(("[PC] memory editor: read procedure that does not select the word -> rejected", () => MustReject(lib, "RAM4", r => r.reads.First(x => x.type == "RAM4").inputs.RemoveAll(p => p.pin == "Adress1"))));
@@ -150,6 +159,137 @@ namespace DLS.Bench
             var pol = new Dictionary<string, int[]>();
             string err = MemoryLayout.Verify(type, rules, lib, pol);
             return err;
+        }
+
+        static string MustCorrect(ChipLibrary lib, string type, Action<MemoryRules> spoil)
+        {
+            MemoryRules good = Parse(), r = Parse();
+            spoil(r);
+            string err = MemoryLayout.Verify(type, r, lib, new Dictionary<string, int[]>());
+            if (err != null) return "not corrected: " + err;
+            foreach (MemoryTypeRule t in good.types)
+            {
+                MemoryTypeRule c = r.types.First(x => x.type == t.type);
+                if (!c.children.SequenceEqual(t.children)) return $"{t.type} corrected to [{string.Join(", ", c.children)}], expected [{string.Join(", ", t.children)}]";
+            }
+            return null;
+        }
+
+        static string Reuse(ChipLibrary lib, ChipDescription[] chips)
+        {
+            // the CPU was analysed: its cache entry knows Registre8 -> a Registre8 alone needs no new analysis
+            var cache = new Dictionary<string, MemoryLayout.CacheEntry> { ["CPU"] = new MemoryLayout.CacheEntry { hash = "h", rules = Parse() } };
+            ChipDescription reg = chips.First(c => c.Name == "Registre8");
+            MemoryRules r = MemoryLayout.RulesFromCache(reg, cache, lib, out var pol);
+            if (r == null) return "Registre8 not rebuilt from the CPU's cached rules";
+            string err = MemoryLayout.Verify("Registre8", r, lib, pol);
+            if (err != null) return "rules rebuilt from the cache fail: " + err;
+            ChipDescription ram = chips.First(c => c.Name == "RAM256");
+            MemoryRules rr = MemoryLayout.RulesFromCache(ram, cache, lib, out var pol2);
+            if (rr == null || MemoryLayout.Verify("RAM256", rr, lib, pol2) != null) return "RAM256 (types nested 5 levels) not reusable from the cache";
+            ChipDescription alu = chips.First(c => c.Name == "ALU8");
+            if (MemoryLayout.RulesFromCache(alu, cache, lib, out _) != null) return "a type never analysed was 'found' in the cache";
+            return null;
+        }
+
+        static string WrapCase()
+        {
+            string w = DLS.Graphics.MemoryEditMenu.Wrap(new string('x', 10) + " " + string.Join(" ", Enumerable.Repeat("word", 60)), 40);
+            return w.Split('\n').All(l => l.Length <= 40) && w.Contains('\n') ? null : "a line is longer than the width";
+        }
+
+        static string FitsWordCase()
+        {
+            var ok = new (string s, int bits, int mode)[] { ("FF", 8, 0), ("0", 8, 0), ("", 8, 0), ("255", 8, 1), ("11111111", 8, 2), ("F", 4, 0), ("7", 3, 0), ("FFFF", 16, 0), ("65535", 16, 1), ("1", 1, 2), ("a5", 8, 0) };
+            var bad = new (string s, int bits, int mode)[] { ("100", 8, 0), ("1FF", 8, 0), ("000", 8, 0), ("256", 8, 1), ("0255", 8, 1), ("111111111", 8, 2), ("10", 4, 0), ("8", 3, 0), ("10000", 16, 0), ("65536", 16, 1), ("2", 1, 2), ("G", 8, 0), ("12", 8, 2), ("A", 8, 1) };
+            foreach (var c in ok) if (!DLS.Graphics.MemoryEditMenu.FitsWord(c.s, c.bits, c.mode)) return $"'{c.s}' refused for {c.bits} bits, mode {c.mode}";
+            foreach (var c in bad) if (DLS.Graphics.MemoryEditMenu.FitsWord(c.s, c.bits, c.mode)) return $"'{c.s}' accepted for {c.bits} bits, mode {c.mode}";
+            return null;
+        }
+
+        // Serial (main thread: the input field states are a shared dictionary). The real menu code paths:
+        // - decimal 3 typed, then binary -> the field shows 00000011 (the converted text used to be overwritten by the
+        //   old field text, the user saw no change)
+        // - a chip opened after another with as many words shows ITS values (it showed the previous chip's)
+        public static string MenuFieldsCase(ChipLibrary lib, ChipDescription[] chips)
+        {
+            ChipDescription reg = chips.First(c => c.Name == "Registre8");
+            var cache = new Dictionary<string, MemoryLayout.CacheEntry> { ["CPU"] = new MemoryLayout.CacheEntry { hash = "h", rules = Parse() } };
+            MemoryRules rules = MemoryLayout.RulesFromCache(reg, cache, lib, out var pol);
+            string e = MemoryLayout.Verify("Registre8", rules, lib, pol);
+            if (e != null) return e;
+            List<MemoryBank> Load(DirectedCases.Fixture f, int value)
+            {
+                f.Set("IN", value); f.Set("LOAD", 1); f.Set("OE", 1); f.Set("Clock", 0); f.Set("Reset", 0); f.Tick(6);
+                f.Cycle("Clock");
+                return MemoryLayout.Banks(f.Target, reg, rules, pol, lib, out _);
+            }
+            using (var fa = new DirectedCases.Fixture(reg, lib))
+            {
+
+                DLS.Graphics.MemoryEditMenu.OpenForTests(Load(fa, 0x5A));
+                DLS.Graphics.MemoryEditMenu.SetModeForTests(0);
+                if (DLS.Graphics.MemoryEditMenu.FieldText(0) != "5A") return $"register A opened shows {DLS.Graphics.MemoryEditMenu.FieldText(0)}";
+                DLS.Graphics.MemoryEditMenu.SetModeForTests(1);
+                if (DLS.Graphics.MemoryEditMenu.FieldText(0) != "90") return $"hex 5A shown in decimal as {DLS.Graphics.MemoryEditMenu.FieldText(0)}";
+                DLS.Graphics.MemoryEditMenu.TypeForTests(0, "3");
+                DLS.Graphics.MemoryEditMenu.SetModeForTests(2);
+                if (DLS.Graphics.MemoryEditMenu.FieldText(0) != "00000011") return $"decimal 3 then binary shows {DLS.Graphics.MemoryEditMenu.FieldText(0)}";
+                DLS.Graphics.MemoryEditMenu.SetModeForTests(0);
+                if (DLS.Graphics.MemoryEditMenu.FieldText(0) != "03") return $"then hex shows {DLS.Graphics.MemoryEditMenu.FieldText(0)}";
+            }
+            using (var fb = new DirectedCases.Fixture(reg, lib))
+            {
+                DLS.Graphics.MemoryEditMenu.OpenForTests(Load(fb, 0x21));
+                string t = DLS.Graphics.MemoryEditMenu.FieldText(0);
+                DLS.Graphics.MemoryEditMenu.Reset();
+                return t == "21" ? null : $"register B (21) opened after register A shows {t}";
+            }
+        }
+
+        static string ConvertCase()
+        {
+            var cases = new (string text, int bits, int from, int to, string expect)[]
+            {
+                ("3", 8, 1, 2, "00000011"), ("3", 8, 1, 0, "03"), ("00000011", 8, 2, 1, "3"), ("FF", 8, 0, 1, "255"),
+                ("255", 8, 1, 2, "11111111"), ("A", 4, 0, 2, "1010"), ("1234", 16, 1, 0, "04D2"), ("", 8, 1, 2, "00000000"),
+            };
+            foreach (var c in cases)
+            {
+                string got = DLS.Graphics.MemoryEditMenu.ConvertText(c.text, c.bits, c.from, c.to);
+                if (got != c.expect) return $"'{c.text}' ({c.bits} bits) mode {c.from} -> {c.to} gave '{got}', expected '{c.expect}'";
+            }
+            return null;
+        }
+
+        static string FollowCase(ChipLibrary lib, ChipDescription[] chips)
+        {
+            ChipDescription reg = chips.First(c => c.Name == "Registre8");
+            var cache = new Dictionary<string, MemoryLayout.CacheEntry> { ["CPU"] = new MemoryLayout.CacheEntry { hash = "h", rules = Parse() } };
+            MemoryRules rules = MemoryLayout.RulesFromCache(reg, cache, lib, out var pol);
+            string e = MemoryLayout.Verify("Registre8", rules, lib, pol);
+            if (e != null) return e;
+            using var f = new DirectedCases.Fixture(reg, lib);
+            f.Set("IN", 0x5A); f.Set("LOAD", 1); f.Set("OE", 1); f.Set("Clock", 0); f.Set("Reset", 0); f.Tick(6);
+            f.Cycle("Clock");
+            List<MemoryBank> banks = MemoryLayout.Banks(f.Target, reg, rules, pol, lib, out string err);
+            if (banks == null) return err;
+            var original = new[] { new[] { banks[0].Read(0) } };
+            var texts = new[] { new[] { "5A" } };
+            if (original[0][0] != 0x5A) return $"register reads {original[0][0]:X}, expected 5A";
+            if (DLS.Graphics.MemoryEditMenu.Follow(banks, original, texts, 0).Count != 0) return "a word changed with no clock edge";
+            f.Set("IN", 0x11); f.Tick(6); f.Cycle("Clock");
+            var ch = DLS.Graphics.MemoryEditMenu.Follow(banks, original, texts, 0);
+            if (ch.Count != 1 || texts[0][0] != "11") return $"after a clock edge loading 11 the field says {texts[0][0]}";
+            texts[0][0] = "33"; // the user types a value, then an edge loads 22
+            f.Set("IN", 0x22); f.Tick(6); f.Cycle("Clock");
+            DLS.Graphics.MemoryEditMenu.Follow(banks, original, texts, 0);
+            if (texts[0][0] != "33") return "the user's edit was overwritten by the circuit";
+            if (original[0][0] != 0x22) return "the circuit's value is not tracked under an edited word";
+            texts[0][0] = "00100010"; // (fields in binary now) back to the circuit's value: the word follows again
+            f.Set("IN", 0x44); f.Tick(6); f.Cycle("Clock");
+            DLS.Graphics.MemoryEditMenu.Follow(banks, original, texts, 2);
+            return texts[0][0] == "01000100" ? null : $"binary follow gave {texts[0][0]}";
         }
 
         static string MustReject(ChipLibrary lib, string type, Action<MemoryRules> spoil)

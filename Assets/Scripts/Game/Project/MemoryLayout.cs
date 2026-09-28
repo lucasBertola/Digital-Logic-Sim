@@ -67,6 +67,7 @@ namespace DLS.Game
 		public SimChip A, B;
 		public int Pol;
 		public string HolderType;
+		public string WordType; // the chip type whose "word" rule this cell belongs to
 		public int IndexInHolder;
 
 		public int Read() => (int)(A.OutputPins[0].State & 1) ^ Pol;
@@ -247,6 +248,7 @@ namespace DLS.Game
 					for (int j = 0; j < cells.Count; j++)
 					{
 						cells[j].HolderType = holderType;
+						cells[j].WordType = desc.Name;
 						cells[j].IndexInHolder = j;
 						cells[j].Pol = polarity != null && polarity.TryGetValue(holderType, out int[] p) && j < p.Length ? p[j] : 0;
 					}
@@ -330,6 +332,9 @@ namespace DLS.Game
 
 		const int SettleTicks = 12;
 
+		// what Verify fixed by itself (bit order), for display / logs; null = not collected
+		[ThreadStatic] public static List<string> Corrections;
+
 		// Verifies the rules of one bank chip type on an isolated copy, learning the cell polarities. Null = OK.
 		public static string Verify(string typeName, MemoryRules rules, ChipLibrary lib, Dictionary<string, int[]> polarity, int seed = 7)
 		{
@@ -401,6 +406,52 @@ namespace DLS.Game
 				if (words[0].Count != width) return $"a word of \"{typeName}\" has {words[0].Count} bits but the read pins carry {width}";
 
 				SimProgram prog = root.Program;
+
+				// ---- bit order: which output bit does each bit's cells drive? (Claude often reverses it) ----
+				// Word 0's bits are written one at a time; the output bit that follows is that bit's true position. A
+				// consistent permutation other than the identity reorders the word rule's children, and the rule is
+				// used corrected (the caller's rules object is updated, so the cache keeps the correction).
+				{
+					int n = words[0].Count;
+					var perm = new int[n];
+					bool ok = true;
+					for (int i = 0; i < n && ok; i++)
+					{
+						List<MemCell> cells = words[0][i];
+						int found = -1;
+						for (int combo = 0; combo < (1 << Math.Min(cells.Count, 6)) && found < 0; combo++)
+						{
+							for (int j = 0; j < cells.Count; j++) cells[j].Pol = (combo >> j) & 1;
+							foreach (MemCell c in cells) c.Write(1, prog);
+							Address(0); Tick(SettleTicks);
+							long r1 = ReadOut();
+							foreach (MemCell c in cells) c.Write(0, prog);
+							Address(0); Tick(SettleTicks);
+							long r0 = ReadOut();
+							if (r1 < 0 || r0 < 0) continue;
+							long diff = r1 ^ r0;
+							if (diff != 0 && (diff & (diff - 1)) == 0 && (r1 & diff) != 0 && cells.All(c => c.Read() == 0))
+								found = (int)Math.Round(Math.Log(diff, 2));
+						}
+						if (found < 0) ok = false;
+						else perm[i] = found;
+					}
+					if (ok && perm.Distinct().Count() == n && perm.Where((t, i) => t != i).Any())
+					{
+						string wordType = words[0][0][0].WordType;
+						MemoryTypeRule wr = RuleFor(rules, wordType);
+						if (wr != null && wr.children.Length == n)
+						{
+							var reordered = new string[n];
+							for (int i = 0; i < n; i++) reordered[perm[i]] = wr.children[i];
+							wr.children = reordered;
+							Corrections?.Add($"bit order of \"{wordType}\" corrected by simulation");
+							words = ResolveWords(target, desc, rules, lib, null, out err);
+							if (words == null) return err;
+						}
+					}
+				}
+
 				// ---- learn the polarity of each holder type ----
 				var learnt = new Dictionary<string, int[]>();
 				for (int w = 0; w < words.Count; w++)
@@ -585,6 +636,40 @@ namespace DLS.Game
 				cache[prop.Name] = entry;
 			}
 			return cache;
+		}
+
+		// Rules for a chip whose TYPE rules are already known from another cached analysis (Registre B after
+		// Registre A, a RAM256 inside another CPU...): the bank is the chip itself, the types and reads needed are
+		// collected from the cache. Null when some needed rule is missing. Still verified by the caller.
+		public static MemoryRules RulesFromCache(ChipDescription desc, Dictionary<string, CacheEntry> cache, ChipLibrary lib, out Dictionary<string, int[]> polarity)
+		{
+			polarity = new Dictionary<string, int[]>();
+			var types = new Dictionary<string, MemoryTypeRule>(StringComparer.OrdinalIgnoreCase);
+			var reads = new Dictionary<string, MemoryReadRule>(StringComparer.OrdinalIgnoreCase);
+			foreach (CacheEntry e in cache.Values)
+			{
+				if (e?.rules == null) continue;
+				foreach (MemoryTypeRule t in e.rules.types) if (t.type != null && !types.ContainsKey(t.type)) types[t.type] = t;
+				foreach (MemoryReadRule r in e.rules.reads) if (r.type != null && !reads.ContainsKey(r.type)) reads[r.type] = r;
+				foreach (var p in e.polarity ?? new Dictionary<string, int[]>()) if (!polarity.ContainsKey(p.Key)) polarity[p.Key] = p.Value;
+			}
+			if (!types.ContainsKey(desc.Name) || !reads.ContainsKey(desc.Name)) return null;
+			var rules = new MemoryRules();
+			rules.banks.Add(new MemoryBankRef { name = desc.Name, path = Array.Empty<string>() });
+			rules.reads.Add(reads[desc.Name]);
+			// the type and every type below it that has a rule
+			var queue = new Queue<string>(new[] { desc.Name });
+			var added = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+			while (queue.Count > 0)
+			{
+				string tn = queue.Dequeue();
+				if (!added.Add(tn) || !types.TryGetValue(tn, out MemoryTypeRule t)) continue;
+				rules.types.Add(t);
+				ChipDescription d = lib.GetChipDescriptionForSim(tn);
+				if (d == null) continue;
+				foreach (SubChipDescription s in d.SubChips ?? Array.Empty<SubChipDescription>()) queue.Enqueue(s.Name);
+			}
+			return rules;
 		}
 
 		// Parses Claude's structured answer

@@ -29,7 +29,8 @@ namespace DLS.Graphics
 		static List<MemoryBank> banks = new();
 		static int bankIndex;
 		static string[][] texts;       // per bank, per word: the field text
-		static uint[][] original;      // values when opened
+		static uint[][] original;      // values in the circuit (followed live, see Follow)
+		static float[][] changedAt;    // when the circuit last changed a word (the row flashes)
 		static UIHandle[] rowIDs = Array.Empty<UIHandle>();
 		static UIHandle ID_scroll, ID_mode;
 		static int mode; // 0 hex, 1 decimal, 2 binary
@@ -73,6 +74,26 @@ namespace DLS.Graphics
 				var b = MemoryLayout.Banks(liveChip, chipDesc, entry.rules, entry.polarity, project.chipLibrary, out string err);
 				if (b != null) { banks = b; Ready(); return; }
 			}
+			// the types inside are already known from another analysis (Registre B after Registre A): no Claude call
+			MemoryRules known = MemoryLayout.RulesFromCache(chipDesc, cache, project.chipLibrary, out var knownPol);
+			if (known != null)
+			{
+				string err = null;
+				var pol = new Dictionary<string, int[]>(knownPol);
+				project.RunWithSimulationPaused(() => err = MemoryLayout.Verify(chipDesc.Name, known, project.chipLibrary, pol));
+				if (err == null)
+				{
+					var b = MemoryLayout.Banks(liveChip, chipDesc, known, pol, project.chipLibrary, out string e2);
+					if (b != null)
+					{
+						cache[chipDesc.Name] = new MemoryLayout.CacheEntry { hash = hash, rules = known, polarity = pol };
+						MemoryLayout.SaveCache(project.description.ProjectName, cache);
+						banks = b;
+						Ready();
+						return;
+					}
+				}
+			}
 			phase = Phase.Analysing;
 			attempts = 1;
 			MemoryLayoutClaude.Start(chipDesc, project.chipLibrary, project.description.ProjectName, null, null);
@@ -80,21 +101,63 @@ namespace DLS.Graphics
 
 		static void Fail(string msg) { phase = Phase.Error; message = msg; }
 
+		// word-wraps a message so it never runs off the screen
+		public static string Wrap(string text, int width)
+		{
+			var sb = new StringBuilder();
+			foreach (string para in (text ?? "").Split('\n'))
+			{
+				int col = 0;
+				foreach (string word in para.Split(' '))
+				{
+					if (col > 0 && col + 1 + word.Length > width) { sb.Append('\n'); col = 0; }
+					else if (col > 0) { sb.Append(' '); col++; }
+					sb.Append(word);
+					col += word.Length;
+				}
+				sb.Append('\n');
+			}
+			return sb.ToString().TrimEnd('\n');
+		}
+
 		static void Ready()
 		{
 			phase = Phase.Ready;
+			Project.ActiveProject.RunWithSimulationPaused(InitWords);
+			SelectBank(0);
+		}
+
+		static void InitWords()
+		{
 			texts = new string[banks.Count][];
 			original = new uint[banks.Count][];
-			Project.ActiveProject.RunWithSimulationPaused(() =>
+			changedAt = new float[banks.Count][];
+			bankIndex = 0;
+			// the fields still hold the texts of the previous chip edited: forget them, or SelectBank's StoreFields
+			// would copy them over this chip's values (register B opened after register A showed A's value)
+			rowIDs = Array.Empty<UIHandle>();
+			for (int b = 0; b < banks.Count; b++)
 			{
-				for (int b = 0; b < banks.Count; b++)
-				{
-					original[b] = new uint[banks[b].WordCount];
-					texts[b] = new string[banks[b].WordCount];
-					for (int w = 0; w < banks[b].WordCount; w++) { original[b][w] = banks[b].Read(w); texts[b][w] = Format(original[b][w], banks[b].Bits); }
-				}
-			});
-			SelectBank(0);
+				original[b] = new uint[banks[b].WordCount];
+				changedAt[b] = Enumerable.Repeat(-10f, banks[b].WordCount).ToArray();
+				texts[b] = new string[banks[b].WordCount];
+				for (int w = 0; w < banks[b].WordCount; w++) { original[b][w] = banks[b].Read(w); texts[b][w] = Format(original[b][w], banks[b].Bits); }
+			}
+		}
+
+		// test hooks: the real field / mode code paths without drawing (bench, main thread)
+		public static void OpenForTests(List<MemoryBank> b) { banks = b; InitWords(); SelectBank(0); }
+		public static void SetModeForTests(int m) => SetMode(m);
+		public static string FieldText(int w) => UI.GetInputFieldState(rowIDs[w]).text;
+		public static void TypeForTests(int w, string text) => UI.GetInputFieldState(rowIDs[w]).SetText(text, false);
+
+		static void SetMode(int newMode)
+		{
+			if (newMode == mode) return;
+			StoreFields();
+			ConvertAll(mode, newMode);
+			mode = newMode;
+			LoadFields();
 		}
 
 		static void SelectBank(int index)
@@ -107,6 +170,15 @@ namespace DLS.Graphics
 			{
 				rowIDs[i] = new UIHandle("MEM_row_" + bankIndex, i);
 				UI.GetInputFieldState(rowIDs[i]).SetText(texts[bankIndex][i], false);
+			}
+		}
+
+		static void LoadFields()
+		{
+			for (int i = 0; i < rowIDs.Length; i++)
+			{
+				InputFieldState st = UI.GetInputFieldState(rowIDs[i]);
+				st.SetText(texts[bankIndex][i], st.focused);
 			}
 		}
 
@@ -177,14 +249,14 @@ namespace DLS.Graphics
 				string dots = new string('.', 1 + (int)(Time.time * 2) % 3);
 				string text = phase switch
 				{
-					Phase.Analysing => $"Claude is working out how the memory of \"{chipDesc?.Name}\" is organised{dots}" + (attempts > 1 ? $"\n(attempt {attempts}: the previous rules failed the check: {message})" : ""),
+					Phase.Analysing => $"Claude is working out how the memory of \"{chipDesc?.Name}\" is organised{dots}" + (attempts > 1 ? $"\nAttempt {attempts} of {MaxAttempts}: the previous proposal was rejected by the simulation check, Claude is correcting it." : ""),
 					Phase.Verifying => "Checking the layout by simulation" + dots,
 					_ => message ?? "Error"
 				};
 				using (UI.BeginBoundsScope(true))
 				{
 					Draw.ID panel = UI.ReservePanel();
-					UI.DrawText(text, theme.FontRegular, theme.FontSizeRegular, UI.Centre + Vector2.up * 2, Anchor.Centre, phase == Phase.Error ? Color.yellow : Color.white);
+					UI.DrawText(Wrap(text, 90), theme.FontRegular, theme.FontSizeRegular, UI.Centre + Vector2.up * 2, Anchor.Centre, phase == Phase.Error ? Color.yellow : Color.white);
 					bool close = UI.Button(phase == Phase.Error ? "CLOSE" : "CANCEL", theme.MainMenuButtonTheme, UI.PrevBounds.CentreBottom + Vector2.down * 3, true, Anchor.CentreTop);
 					MenuHelper.DrawReservedMenuPanel(panel, UI.GetCurrentBoundsScope());
 					if (close || KeyboardShortcuts.CancelShortcutTriggered) { MemoryLayoutClaude.Cancel(); UIDrawer.SetActiveMenu(UIDrawer.MenuType.None); }
@@ -192,6 +264,7 @@ namespace DLS.Graphics
 				return;
 			}
 
+			FollowCircuit();
 			MemoryBank bank = banks[bankIndex];
 			scrollBounds = Bounds2D.CreateFromCentreAndSize(UI.Centre, new Vector2(UI.Width * 0.4f, UI.Height * 0.8f));
 			UI.DrawScrollView(ID_scroll, scrollBounds.TopLeft, scrollBounds.Size, 0, Anchor.TopLeft, theme.ScrollTheme, DrawRow, bank.WordCount);
@@ -216,7 +289,7 @@ namespace DLS.Graphics
 				MenuHelper.CancelConfirmResult result = MenuHelper.DrawCancelConfirmButtons(pos, sideSize.x, false, false);
 				MenuHelper.DrawReservedMenuPanel(sidePanel, UI.GetCurrentBoundsScope());
 
-				if (newMode != mode) { StoreFields(); ConvertAll(mode, newMode); mode = newMode; SelectBank(bankIndex); }
+				SetMode(newMode);
 				if (newBank != bankIndex) SelectBank(newBank);
 				if (copyPaste == 0) CopyAll();
 				else if (copyPaste == 1) PasteAll();
@@ -238,6 +311,8 @@ namespace DLS.Graphics
 				InputFieldTheme t = MenuHelper.Theme.ChipNameInputField;
 				t.fontSize = MenuHelper.Theme.FontSizeRegular;
 				t.bgCol = state.focused ? new Color(0.33f, 0.55f, 0.34f) : index % 2 == 0 ? ColHelper.MakeCol(0.17f) : ColHelper.MakeCol(0.13f);
+				float flash = 1 - (Time.time - changedAt[bankIndex][index]) / 0.6f; // the circuit just changed this word
+				if (flash > 0) t.bgCol = Color.Lerp(t.bgCol, new Color(0.55f, 0.47f, 0.15f), flash);
 				t.focusBorderCol = Color.clear;
 				UI.InputField(rowIDs[index], t, topLeft, size, "0", Anchor.TopLeft, 6, Validate);
 				string label = index.ToString().PadLeft(banks[bankIndex].WordCount.ToString().Length, '0') + ":";
@@ -252,15 +327,53 @@ namespace DLS.Graphics
 			UI.OverridePreviousBounds(bounds);
 		}
 
-		static bool Validate(string s)
+		static bool Validate(string s) => FitsWord(s, banks[bankIndex].Bits, mode);
+
+		// What a field of a word of this width accepts while typing: digits of the mode, no more digits than the
+		// widest value, and a value that fits (8-bit word: FF / 255 / 11111111 at most).
+		public static bool FitsWord(string s, int bits, int m)
 		{
 			foreach (char c in s)
 			{
-				if (mode == 0 && !Uri.IsHexDigit(c)) return false;
-				if (mode == 1 && !char.IsDigit(c)) return false;
-				if (mode == 2 && c is not ('0' or '1')) return false;
+				if (m == 0 && !Uri.IsHexDigit(c)) return false;
+				if (m == 1 && !char.IsDigit(c)) return false;
+				if (m == 2 && c is not ('0' or '1')) return false;
 			}
-			return true;
+			uint max = bits >= 32 ? uint.MaxValue : (uint)((1UL << bits) - 1);
+			return s.Length <= Format(max, bits, m).Length && TryParse(s, bits, m, out _);
+		}
+
+		// The words follow the circuit while the editor is open (a clock edge that loads a register shows up at
+		// once). A word the user has edited (its text no longer says the circuit's old value) is left alone: SAVE
+		// writes it. Returns the words whose text was updated.
+		public static List<(int bank, int word)> Follow(List<MemoryBank> banks, uint[][] original, string[][] texts, int m)
+		{
+			var changed = new List<(int, int)>();
+			for (int b = 0; b < banks.Count; b++)
+				for (int w = 0; w < banks[b].WordCount; w++)
+				{
+					uint live = banks[b].Read(w);
+					if (live == original[b][w]) continue;
+					bool edited = !TryParse(texts[b][w], banks[b].Bits, m, out uint typed) || typed != original[b][w];
+					original[b][w] = live;
+					if (edited) continue;
+					texts[b][w] = Format(live, banks[b].Bits, m);
+					changed.Add((b, w));
+				}
+			return changed;
+		}
+
+		// (reads the live slots without pausing the simulation: at worst a value one step old, shown next frame)
+		static void FollowCircuit()
+		{
+			StoreFields();
+			foreach ((int b, int w) in Follow(banks, original, texts, mode))
+			{
+				changedAt[b][w] = Time.time;
+				if (b != bankIndex || w >= rowIDs.Length) continue;
+				InputFieldState st = UI.GetInputFieldState(rowIDs[w]);
+				st.SetText(texts[b][w], st.focused);
+			}
 		}
 
 		// ---------------------------------------------------------------- values
@@ -294,7 +407,13 @@ namespace DLS.Graphics
 		{
 			for (int b = 0; b < banks.Count; b++)
 				for (int w = 0; w < texts[b].Length; w++)
-					texts[b][w] = TryParse(texts[b][w], banks[b].Bits, from, out uint v) ? Format(v, banks[b].Bits, to) : texts[b][w];
+					texts[b][w] = ConvertText(texts[b][w], banks[b].Bits, from, to);
+		}
+
+		// a typed value shown in another base (decimal 3 -> binary 00000011 on an 8-bit word)
+		public static string ConvertText(string text, int bits, int from, int to)
+		{
+			return TryParse(text, bits, from, out uint v) ? Format(v, bits, to) : text;
 		}
 
 		static void CopyAll()
@@ -335,6 +454,7 @@ namespace DLS.Graphics
 		{
 			banks = new List<MemoryBank>();
 			texts = null;
+			changedAt = null;
 			rowIDs = Array.Empty<UIHandle>();
 			MemoryLayoutClaude.Cancel();
 		}
