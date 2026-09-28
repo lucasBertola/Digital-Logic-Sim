@@ -250,6 +250,7 @@ namespace DLS.Game
 				return ViewedChip.Elements.Count > 0;
 			}
 
+			if (ViewedChip.MemoryEdited) return true;
 			return Saver.HasUnsavedChanges(ViewedChip.LastSavedDescription, DescriptionCreator.CreateChipDescription(ViewedChip));
 		}
 
@@ -386,6 +387,7 @@ namespace DLS.Game
 		{
 			if (dc == null) return false;
 			if (dc.LastSavedDescription == null) return dc.Elements.Count > 0;
+			if (dc.MemoryEdited) return true;
 			return Saver.HasUnsavedChanges(dc.LastSavedDescription, DescriptionCreator.CreateChipDescription(dc));
 		}
 

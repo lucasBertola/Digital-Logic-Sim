@@ -77,6 +77,8 @@ namespace DLS.Game
         const string KeyEnvVar = "ANTHROPIC_API_KEY";
         public static string KeyPath => Path.Combine(SavePaths.AllData, "anthropic_key.txt");
 
+        public static string ApiKey => ReadKey();
+
         static string ReadKey()
         {
             try

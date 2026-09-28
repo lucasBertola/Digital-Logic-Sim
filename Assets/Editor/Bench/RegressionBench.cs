@@ -94,6 +94,7 @@ namespace DLS.Bench
                         cases.AddRange(BuiltinCases.All());
                         cases.AddRange(DirectedCases.All(lib, chips));
                         cases.AddRange(MemoryCases.All(lib, chips));
+                        cases.AddRange(MemoryLayoutCases.All(lib, chips));
                         serial.AddRange(ProjectCases.All(dir));
                     }
                 }

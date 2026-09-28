@@ -258,7 +258,7 @@ namespace DLS.Simulation
 				if (ChipTypeHelper.IsBusType(b.ChipType)) continue; // origin = wire, terminus = nothing
 				if (b.OutputPins.Length == 0 && b.ChipType != ChipType.Buzzer) continue; // pure displays: their input pins already carry the values
 				gateOfChip[b.compileIndex] = types.Count;
-				if (b.ChipType == ChipType.Rom_256x16) roms.Add(types.Count);
+				if (b.ChipType is ChipType.Rom_256x16 or ChipType.dev_Ram_8Bit) roms.Add(types.Count); // edited from outside: re-run
 				if (b.ChipType == ChipType.Clock) clocks.Add(types.Count);
 				if (b.ChipType == ChipType.Key) keys.Add(types.Count);
 				if (b.ChipType == ChipType.Buzzer) prog.HasBuzzer = true;
@@ -860,6 +860,14 @@ namespace DLS.Simulation
 				}
 			}
 			GatesRunLastStep = ran;
+		}
+
+		// A pin's state was written from outside the step (memory editor, sim thread parked): the gates reading it
+		// run at the next step.
+		public void NotifyPinWritten(SimPin p)
+		{
+			if (p.stateArray != states || p.stateIndex < 0 || p.stateIndex >= slotCount) return;
+			MarkConsumers(p.stateIndex);
 		}
 
 		void SetDirty(int pos)

@@ -511,6 +511,7 @@ namespace DLS.Bench
             readonly ChipDescription desc;
             readonly SimChip root, target;
             public SimChip Target => target;
+            public SimProgram RootProgram => root.Program;
             readonly SimAudio audio = new();
             readonly Dictionary<string, int> inIdx = new(), outIdx = new();
             readonly Dictionary<string, (SimChip chip, ChipDescription desc)> probes = new();

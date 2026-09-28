@@ -87,10 +87,13 @@ namespace DLS.Game
         public static SimChip BuildIsolatedSim(ChipDescription liveDesc, ChipLibrary lib)
         {
             ChipDescription harness = MakeHarness(liveDesc, TargetRefName);
-            Func<string, ChipDescription> prevOverride = lib.SimOverride;
-            lib.SimOverride = n => ChipDescription.NameMatch(n, TargetRefName) ? liveDesc : prevOverride?.Invoke(n);
-            try { return Simulator.BuildSimChip(harness, lib); }
-            finally { lib.SimOverride = prevOverride; }
+            lock (lib) // SimOverride is swapped for the duration of the build: builds on one library must not overlap
+            {
+                Func<string, ChipDescription> prevOverride = lib.SimOverride;
+                lib.SimOverride = n => ChipDescription.NameMatch(n, TargetRefName) ? liveDesc : prevOverride?.Invoke(n);
+                try { return Simulator.BuildSimChip(harness, lib); }
+                finally { lib.SimOverride = prevOverride; }
+            }
         }
 
         public static SimChip TargetOf(SimChip harnessRoot) => harnessRoot.GetSubChipFromID(HarnessSubChipID);

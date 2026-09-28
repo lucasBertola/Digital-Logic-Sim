@@ -48,6 +48,7 @@ namespace DLS.Graphics
 		static readonly MenuEntry[] entries_customSubchip =
 		{
 			openChipEntry,
+			new(Format("EDIT MEMORY"), () => UIDrawer.SetActiveMenu(UIDrawer.MenuType.MemoryEdit), CanEditCurrentChip),
 			duplicateChipEntry,
 			labelChipEntry,
 			displayNameEntry,

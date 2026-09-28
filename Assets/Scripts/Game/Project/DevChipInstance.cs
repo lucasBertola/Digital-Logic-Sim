@@ -19,6 +19,7 @@ namespace DLS.Game
 		public readonly HashSet<string> AllParentChipNames = new(ChipDescription.NameComparer);
 
 		public ChipDescription LastSavedDescription;
+		public bool MemoryEdited; // memory words changed in the editor since the last save (its state is captured at save)
 		DevPinInstance[] inputPins_cached = Array.Empty<DevPinInstance>();
 		bool elementsModifiedSinceLastArrayUpdate;
 
@@ -216,6 +217,7 @@ namespace DLS.Game
 		public void NotifySaved(ChipDescription savedDescription)
 		{
 			LastSavedDescription = savedDescription;
+			MemoryEdited = false;
 
 			RegenerateParentChipNamesHash();
 		}
