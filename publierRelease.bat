@@ -100,6 +100,16 @@ if not defined DRYRUN (
 echo Build de la version !TAG! ^(quelques dizaines de secondes^)...
 "%UNITY%" -projectPath "%~dp0." -executeMethod BuildTools.BuildWindows -buildOutput "%~dp0Builds\Windows" -quit -logFile "%~dp0Builds\build.log"
 findstr /C:"BUILD SUCCEEDED" "%~dp0Builds\build.log" >nul 2>&1
+if errorlevel 1 goto buildfailed
+REM --- l'app buildee elle-meme doit passer son auto-test (le build retire du code que l'editeur garde) ---
+call "%~dp0runPlayerSelfTest.bat"
+if errorlevel 1 (
+  echo L'auto-test de l'application buildee echoue : publication annulee.
+  if not defined DRYRUN git tag -d "!TAG!" >nul 2>&1
+  pause & exit /b 1
+)
+findstr /C:"BUILD SUCCEEDED" "%~dp0Builds\build.log" >nul 2>&1
+:buildfailed
 if errorlevel 1 (
   echo ECHEC du build ^(voir Builds\build.log^).
   if not defined DRYRUN git tag -d "!TAG!" >nul 2>&1
