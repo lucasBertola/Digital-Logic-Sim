@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Linq;
 using DLS.Description;
 using DLS.Game;
@@ -19,9 +20,14 @@ namespace DLS.Graphics
         static readonly string[] CancelConfirmButtonNames = { "CANCEL", "CREATE" };
         static readonly bool[] interactStates = { true, true };
 
+        // the selection is taken NOW: by the time the name is confirmed it is gone (the click on the menu entry
+        // reaches the circuit and clears it — CREATE CHIP did nothing in the user's CPU_2 because of that)
+        static List<int> selectedIDs = new();
+
         public static void Open()
         {
             sourceName = "chip";
+            selectedIDs = Project.ActiveProject.controller.SelectedElements.OfType<SubChipInstance>().Select(c => c.ID).ToList();
             UIDrawer.SetActiveMenu(UIDrawer.MenuType.CreateChip);
             InputFieldState s = UI.GetInputFieldState(ID_NameField);
             s.SetText(ProposeName("NEW CHIP"));
@@ -75,19 +81,25 @@ namespace DLS.Graphics
                 }
                 else if ((KeyboardShortcuts.ConfirmShortcutTriggered || buttonIndex == 1) && CanConfirm(newName))
                 {
-                    Create(newName);
-                    UIDrawer.SetActiveMenu(UIDrawer.MenuType.None);
+                    Confirm(newName);
                 }
             }
         }
 
-        static void Create(string newName)
+        // closes this popup FIRST: an error opens the info popup, which closing afterwards used to hide at once
+        static string Confirm(string newName)
         {
-            Project p = Project.ActiveProject;
-            var ids = p.controller.SelectedElements.OfType<SubChipInstance>().Select(c => c.ID).ToList();
-            string error = ChipExtractor.CreateFromSelection(p, ids, newName);
+            UIDrawer.SetActiveMenu(UIDrawer.MenuType.None);
+            string error;
+            try { error = ChipExtractor.CreateFromSelection(Project.ActiveProject, selectedIDs, newName); }
+            catch (System.Exception e) { error = "CREATE CHIP failed: " + e.Message; UnityEngine.Debug.LogException(e); }
             if (error != null) InfoPopup.Open(error);
+            return error;
         }
+
+        // test hooks: the real open / confirm path
+        public static void OpenForTests() => Open();
+        public static string ConfirmForTests(string name) => Confirm(name);
 
         static bool CanConfirm(string name)
         {

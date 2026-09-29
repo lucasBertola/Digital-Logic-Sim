@@ -19,12 +19,14 @@ namespace DLS.Bench
         {
             ("live project: sim thread computes Add4 from player inputs and syncs the dev pins", () => LiveAdd4(projectDir)),
             ("live project: switching chip keeps the sim thread going (Registre8 loads on the clock)", () => LiveRegister(projectDir)),
+            ("live project: CREATE CHIP through the popup (selection cleared by the click, as in the app), then Ctrl+Z", () => LiveCreateChip(projectDir)),
         };
 
-        static Project Open(string projectDir, string chip)
+        static Project Open(string projectDir, string chip, string projectNameOverride = null)
         {
             ChipLibrary lib = BenchProject.LoadLibrary(projectDir, out _);
             ProjectDescription pd = Serializer.DeserializeProjectDescription(File.ReadAllText(Path.Combine(projectDir, "ProjectDescription.json")));
+            if (projectNameOverride != null) pd.ProjectName = projectNameOverride; // where a save goes: never the fixture nor the user's project
             pd.Prefs_SimPaused = false;
             pd.Prefs_SimTargetStepsPerSecond = 2000;
             var p = new Project(pd, lib) { audioState = new AudioState() };
@@ -70,6 +72,47 @@ namespace DLS.Bench
                 return null;
             }
             finally { Close(p); }
+        }
+
+        static string LiveCreateChip(string projectDir)
+        {
+            const string tmpName = "_BenchCreateChip";
+            string tmpDir = SavePaths.GetProjectPath(tmpName);
+            if (Directory.Exists(tmpDir)) Directory.Delete(tmpDir, true);
+            Directory.CreateDirectory(Path.Combine(tmpDir, "Chips"));
+            Project p = Open(projectDir, "CPU", tmpName);
+            try
+            {
+                SubChipInstance[] picked = p.ViewedChip.Elements.OfType<SubChipInstance>().Where(s => s.Description.Name is "RAM256" or "Tampon8").ToArray();
+                if (picked.Length != 2) return "RAM256 / Tampon8 not found in the CPU";
+                foreach (SubChipInstance s in picked) p.controller.Select(s, true);
+                DLS.Graphics.CreateChipPopup.OpenForTests();
+                p.controller.SelectedElements.Clear(); // what the click on the menu entry does in the app
+                string err = DLS.Graphics.CreateChipPopup.ConfirmForTests("MEMOIRE TEST");
+                if (err != null) return "create failed: " + err;
+                if (DLS.Graphics.UIDrawer.ActiveMenu != DLS.Graphics.UIDrawer.MenuType.None) return "the popup is still open";
+                if (!p.chipLibrary.HasChip("MEMOIRE TEST")) return "new chip not in the library";
+                if (!File.Exists(Path.Combine(tmpDir, "Chips", "MEMOIRE TEST.json"))) return "new chip not saved";
+                if (!p.description.AllCustomChipNames.Contains("MEMOIRE TEST")) return "new chip not registered in the project (it would vanish on reload)";
+                var names = p.ViewedChip.Elements.OfType<SubChipInstance>().Select(s => s.Description.Name).ToList();
+                if (!names.Contains("MEMOIRE TEST") || names.Contains("RAM256") || names.Contains("Tampon8")) return "the selection was not replaced by the new chip: " + string.Join(", ", names);
+                Pump(p, () => false, 100); // the sim thread applies the modifications
+                p.ViewedChip.UndoController.TryUndo();
+                names = p.ViewedChip.Elements.OfType<SubChipInstance>().Select(s => s.Description.Name).ToList();
+                if (names.Contains("MEMOIRE TEST") || !names.Contains("RAM256") || !names.Contains("Tampon8")) return "Ctrl+Z did not restore the selection: " + string.Join(", ", names);
+
+                // nothing selected: the error is SHOWN (it used to be closed at once)
+                DLS.Graphics.CreateChipPopup.OpenForTests();
+                if (DLS.Graphics.CreateChipPopup.ConfirmForTests("EMPTY") == null) return "an empty selection was accepted";
+                if (DLS.Graphics.UIDrawer.ActiveMenu != DLS.Graphics.UIDrawer.MenuType.Info) return "the error message is not shown";
+                return null;
+            }
+            finally
+            {
+                DLS.Graphics.UIDrawer.SetActiveMenu(DLS.Graphics.UIDrawer.MenuType.None);
+                Close(p);
+                if (Directory.Exists(tmpDir)) Directory.Delete(tmpDir, true);
+            }
         }
 
         static string LiveRegister(string projectDir)
