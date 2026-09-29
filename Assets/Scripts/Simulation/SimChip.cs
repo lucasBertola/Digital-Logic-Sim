@@ -83,6 +83,12 @@ namespace DLS.Simulation
 					InternalState[i] = BitConverter.ToUInt32(randomBytes);
 				}
 			}
+			// CLOCK: [0] = stopped by the user (right-click TURN OFF), [1] = its level while stopped (click toggles)
+			else if (ChipType is ChipType.Clock)
+			{
+				InternalState = new uint[2];
+				if (internalState != null) Array.Copy(internalState, InternalState, Math.Min(2, internalState.Length));
+			}
 			// Load in serialized persistent state (rom data, etc.)
 			else if (internalState is { Length: > 0 })
 			{

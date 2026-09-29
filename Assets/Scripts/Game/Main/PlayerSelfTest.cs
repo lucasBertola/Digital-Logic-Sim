@@ -13,13 +13,16 @@ namespace DLS.Game
 	// Self-test run INSIDE the built player: the stripped build behaves differently from the editor (a memory editor
 	// bug existed only there, and the editor bench was green). Launch:
 	//   DigitalLogicSim.exe -selftest [-selftest-claude]
-	// It uses the "PC" project of the save folder, writes the report to <save folder>/selftest.txt and quits.
+	// It uses a FROZEN copy of the bench fixture (TestData/Bench/PC), copied by runPlayerSelfTest.bat into the save
+	// folder as "_SelfTest_PC" and deleted afterwards: the user's own projects change while they work (CPU was renamed
+	// CPU_2 and the self-test failed on it) and are never touched. It writes the report to <save folder>/selftest.txt and quits.
 	//   - memory editor: known-good rules parsed, verified by simulation, CPU banks written / read back
 	//   - memory state: captured, saved through the real serializer, reloaded, read back
 	//   - cache JSON round trip
 	//   - with -selftest-claude: the real Claude analysis of the PC chip, verified and cached (one or a few requests)
 	public static class PlayerSelfTest
 	{
+		const string ProjectName = "_SelfTest_PC";
 		public static bool Active { get; private set; }
 		static bool withClaude;
 		static string claudeChipName = "Registre8";
@@ -58,7 +61,7 @@ namespace DLS.Game
 				report.AppendLine($"self-test, build {Main.BuildInfoString}, {DateTime.Now}");
 				Check("load the PC project", () =>
 				{
-					Project p = Loader.LoadProject("PC");
+					Project p = Loader.LoadProject(ProjectName);
 					lib = p.chipLibrary;
 					return lib.TryGetChipDescription("CPU", out _) ? null : "no CPU chip";
 				});
@@ -67,7 +70,7 @@ namespace DLS.Game
 				{
 					attempt = 1;
 					started = Time.realtimeSinceStartup;
-					MemoryLayoutClaude.Start(claudeChip, lib, "PC", null, null);
+					MemoryLayoutClaude.Start(claudeChip, lib, ProjectName, null, null);
 					phase = 2;
 				}
 				else phase = 3;
@@ -92,10 +95,10 @@ namespace DLS.Game
 						}
 					if (rules != null && err == null)
 					{
-						var cache = MemoryLayout.LoadCache("PC");
+						var cache = MemoryLayout.LoadCache(ProjectName);
 						cache[claudeChip.Name] = new MemoryLayout.CacheEntry { hash = MemoryLayout.StructureHash(claudeChip, lib), rules = rules, polarity = pol };
-						MemoryLayout.SaveCache("PC", cache);
-						bool cached = MemoryLayout.LoadCache("PC").ContainsKey(claudeChip.Name);
+						MemoryLayout.SaveCache(ProjectName, cache);
+						bool cached = MemoryLayout.LoadCache(ProjectName).ContainsKey(claudeChip.Name);
 						if (!cached) failures++;
 						report.AppendLine(cached
 							? $"PASS  real Claude analysis of \"{claudeChip.Name}\" verified and cached (attempt {attempt}, {Time.realtimeSinceStartup - started:0} s)"
@@ -114,7 +117,7 @@ namespace DLS.Game
 					return;
 				}
 				attempt++;
-				MemoryLayoutClaude.Start(claudeChip, lib, "PC", lastJson, err);
+				MemoryLayoutClaude.Start(claudeChip, lib, ProjectName, lastJson, err);
 			}
 			else if (phase == 3)
 			{
@@ -224,6 +227,45 @@ namespace DLS.Game
 				Step(root, 1);
 				var ch = DLS.Graphics.MemoryEditMenu.Follow(banks, orig, txt, 1);
 				return ch.Contains((0, 0)) && txt[0][0] == banks[0].Read(0).ToString() ? null : $"field says {txt[0][0]}, circuit {banks[0].Read(0)}";
+			});
+			Check("create chip: ALU8 with half its components extracted computes the same", () =>
+			{
+				lib.TryGetChipDescription("ALU8", out ChipDescription alu);
+				var rnd = new System.Random(4);
+				int[] ids = alu.SubChips.Select(s => s.ID).OrderBy(_ => rnd.Next()).Take(alu.SubChips.Length / 2).ToArray();
+				ChipExtractor.Result r = ChipExtractor.Extract(alu, ids, "SELFTEST HALF ALU", lib, out string e);
+				if (r == null) return e;
+				lib.NotifyChipSaved(r.NewChip); // this self-test's own library, nothing is written
+				SimChip ra = CircuitTester.BuildIsolatedSim(alu, lib), rb = CircuitTester.BuildIsolatedSim(r.NewParent, lib);
+				SimChip ta = CircuitTester.TargetOf(ra), tb = CircuitTester.TargetOf(rb);
+				for (int t = 0; t < 100; t++)
+				{
+					for (int i = 0; i < alu.InputPins.Length; i++)
+					{
+						uint v = (uint)rnd.Next(1 << (int)alu.InputPins[i].BitCount);
+						ra.InputPins[i].State = PinState.Make((ushort)v, 0);
+						rb.InputPins[i].State = PinState.Make((ushort)v, 0);
+					}
+					Step(ra, 12); Step(rb, 12);
+					for (int o = 0; o < ta.OutputPins.Length; o++)
+						if ((ta.OutputPins[o].State & 0xFF) != (tb.OutputPins[o].State & 0xFF)) return $"vector {t}: output {alu.OutputPins[o].Name} differs";
+				}
+				return null;
+			});
+			Check("clock stopped (TURN OFF) in the CPU holds its level while the sim runs", () =>
+			{
+				lib.TryGetChipDescription("CPU", out ChipDescription c0);
+				ChipDescription c = Serializer.DeserializeChipDescription(Serializer.SerializeChipDescription(c0));
+				int i = Array.FindIndex(c.SubChips, s => s.Name == "CLOCK");
+				if (i < 0) return "no CLOCK in the CPU";
+				c.SubChips[i].InternalData = new uint[] { 1, 1 };
+				SimChip r = CircuitTester.BuildIsolatedSim(c, lib);
+				SimChip clk = CircuitTester.TargetOf(r).SubChips.First(x => x.ChipType == ChipType.Clock);
+				Simulator.stepsPerClockTransition = 70;
+				for (int k = 0; k < 10; k++) { Step(r, 50); if ((clk.OutputPins[0].State & 1) != 1) return $"stopped clock went low after {(k + 1) * 50} steps"; }
+				clk.UpdateInternalState(new uint[] { 1, 0 });
+				Step(r, 1);
+				return (clk.OutputPins[0].State & 1) == 0 ? null : "a click did not bring it low";
 			});
 			Check("memory editor: cache JSON round trip", () =>
 			{

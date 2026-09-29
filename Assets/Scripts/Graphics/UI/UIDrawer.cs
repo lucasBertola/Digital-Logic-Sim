@@ -29,6 +29,7 @@ namespace DLS.Graphics
 			QuickAsk,
 			ExportChoice,
 			DuplicateChip,
+			CreateChip,
 			MemoryEdit
 		}
 
@@ -84,6 +85,7 @@ namespace DLS.Graphics
 			else if (menuToDraw == MenuType.QuickAsk) QuickAskBar.DrawMenu();
 			else if (menuToDraw == MenuType.ExportChoice) ExportChoicePopup.DrawMenu();
 			else if (menuToDraw == MenuType.DuplicateChip) DuplicateChipPopup.DrawMenu();
+			else if (menuToDraw == MenuType.CreateChip) CreateChipPopup.DrawMenu();
 			else if (menuToDraw == MenuType.Info) InfoPopup.DrawMenu();
 			else if (menuToDraw == MenuType.GatePalette) GatePaletteMenu.DrawMenu();
 			else

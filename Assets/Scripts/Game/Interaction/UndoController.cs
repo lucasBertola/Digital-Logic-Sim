@@ -163,6 +163,14 @@ namespace DLS.Game
 			public readonly HashSet<int> ElementIDs = new();
 			public bool IsEmpty => ElementIDs.Count == 0;
 
+			public ChipSnapshot(ChipDescription description)
+			{
+				desc = description;
+				json = Saver.CreateSerializedChipDescription(desc);
+				foreach (SubChipDescription s in desc.SubChips ?? Array.Empty<SubChipDescription>()) ElementIDs.Add(s.ID);
+				foreach (PinDescription p in (desc.InputPins ?? Array.Empty<PinDescription>()).Concat(desc.OutputPins ?? Array.Empty<PinDescription>())) ElementIDs.Add(p.ID);
+			}
+
 			public ChipSnapshot(DevChipInstance devChip)
 			{
 				desc = DescriptionCreator.CreateChipDescription(devChip);

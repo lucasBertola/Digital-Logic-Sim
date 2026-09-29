@@ -55,6 +55,15 @@ namespace DLS.Graphics
 			deleteEntry
 		};
 
+		// CLOCK: TURN OFF stops it at its current level (a click on it then toggles the level), TURN ON restarts it
+		static readonly MenuEntry[] entries_builtinClock =
+		{
+			new(() => Format(ClockIsStopped() ? "TURN ON" : "TURN OFF"), ToggleClockRunning, CanEditCurrentChip),
+			labelChipEntry,
+			displayNameEntry,
+			deleteEntry
+		};
+
 		static readonly MenuEntry[] entries_builtinSubchip =
 		{
 			labelChipEntry,
@@ -122,6 +131,7 @@ namespace DLS.Graphics
 		static readonly MenuEntry[] entries_multiSubchip =
 		{
 			new(Format("RENAME"), RenameSelectedChips, CanEditCurrentChip),
+			new(Format("CREATE CHIP"), CreateChipFromSelection, CanEditCurrentChip),
 			new(Format("DELETE"), DeleteSelectedElements, CanDelete)
 		};
 
@@ -249,6 +259,7 @@ namespace DLS.Graphics
 							else if (subChip.ChipType is ChipType.Pulse) activeContextMenuEntries = entries_builtinPulseChip;
 							else if (ChipTypeHelper.IsBusType(subChip.ChipType)) activeContextMenuEntries = entries_builtinBus;
 							else if (subChip.ChipType == ChipType.DisplayLED) activeContextMenuEntries = entries_builtinLED;
+							else if (subChip.ChipType == ChipType.Clock) activeContextMenuEntries = entries_builtinClock;
 							else activeContextMenuEntries = entries_builtinSubchip;
 						}
 
@@ -535,6 +546,22 @@ namespace DLS.Graphics
 		static void RenameSelectedChips()
 		{
 			BulkRenamePinsPopup.OpenChips(Project.ActiveProject.controller.SelectedElements.OfType<SubChipInstance>());
+		}
+
+		static void CreateChipFromSelection() => CreateChipPopup.Open();
+
+		static bool ClockIsStopped() => interactionContext is SubChipInstance { ChipType: ChipType.Clock } c && c.InternalData[0] != 0;
+
+		static void ToggleClockRunning()
+		{
+			if (interactionContext is not SubChipInstance { ChipType: ChipType.Clock } clock) return;
+			if (clock.InternalData[0] == 0)
+			{
+				clock.InternalData[0] = 1;
+				clock.InternalData[1] = DLS.Simulation.PinState.FirstBitHigh(clock.OutputPins[0].State) ? 1u : 0u; // stops where it is
+			}
+			else clock.InternalData[0] = 0;
+			Project.ActiveProject.NotifyClockStateChanged(clock);
 		}
 
 		static void DeleteSelectedElements() => Project.ActiveProject.controller.DeleteSelected();

@@ -57,7 +57,7 @@ namespace DLS.Game
 			// Load internal data (or create default in case missing)
 			if (subChipDesc.InternalData == null || subChipDesc.InternalData.Length == 0)
 			{
-				InternalData = DescriptionCreator.CreateDefaultInstanceData(description.ChipType);
+				InternalData = description.ChipType == ChipType.Clock ? new uint[2] : DescriptionCreator.CreateDefaultInstanceData(description.ChipType);
 			}
 			else
 			{

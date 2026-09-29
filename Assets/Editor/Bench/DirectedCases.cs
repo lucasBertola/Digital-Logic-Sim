@@ -16,11 +16,13 @@ namespace DLS.Bench
     {
         const int Settle = 6; // ticks after every input change on a sequential chip (observed latency: <= 3)
 
+        public static readonly Dictionary<string, Func<Fixture, string>> Bodies = new();
         public static List<(string name, Func<string> run)> All(ChipLibrary lib, ChipDescription[] chips)
         {
             var cases = new List<(string, Func<string>)>();
             void Add(string chip, string title, Func<Fixture, string> body)
             {
+                Bodies[$"{chip}: {title}"] = body; // reusable by other cases (the CPU program on an edited CPU)
                 ChipDescription d = chips.FirstOrDefault(c => ChipDescription.NameMatch(c.Name, chip));
                 cases.Add(($"[PC] {chip}: {title}", () =>
                 {

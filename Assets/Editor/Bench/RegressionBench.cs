@@ -95,6 +95,8 @@ namespace DLS.Bench
                         cases.AddRange(DirectedCases.All(lib, chips));
                         cases.AddRange(MemoryCases.All(lib, chips));
                         cases.AddRange(MemoryLayoutCases.All(lib, chips));
+                        cases.AddRange(ChipExtractCases.All(lib, chips));
+                        cases.AddRange(ClockStopCases.All());
                         serial.AddRange(ProjectCases.All(dir));
                         if (dir.EndsWith("PC")) serial.Add(("[PC] memory editor: base change shows the value in the new base; a new chip never shows the previous chip's fields", () => MemoryLayoutCases.MenuFieldsCase(lib, chips)));
                     }

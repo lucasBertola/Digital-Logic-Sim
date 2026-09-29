@@ -461,6 +461,9 @@ namespace DLS.Game
 
 			if (InteractionState.MouseIsOverUI) return;
 
+			clockClick = InteractionState.ElementUnderMouse is SubChipInstance { ChipType: ChipType.Clock } c && c.InternalData[0] != 0 && HasControl && !IsPlacingElementOrCreatingWire ? c : null;
+			clockClickPos = InputHelper.MousePosWorld;
+
 			// Double-click a dev pin (its handle/state dot OR its NAME label) to open its edit menu.
 			// Single-click on the name selects the pin (visible feedback).
 			if (HasControl)
@@ -700,8 +703,19 @@ namespace DLS.Game
 			wireEditPointSelectedIndex = -1;
 		}
 
+		// a stopped CLOCK clicked (mouse down and up on it without dragging): its level toggles
+		SubChipInstance clockClick;
+		Vector2 clockClickPos;
+
 		void HandleLeftMouseUp()
 		{
+			if (clockClick != null && InteractionState.ElementUnderMouse == clockClick && (InputHelper.MousePosWorld - clockClickPos).sqrMagnitude < 0.01f && clockClick.InternalData[0] != 0)
+			{
+				clockClick.InternalData[1] ^= 1;
+				project.NotifyClockStateChanged(clockClick);
+			}
+			clockClick = null;
+
 			// Place items that are being moved
 			if (!IsPlacingElementOrCreatingWire)
 			{

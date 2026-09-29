@@ -258,7 +258,7 @@ namespace DLS.Simulation
 				if (ChipTypeHelper.IsBusType(b.ChipType)) continue; // origin = wire, terminus = nothing
 				if (b.OutputPins.Length == 0 && b.ChipType != ChipType.Buzzer) continue; // pure displays: their input pins already carry the values
 				gateOfChip[b.compileIndex] = types.Count;
-				if (b.ChipType is ChipType.Rom_256x16 or ChipType.dev_Ram_8Bit) roms.Add(types.Count); // edited from outside: re-run
+				if (b.ChipType is ChipType.Rom_256x16 or ChipType.dev_Ram_8Bit or ChipType.Clock) roms.Add(types.Count); // edited from outside: re-run (a clock: stopped / manual level)
 				if (b.ChipType == ChipType.Clock) clocks.Add(types.Count);
 				if (b.ChipType == ChipType.Key) keys.Add(types.Count);
 				if (b.ChipType == ChipType.Buzzer) prog.HasBuzzer = true;
@@ -1009,9 +1009,13 @@ namespace DLS.Simulation
 					}
 					break;
 
-				case (byte)ChipType.Clock: // re-run by Step when the level changes
-					Write(states, sOut0[k], clockHigh ? PinState.LogicHigh : PinState.LogicLow);
+				case (byte)ChipType.Clock: // re-run by Step when the level changes, or when the user stops it / clicks it
+				{
+					uint[] cs = internalState[g];
+					bool high = cs.Length >= 2 && cs[0] != 0 && Simulator.forcedClockState < 0 ? cs[1] != 0 : clockHigh; // (a test driving the clocks wins)
+					Write(states, sOut0[k], high ? PinState.LogicHigh : PinState.LogicLow);
 					break;
+				}
 
 				case (byte)ChipType.Vcc: Write(states, sOut0[k], PinState.LogicHigh); break;
 				case (byte)ChipType.Gnd: Write(states, sOut0[k], PinState.LogicLow); break;

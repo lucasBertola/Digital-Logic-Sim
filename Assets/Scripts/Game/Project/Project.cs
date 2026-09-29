@@ -518,6 +518,13 @@ namespace DLS.Game
 			chip.InternalData[0] = widthNew;
 		}
 
+		// CLOCK stopped / restarted / clicked: [0] = stopped, [1] = level while stopped
+		public void NotifyClockStateChanged(SubChipInstance clock)
+		{
+			SimChip simChip = rootSimChip.GetSubChipFromID(clock.ID);
+			simChip.UpdateInternalState(clock.InternalData);
+		}
+
 		// Rom has been edited, so simulation must be updated
 		public void NotifyRomContentsEdited(SubChipInstance romChip)
 		{
