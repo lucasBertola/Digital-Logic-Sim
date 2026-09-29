@@ -94,6 +94,9 @@ namespace DLS.Bench
                 if (!p.chipLibrary.HasChip("MEMOIRE TEST")) return "new chip not in the library";
                 if (!File.Exists(Path.Combine(tmpDir, "Chips", "MEMOIRE TEST.json"))) return "new chip not saved";
                 if (!p.description.AllCustomChipNames.Contains("MEMOIRE TEST")) return "new chip not registered in the project (it would vanish on reload)";
+                if (p.ViewedChip.ChipName != "MEMOIRE TEST") return $"the new chip is not opened (open: {p.ViewedChip.ChipName})";
+                if (p.ViewedChip.Elements.OfType<SubChipInstance>().Count(s => s.Description.Name is "RAM256" or "Tampon8") != 2) return "the opened new chip does not hold RAM256 + Tampon8";
+                p.LoadDevChipOrCreateNewIfDoesntExist("CPU"); // back to the CPU: its unsaved edit must still be there
                 var names = p.ViewedChip.Elements.OfType<SubChipInstance>().Select(s => s.Description.Name).ToList();
                 if (!names.Contains("MEMOIRE TEST") || names.Contains("RAM256") || names.Contains("Tampon8")) return "the selection was not replaced by the new chip: " + string.Join(", ", names);
                 Pump(p, () => false, 100); // the sim thread applies the modifications

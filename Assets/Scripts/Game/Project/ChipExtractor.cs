@@ -15,7 +15,9 @@ namespace DLS.Game
 	//    that side);
 	//  - a wire leaving the selection becomes an OUTPUT pin, one per inside source, named after everything it fed
 	//    outside, joined with "-" when there are several;
-	//  - wires inside the selection stay inside, the others are untouched.
+	//  - wires inside the selection stay inside, the others are untouched;
+	//  - VCC / GND never become inputs (user, 2026-09-29): a constant that only feeds the selection moves into the
+	//    new chip, one that also feeds something outside is copied in (and stays outside for the rest).
 	public static class ChipExtractor
 	{
 		public class Result
@@ -23,6 +25,7 @@ namespace DLS.Game
 			public ChipDescription NewChip;
 			public ChipDescription NewParent;
 			public int InstanceID;
+			public int[] RemovedIDs; // components removed from the parent: the selection + the constants that only fed it
 		}
 
 		// The whole user action: extract, register the new chip (file, library, starred, project list), then change
@@ -43,16 +46,17 @@ namespace DLS.Game
 			var before = new UndoController.ChipSnapshot(dev);
 			foreach (IMoveable e in p.controller.SelectedElements) e.IsSelected = false;
 			p.controller.SelectedElements.Clear();
-			ApplyInPlace(dev, r, selectedIDs, p.chipLibrary);
+			ApplyInPlace(dev, r, p.chipLibrary);
 			dev.UndoController.RecordClaudeTurn(before, new UndoController.ChipSnapshot(dev));
+			p.LoadDevChipOrCreateNewIfDoesntExist(r.NewChip.Name); // straight into the new chip (the edited chip stays open in memory, unsaved edits and undo kept)
 			return null;
 		}
 
 		// The edited chip becomes the new parent without being rebuilt: the selection is deleted, the instance added,
 		// and the wires it lacks are loaded. (The new chip must already be in the library.)
-		public static void ApplyInPlace(DevChipInstance dev, Result r, ICollection<int> selectedIDs, ChipLibrary lib, bool noRunningSim = false)
+		public static void ApplyInPlace(DevChipInstance dev, Result r, ChipLibrary lib, bool noRunningSim = false)
 		{
-			foreach (int id in selectedIDs) dev.TryDeleteSubChipByID(id);
+			foreach (int id in r.RemovedIDs) dev.TryDeleteSubChipByID(id); // the selection + the constants that only fed it
 			SubChipDescription inst = r.NewParent.SubChips.First(s => s.ID == r.InstanceID);
 			dev.AddNewSubChip(new SubChipInstance(lib.GetChipDescription(r.NewChip.Name), inst), noRunningSim); // (a test has no running sim to sync)
 			// wires of the new parent that the edited chip does not have yet (to and from the new chip, and the
@@ -98,6 +102,17 @@ namespace DLS.Game
 				if (!ChipTypeHelper.IsBusType(descOf[id].ChipType) || s.InternalData == null || s.InternalData.Length == 0) continue;
 				int linked = (int)s.InternalData[0];
 				if (subByID.ContainsKey(linked) && !sel.Contains(linked)) { error = "A bus and its terminus must be selected together."; return null; }
+			}
+
+			// ---- VCC / GND feeding the selection: moved in when they feed nothing else, copied in otherwise
+			var copiedConstants = new HashSet<int>();
+			foreach (SubChipDescription s in subs)
+			{
+				if (sel.Contains(s.ID) || !ChipTypeHelper.IsConstantType(descOf[s.ID].ChipType)) continue;
+				var targets = wires.Where(w => w.SourcePinAddress.PinOwnerID == s.ID).Select(w => w.TargetPinAddress.PinOwnerID).ToList();
+				if (!targets.Any(t => sel.Contains(t))) continue;
+				if (targets.All(t => sel.Contains(t))) sel.Add(s.ID);
+				else copiedConstants.Add(s.ID);
 			}
 
 			// ---- names and widths of the things at the other end of a wire
@@ -174,9 +189,20 @@ namespace DLS.Game
 			}
 
 			var newWires = new List<WireDescription>();
+			var constantCopies = new List<SubChipDescription>();
 			foreach (IGrouping<(int, int), int> g in entering.GroupBy(i => (wires[i].SourcePinAddress.PinOwnerID, wires[i].SourcePinAddress.PinID)))
 			{
 				PinAddress src = wires[g.First()].SourcePinAddress;
+				if (copiedConstants.Contains(src.PinOwnerID))
+				{
+					SubChipDescription copy = subByID[src.PinOwnerID];
+					copy.ID = NewID(usedInNew);
+					copy.Label = string.Empty;
+					copy.Position = subByID[wires[g.First()].TargetPinAddress.PinOwnerID].Position - centre + new Vector2(-3, 0);
+					constantCopies.Add(copy);
+					foreach (int i in g) newWires.Add(ChipEmitHelper.Wire(new PinAddress(copy.ID, src.PinID), wires[i].TargetPinAddress));
+					continue;
+				}
 				int id = NewID(usedInNew);
 				float y = g.Average(i => subByID[wires[i].TargetPinAddress.PinOwnerID].Position.y) - centre.y;
 				var pin = new PinDescription(Unique(NameOf(src, true), namesIn), id, Vector2.zero, BitsOf(src, true), PinColour.Red, PinValueDisplayMode.Off);
@@ -218,6 +244,7 @@ namespace DLS.Game
 				s.Position -= centre;
 				return s;
 			}).ToList();
+			newSubs.AddRange(constantCopies);
 			foreach (int i in inside)
 			{
 				WireDescription w = wires[i];
@@ -275,7 +302,7 @@ namespace DLS.Game
 			}
 			newParent.MemoryState = null; // its structure changed; the live state is captured again at the next save
 
-			return new Result { NewChip = newChip, NewParent = newParent, InstanceID = instanceID };
+			return new Result { NewChip = newChip, NewParent = newParent, InstanceID = instanceID, RemovedIDs = sel.ToArray() };
 		}
 	}
 }

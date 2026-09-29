@@ -15,6 +15,7 @@ namespace DLS.Bench
         public static List<(string name, Func<string> run)> All(ChipLibrary lib, ChipDescription[] chips) => new()
         {
             ("create chip: pins named after the other end of the wire, several joined with '-'", Names),
+            ("create chip: VCC / GND never become inputs (moved in when they only feed the selection, copied in when shared)", Constants),
             ("[PC] create chip: ALU8 with half its components extracted computes the same", () => Combinational(lib, chips, "ALU8", 0.5, 11)),
             ("[PC] create chip: ALU8 with one component extracted computes the same", () => Combinational(lib, chips, "ALU8", 0.01, 5)),
             ("[PC] create chip: Registre8 with some flip-flops extracted behaves the same", () => Register(lib, chips)),
@@ -84,6 +85,46 @@ namespace DLS.Bench
             r = ChipExtractor.Extract(parent, new[] { n1, g2, g3 }, "ALL", lib, out e);
             if (r == null) return e;
             if (r.NewChip.SubChips.Length != 3 || r.NewParent.SubChips.Length != 1) return "select all: wrong split";
+            return SameTruthTable(parent, lib, r.NewParent, With(Array.Empty<ChipDescription>(), r.NewChip));
+        }
+
+        // A -> n1 = NAND(A, VCC) -> n2 = NAND(n1, GND) -> Y; GND also feeds n3 = NAND(A, GND) -> Z (outside)
+        static string Constants()
+        {
+            ChipLibrary lib = BenchProject.BuiltinsOnly();
+            ChipDescription nand = lib.GetChipDescription("NAND");
+            int next = 1;
+            PinDescription[] ins = ChipEmitHelper.MakePins(new[] { "A" }, true, ref next);
+            PinDescription[] outs = ChipEmitHelper.MakePins(new[] { "Y", "Z" }, false, ref next);
+            var subs = new List<SubChipDescription>();
+            int n1 = ChipEmitHelper.AddSubChip(subs, ref next, "NAND", ChipType.Nand);
+            int n2 = ChipEmitHelper.AddSubChip(subs, ref next, "NAND", ChipType.Nand);
+            int n3 = ChipEmitHelper.AddSubChip(subs, ref next, "NAND", ChipType.Nand);
+            int vcc = ChipEmitHelper.AddSubChip(subs, ref next, ChipTypeHelper.GetName(ChipType.Vcc), ChipType.Vcc);
+            int gnd = ChipEmitHelper.AddSubChip(subs, ref next, ChipTypeHelper.GetName(ChipType.Gnd), ChipType.Gnd);
+            int ia = nand.InputPins[0].ID, ib = nand.InputPins[1].ID, o = nand.OutputPins[0].ID;
+            int vo = lib.GetChipDescription(ChipTypeHelper.GetName(ChipType.Vcc)).OutputPins[0].ID, go = lib.GetChipDescription(ChipTypeHelper.GetName(ChipType.Gnd)).OutputPins[0].ID;
+            var wires = new List<WireDescription>
+            {
+                ChipEmitHelper.Wire(new PinAddress(ins[0].ID, 0), new PinAddress(n1, ia)),
+                ChipEmitHelper.Wire(new PinAddress(vcc, vo), new PinAddress(n1, ib)),
+                ChipEmitHelper.Wire(new PinAddress(n1, o), new PinAddress(n2, ia)),
+                ChipEmitHelper.Wire(new PinAddress(gnd, go), new PinAddress(n2, ib)),
+                ChipEmitHelper.Wire(new PinAddress(n2, o), new PinAddress(outs[0].ID, 0)),
+                ChipEmitHelper.Wire(new PinAddress(ins[0].ID, 0), new PinAddress(n3, ia)),
+                ChipEmitHelper.Wire(new PinAddress(gnd, go), new PinAddress(n3, ib)),
+                ChipEmitHelper.Wire(new PinAddress(n3, o), new PinAddress(outs[1].ID, 0)),
+            };
+            ChipDescription parent = ChipEmitHelper.Assemble("CONST", UnityEngine.Color.gray, NameDisplayLocation.Centre, UnityEngine.Vector2.zero, ins, outs, subs, wires);
+
+            ChipExtractor.Result r = ChipExtractor.Extract(parent, new[] { n1, n2 }, "WITH CONSTANTS", lib, out string e);
+            if (r == null) return e;
+            string names = string.Join(",", r.NewChip.InputPins.Select(p => p.Name));
+            if (names != "A") return $"inputs: {names}, expected only A (no VCC / GND input)";
+            if (r.NewChip.SubChips.Count(s => s.Name == "VCC") != 1 || r.NewChip.SubChips.Count(s => s.Name == "GND") != 1) return "the new chip should hold the VCC and a GND";
+            if (r.NewParent.SubChips.Any(s => s.ID == vcc)) return "the VCC that only fed the selection is still in the parent";
+            if (!r.NewParent.SubChips.Any(s => s.ID == gnd)) return "the shared GND was removed from the parent (n3 still needs it)";
+            if (!r.RemovedIDs.Contains(vcc) || r.RemovedIDs.Contains(gnd)) return "RemovedIDs wrong";
             return SameTruthTable(parent, lib, r.NewParent, With(Array.Empty<ChipDescription>(), r.NewChip));
         }
 
@@ -162,7 +203,9 @@ namespace DLS.Bench
             if (!DirectedCases.Bodies.TryGetValue("CPU: micro-program: A=5, B=3, A+B on the bus, store to RAM[9], read back, A-B", out var program)) return "micro-program case not registered";
             using var f = new DirectedCases.Fixture(r.NewParent, With(chips, r.NewChip));
             string err = program(f);
-            return err == null ? null : "micro-program on the CPU with extracted memory: " + err;
+            if (err != null) return "micro-program on the CPU with extracted memory: " + err;
+            var constants = new HashSet<int>(r.NewParent.SubChips.Where(s => s.Name is "VCC" or "GND").Select(s => s.ID));
+            return r.NewParent.Wires.Any(w => constants.Contains(w.SourcePinAddress.PinOwnerID) && w.TargetPinAddress.PinOwnerID == r.InstanceID) ? "a VCC / GND feeds an input of the new chip" : null;
         }
 
         static string InPlace(ChipLibrary lib, ChipDescription[] chips)
@@ -174,7 +217,7 @@ namespace DLS.Bench
             ChipLibrary lib2 = With(chips, r.NewChip);
             (DevChipInstance dev, bool failed) = DevChipInstance.LoadFromDescriptionTest(cpu, lib2);
             if (failed) return "CPU failed to load";
-            ChipExtractor.ApplyInPlace(dev, r, ids, lib2, noRunningSim: true);
+            ChipExtractor.ApplyInPlace(dev, r, lib2, noRunningSim: true);
             ChipDescription live = DescriptionCreator.CreateChipDescription(dev);
             string Net(ChipDescription d) => string.Join(";", d.Wires.Select(w => $"{w.SourcePinAddress.PinOwnerID}.{w.SourcePinAddress.PinID}>{w.TargetPinAddress.PinOwnerID}.{w.TargetPinAddress.PinID}").OrderBy(x => x));
             if (Net(live) != Net(r.NewParent)) return "the edited chip's wiring differs from the extracted parent";
