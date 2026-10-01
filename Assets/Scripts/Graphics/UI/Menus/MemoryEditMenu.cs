@@ -328,7 +328,9 @@ namespace DLS.Graphics
 				{
 					if (lastFocusedRow != index) { lastFocusedRow = index; lastRaw = state.text; }
 					// several lines in the clipboard: they fill this word and the next ones (the field itself refuses them)
-					if (InputHelper.CtrlIsHeld && InputHelper.IsKeyDownThisFrame(KeyboardShortcuts.Physical(KeyCode.V)) && (InputHelper.GetClipboardContents() ?? "").Trim().Contains('\n'))
+					// (one line the field refuses — a comment after the value, binary while hex is shown — goes this way too)
+					string clip = (InputHelper.GetClipboardContents() ?? "").Trim();
+					if (InputHelper.CtrlIsHeld && InputHelper.IsKeyDownThisFrame(KeyboardShortcuts.Physical(KeyCode.V)) && (clip.Contains('\n') || !FitsWord(clip, banks[bankIndex].Bits, mode)))
 						PasteFrom(index);
 					// separators placed by themselves while typing (binary: every 8 bits)
 					(string grouped, int caret) = Regroup(state.text, state.cursorBeforeCharIndex, lastRaw, banks[bankIndex].Bits, mode);
@@ -491,11 +493,37 @@ namespace DLS.Graphics
 			while (lines.Count > 0 && lines[lines.Count - 1].Trim().Length == 0) lines.RemoveAt(lines.Count - 1);
 			for (int i = 0; i < lines.Count; i++)
 			{
-				string l = lines[i].Trim();
-				if (l.Length == 0 || !FitsWord(l, bits, m) || !TryParse(l, bits, m, out uint v)) { error = $"line {i + 1} (\"{l}\") is not a {bits}-bit {ModeNames[m].ToLowerInvariant()} value"; break; }
+				string l = StripComment(lines[i]);
+				if (l.Length == 0) continue; // a blank or comment-only line is not a word
+				if (!TryPastedValue(l, bits, m, out uint v)) { error = $"line {i + 1} (\"{l}\") is not a {bits}-bit {(m == 2 ? "binary" : ModeNames[m].ToLowerInvariant() + " or binary")} value"; break; }
 				values.Add(v);
 			}
 			return values;
+		}
+
+		// "01010000 00000000 00000101 //range 5 dans A" -> the value part (comments: //, # and ;)
+		static string StripComment(string line)
+		{
+			string l = line ?? "";
+			foreach (string mark in new[] { "//", "#", ";" })
+			{
+				int k = l.IndexOf(mark, StringComparison.Ordinal);
+				if (k >= 0) l = l.Substring(0, k);
+			}
+			return l.Trim();
+		}
+
+		// a pasted value: in the editor's base; 0x / 0b prefixes; and exactly a word of 0s and 1s is binary whatever
+		// the base shown (a program written in binary pasted while the editor shows hex)
+		static bool TryPastedValue(string l, int bits, int m, out uint v)
+		{
+			v = 0;
+			string s = l.Replace(" ", "").Replace("\t", "").Replace("_", "");
+			if (s.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) return FitsWord(s.Substring(2), bits, 0) && TryParse(s.Substring(2), bits, 0, out v);
+			if (s.StartsWith("0b", StringComparison.OrdinalIgnoreCase)) return FitsWord(s.Substring(2), bits, 2) && TryParse(s.Substring(2), bits, 2, out v);
+			if (FitsWord(s, bits, m) && TryParse(s, bits, m, out v)) return true;
+			if (s.Length == bits && s.All(c => c is '0' or '1')) return TryParse(s, bits, 2, out v);
+			return false;
 		}
 
 		// Ctrl+V of several lines in a word, or PASTE: the lines fill that word and the following ones

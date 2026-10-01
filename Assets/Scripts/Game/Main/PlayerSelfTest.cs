@@ -282,6 +282,12 @@ namespace DLS.Game
 				var v = DLS.Graphics.MemoryEditMenu.ParsePasted("AB\r\nCD\nEF\n", 8, 0, out string err);
 				return err == null && v.Count == 3 && v[2] == 0xEF ? null : "paste parsed wrong";
 			});
+			Check("memory editor: the user's program pasted with // comments (binary, editor in hex)", () =>
+			{
+				string program = "01010000 00000000 00000101//range 5 dans A\r\n01001000 00000000 00000011//ranger 3 dans B\r\n01000100 00000000 00001010//Setter l'adresse MAR a 10\r\n10000010 00000000 00000000// additioner et mettre dans la RAM(10)\r\n00110000 00000000 00000000//mettre la ram dans A\r\n";
+				var v = DLS.Graphics.MemoryEditMenu.ParsePasted(program, 24, 0, out string err);
+				return err == null && v.Count == 5 && v[0] == 0x500005 && v[4] == 0x300000 ? null : $"{v.Count} words, {err}";
+			});
 			Check("memory editor: cache JSON round trip", () =>
 			{
 				var c = new Dictionary<string, MemoryLayout.CacheEntry> { ["CPU"] = new MemoryLayout.CacheEntry { hash = "h", rules = rules, polarity = pol } };

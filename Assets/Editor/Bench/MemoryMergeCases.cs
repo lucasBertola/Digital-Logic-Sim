@@ -19,6 +19,7 @@ namespace DLS.Bench
             ("memory editor: binary words wider than a byte show a separator every 8 bits; typing and parsing ignore it", Separators),
             ("memory editor: typing regroups the digits and keeps the caret; deleting a separator deletes the digit next to it", Regroup),
             ("memory editor: pasted lines are parsed one word each (CRLF, trailing empty lines, a bad line stops)", ParsePaste),
+            ("memory editor: the user's program pasted with // comments, in binary while hex is shown, comment-only and blank lines skipped", ParseUserProgram),
         };
 
         public static (string name, Func<string> run) Serial(ChipLibrary lib, ChipDescription[] chips) =>
@@ -138,6 +139,23 @@ namespace DLS.Bench
             if (v.Count != 1 || e == null || !e.Contains("line 2")) return "a bad line must stop the paste and be reported";
             v = MemoryEditMenu.ParsePasted("1FF", 8, 0, out e);
             return v.Count == 0 && e != null ? null : "a value too wide for the word was pasted";
+        }
+
+        // exactly what the user pasted (2026-10-02), which "did not work": every line has a // comment
+        public const string UserProgram = "01010000 00000000 00000101//range 5 dans A\r\n01001000 00000000 00000011//ranger 3 dans B\r\n01000100 00000000 00001010//Setter l'adresse MAR a 10\r\n10000010 00000000 00000000// additioner et mettre dans la RAM(10)\r\n00110000 00000000 00000000//mettre la ram dans A\r\n";
+
+        static string ParseUserProgram()
+        {
+            uint[] expect = { 0x500005, 0x480003, 0x44000A, 0x820000, 0x300000 };
+            foreach (int mode in new[] { 2, 0, 1 }) // binary shown, hex shown, decimal shown: the same binary text
+            {
+                var v = MemoryEditMenu.ParsePasted(UserProgram, 24, mode, out string e);
+                if (e != null || !v.SequenceEqual(expect)) return $"mode {mode}: [{string.Join(", ", v.Select(x => x.ToString("X6")))}] {e}";
+            }
+            var w = MemoryEditMenu.ParsePasted("// programme\n\n0x500005  # range 5\n\n0b010010000000000000000011 ; ranger 3\n", 24, 1, out string e2);
+            if (e2 != null || !w.SequenceEqual(new uint[] { 0x500005, 0x480003 })) return $"comment-only / blank lines, 0x / 0b: [{string.Join(", ", w.Select(x => x.ToString("X6")))}] {e2}";
+            var shortHex = MemoryEditMenu.ParsePasted("0101 // a short value in the shown base\n", 24, 0, out string e3);
+            return shortHex.Count == 1 && shortHex[0] == 0x0101 ? null : $"a short value in the shown base (hex 0101) must be read in that base: [{string.Join(",", shortHex)}] {e3}";
         }
 
         static string PasteInMenu(ChipLibrary lib, ChipDescription[] chips)
