@@ -267,6 +267,14 @@ namespace DLS.Game
 				Step(r, 1);
 				return (clk.OutputPins[0].State & 1) == 0 ? null : "a click did not bring it low";
 			});
+			Check("Ask Claude panel: a selected answer is copied as written", () =>
+			{
+				string answer = "Le registre A charge la valeur du bus au front montant.\nPuis le bus passe a l'ALU.";
+				var lines = DLS.Graphics.AskClaudeMenu.BuildLines(new List<AskClaude.Msg> { new AskClaude.Msg { role = "assistant", text = answer } }, 20);
+				int first = lines.FindIndex(l => l.text.Contains("Le registre")), last = lines.FindLastIndex(l => l.text.Trim().Length > 0);
+				string got = DLS.Graphics.AskClaudeMenu.SelectedText(lines, (first, 0), (last, lines[last].text.Length));
+				return got == answer ? null : "copied as: " + got;
+			});
 			Check("memory editor: cache JSON round trip", () =>
 			{
 				var c = new Dictionary<string, MemoryLayout.CacheEntry> { ["CPU"] = new MemoryLayout.CacheEntry { hash = "h", rules = rules, polarity = pol } };

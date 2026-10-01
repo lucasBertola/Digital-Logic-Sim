@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Text;
 using DLS.Game;
 using Seb.Helpers;
 using Seb.Vis;
@@ -22,6 +23,13 @@ namespace DLS.Graphics
         static bool resizing;
         static float appliedViewportF; // fraction of screen width the panel currently reserves (for camera compensation)
         static float copiedFlashUntil;
+
+        // Text selection in the transcript (drag with the mouse, Ctrl+C) and per-answer COPY buttons
+        static bool selActive, selecting;
+        static (int line, int col) selA, selB;
+        static int selCols = -1;          // wrap width the selection was made with (a resize clears it)
+        static int copiedMsg = -1;
+        static float copiedMsgUntil;
 
         // Transcript scrolling
         static float scrollFromTop;
@@ -69,6 +77,8 @@ namespace DLS.Graphics
             focusNextFrame = false;
             appliedViewportF = 0f;
             scrollFromTop = 0f;
+            selActive = selecting = false;
+            copiedMsg = -1;
             stickBottom = true;
             draggingBar = false;
             KeyboardShortcuts.TextInputActive = false;
@@ -196,7 +206,8 @@ namespace DLS.Graphics
             float lineH = UI.CalculateTextSize("M", fs, font).y * 1.5f;
             int cols = Mathf.Max(8, Mathf.FloorToInt((contentW - BarW - 0.3f) / charW)); // leave room for the scrollbar
 
-            List<Line> lines = BuildLines(cols);
+            List<Line> lines = BuildLines(AskClaude.Messages, cols);
+            if (cols != selCols) { selActive = selecting = false; selCols = cols; } // re-wrapped: positions no longer mean the same text
 
             // Live streaming answer (or "thinking" placeholder) at the bottom of the transcript.
             if (AskClaude.Waiting)
@@ -205,9 +216,7 @@ namespace DLS.Graphics
                 if (!string.IsNullOrEmpty(partial))
                 {
                     lines.Add(new Line("Claude :", LineKind.AssistantHead));
-                    foreach (string raw in partial.Replace("\r", "").Split('\n'))
-                        foreach (string wl in WrapLine(raw, cols))
-                            lines.Add(new Line("  " + wl, LineKind.Body));
+                    AddWrapped(lines, partial, cols, LineKind.Body, 2, -1);
                     lines.Add(new Line("  _", LineKind.Status));
                 }
                 else
@@ -241,14 +250,85 @@ namespace DLS.Graphics
             scrollFromTop = Mathf.Clamp(scrollFromTop, 0f, maxScroll);
             if (maxScroll - scrollFromTop < 0.05f) stickBottom = true;
 
+            float TextW(string s) => string.IsNullOrEmpty(s) ? 0f : UI.CalculateTextSize(s.Replace(' ', '\u00A0'), fs, font).x; // (spaces measured too)
+            bool overCopyButton = false;
+            var copyBtnSize = new Vector2(7f, lineH * 0.9f);
+            (int line, int col) s0 = selA, s1 = selB;
+            if (Compare(s1, s0) < 0) (s0, s1) = (s1, s0);
             using (UI.CreateMaskScopeMinMax(new Vector2(panelLeft, regionBottom), new Vector2(panelRight, regionTop)))
             {
                 for (int i = 0; i < lines.Count; i++)
                 {
                     float topY = regionTop - (i * lineH - scrollFromTop);
                     if (topY < regionBottom - lineH || topY > regionTop + lineH) continue; // cull off-screen
+                    if (selActive && i >= s0.line && i <= s1.line && Compare(s0, s1) != 0)
+                    {
+                        string lt = lines[i].text;
+                        int c0 = i == s0.line ? Mathf.Clamp(s0.col, 0, lt.Length) : 0;
+                        int c1 = i == s1.line ? Mathf.Clamp(s1.col, 0, lt.Length) : lt.Length;
+                        float x0 = contentLeft + TextW(lt.Substring(0, c0));
+                        float x1 = contentLeft + TextW(lt.Substring(0, c1)) + (i < s1.line ? charW * 0.6f : 0f); // (the line end is part of it)
+                        if (x1 > x0) UI.DrawPanel(new Vector2(x0, topY + lineH * 0.15f), new Vector2(x1 - x0, lineH), new Color(0.25f, 0.42f, 0.75f, 0.85f), Anchor.TopLeft);
+                    }
                     UI.DrawText(lines[i].text, font, fs, new Vector2(contentLeft, topY), Anchor.TopLeft, ColourFor(lines[i].kind));
+
+                    // COPY on every answer of Claude: its whole text, as written
+                    if (lines[i].kind == LineKind.AssistantHead && lines[i].msg >= 0 && lines[i].msg < AskClaude.Messages.Count)
+                    {
+                        int mi = lines[i].msg;
+                        string lbl = copiedMsg == mi && Time.time < copiedMsgUntil ? "COPIED" : "COPY";
+                        var bPos = new Vector2(panelRight - Pad - BarW - 0.4f, topY + lineH * 0.1f);
+                        if (UI.Button(lbl, btn, bPos, copyBtnSize, true, false, false, Anchor.TopRight))
+                        {
+                            InputHelper.CopyToClipboard(AskClaude.Messages[mi].text);
+                            copiedMsg = mi;
+                            copiedMsgUntil = Time.time + 1.5f;
+                        }
+                        if (UI.MouseInsideBounds(UI.PrevBounds)) overCopyButton = true;
+                    }
                 }
+            }
+
+            // ---- selection: press in the text, drag (scrolls at the edges), Ctrl+C ----
+            (int, int) PosAt(Vector2 m)
+            {
+                if (lines.Count == 0) return (0, 0);
+                int li = Mathf.Clamp(Mathf.FloorToInt((regionTop - m.y + scrollFromTop) / lineH), 0, lines.Count - 1);
+                string lt = lines[li].text;
+                float rel = m.x - contentLeft;
+                int col = lt.Length;
+                for (int c = 0; c < lt.Length; c++)
+                {
+                    float mid = (TextW(lt.Substring(0, c)) + TextW(lt.Substring(0, c + 1))) * 0.5f;
+                    if (rel < mid) { col = c; break; }
+                }
+                return (li, col);
+            }
+            bool overText = overRegion && mUI.x < panelRight - BarW - 0.3f && !overCopyButton;
+            if (overText && InputHelper.IsMouseDownThisFrame(MouseButton.Left))
+            {
+                selA = selB = PosAt(mUI);
+                selActive = selecting = true;
+            }
+            else if (!overRegion && InputHelper.IsAnyMouseButtonDownThisFrame_IgnoreConsumed() && !MouseOverDivider(panelLeft, panelBottom, panelH))
+            {
+                if (!(mUI.x >= panelLeft && mUI.y >= regionTop)) selActive = selecting = false; // a click elsewhere (header buttons excepted) drops it
+            }
+            if (selecting)
+            {
+                if (!InputHelper.IsMouseHeld(MouseButton.Left)) selecting = false;
+                else
+                {
+                    if (mUI.y > regionTop) { scrollFromTop -= lineH * 0.5f; stickBottom = false; }
+                    else if (mUI.y < regionBottom) { scrollFromTop += lineH * 0.5f; }
+                    scrollFromTop = Mathf.Clamp(scrollFromTop, 0f, maxScroll);
+                    selB = PosAt(new Vector2(mUI.x, Mathf.Clamp(mUI.y, regionBottom + 0.01f, regionTop - 0.01f)));
+                }
+            }
+            if (selActive && Compare(selA, selB) != 0 && !inputState.focused && InputHelper.CtrlIsHeld && InputHelper.IsKeyDownThisFrame(KeyboardShortcuts.Physical(KeyCode.C)))
+            {
+                InputHelper.CopyToClipboard(SelectedText(lines, selA, selB));
+                copiedFlashUntil = Time.time + 1.5f;
             }
 
             HandleScrollbar(panelRight, regionTop, regionBottom, regionH, totalH, maxScroll);
@@ -325,13 +405,50 @@ namespace DLS.Graphics
             UI.DrawPanel(new Vector2(barLeft, thumbTop), new Vector2(BarW, thumbH), thumbCol, Anchor.TopLeft);
         }
 
-        enum LineKind { UserHead, AssistantHead, Body, Status, Error, Tool }
+        public enum LineKind { UserHead, AssistantHead, Body, Status, Error, Tool }
 
-        struct Line
+        public struct Line
         {
             public string text;
             public LineKind kind;
-            public Line(string t, LineKind k) { text = t; kind = k; }
+            public int msg;      // index in AskClaude.Messages (-1: not a message)
+            public bool cont;    // continues the previous line (word-wrapped): copied joined, not on a new line
+            public bool hardCut; // ... cut inside a word (joined without a space)
+            public int indent;   // leading display indent (not copied)
+            public Line(string t, LineKind k, int msg = -1, bool cont = false, bool hardCut = false, int indent = 0) { text = t; kind = k; this.msg = msg; this.cont = cont; this.hardCut = hardCut; this.indent = indent; }
+        }
+
+        public static int Compare((int line, int col) a, (int line, int col) b) => a.line != b.line ? a.line.CompareTo(b.line) : a.col.CompareTo(b.col);
+
+        // The text between two positions, as it was written: wrapped lines joined back, display indents dropped
+        public static string SelectedText(List<Line> lines, (int line, int col) a, (int line, int col) b)
+        {
+            if (Compare(b, a) < 0) (a, b) = (b, a);
+            var sb = new StringBuilder();
+            for (int i = Mathf.Max(0, a.line); i <= b.line && i < lines.Count; i++)
+            {
+                string lt = lines[i].text;
+                int c0 = i == a.line ? Mathf.Clamp(a.col, 0, lt.Length) : 0;
+                int c1 = i == b.line ? Mathf.Clamp(b.col, 0, lt.Length) : lt.Length;
+                c0 = Mathf.Max(c0, Mathf.Min(lines[i].indent, lt.Length));
+                if (i > a.line) sb.Append(lines[i].cont ? (lines[i].hardCut ? "" : " ") : "\n");
+                if (c1 > c0) sb.Append(lt, c0, c1 - c0);
+            }
+            return sb.ToString();
+        }
+
+        static void AddWrapped(List<Line> outLines, string text, int cols, LineKind kind, int indent, int msg)
+        {
+            string pad = new string(' ', indent);
+            foreach (string raw in text.Replace("\r", "").Split('\n'))
+            {
+                bool first = true;
+                foreach ((string piece, bool hard) in WrapPieces(raw, cols))
+                {
+                    outLines.Add(new Line(pad + piece, kind, msg, !first, hard, indent));
+                    first = false;
+                }
+            }
         }
 
         static Color ColourFor(LineKind k) => k switch
@@ -344,18 +461,17 @@ namespace DLS.Graphics
             _ => new Color(0.9f, 0.9f, 0.92f)
         };
 
-        static List<Line> BuildLines(int cols)
+        public static List<Line> BuildLines(IList<AskClaude.Msg> messages, int cols)
         {
             var outLines = new List<Line>();
-            foreach (AskClaude.Msg m in AskClaude.Messages)
+            for (int mi = 0; mi < messages.Count; mi++)
             {
+                AskClaude.Msg m = messages[mi];
                 if (m.role == "tool" || m.role == "error")
                 {
                     // Tool call / result, or an error — no header. Errors in red.
                     LineKind k = m.role == "error" ? LineKind.Error : LineKind.Tool;
-                    foreach (string raw in m.text.Replace("\r", "").Split('\n'))
-                        foreach (string wl in WrapLine(raw, cols))
-                            outLines.Add(new Line(wl, k));
+                    AddWrapped(outLines, m.text, cols, k, 0, mi);
                     if (m.role == "error") outLines.Add(new Line("", LineKind.Body));
                     continue;
                 }
@@ -367,11 +483,8 @@ namespace DLS.Graphics
                     "user" => "Toi :",
                     _ => "Claude :"
                 };
-                outLines.Add(new Line(head, isUser ? LineKind.UserHead : LineKind.AssistantHead));
-
-                foreach (string raw in m.text.Replace("\r", "").Split('\n'))
-                    foreach (string wl in WrapLine(raw, cols))
-                        outLines.Add(new Line("  " + wl, LineKind.Body));
+                outLines.Add(new Line(head, isUser ? LineKind.UserHead : LineKind.AssistantHead, mi));
+                AddWrapped(outLines, m.text, cols, LineKind.Body, 2, mi);
 
                 outLines.Add(new Line("", LineKind.Body)); // spacer between messages
             }
@@ -382,25 +495,34 @@ namespace DLS.Graphics
         // Word-wrap a single logical line to a max character count (hard-splits over-long words).
         static IEnumerable<string> WrapLine(string s, int cols)
         {
-            if (string.IsNullOrEmpty(s)) { yield return ""; yield break; }
+            foreach ((string piece, bool _) in WrapPieces(s, cols)) yield return piece;
+        }
+
+        // The pieces, each with "it was cut inside a word" (the previous piece joins it without a space)
+        static IEnumerable<(string, bool)> WrapPieces(string s, int cols)
+        {
+            if (string.IsNullOrEmpty(s)) { yield return ("", false); yield break; }
 
             string cur = "";
+            bool curHard = false;
             foreach (string word in s.Split(' '))
             {
                 string w = word;
+                bool wHard = false;
                 while (w.Length > cols)
                 {
-                    if (cur.Length > 0) { yield return cur; cur = ""; }
-                    yield return w.Substring(0, cols);
+                    if (cur.Length > 0) { yield return (cur, curHard); cur = ""; curHard = false; }
+                    yield return (w.Substring(0, cols), wHard);
                     w = w.Substring(cols);
+                    wHard = true;
                 }
 
-                if (cur.Length == 0) cur = w;
+                if (cur.Length == 0) { cur = w; curHard = wHard; }
                 else if (cur.Length + 1 + w.Length <= cols) cur += " " + w;
-                else { yield return cur; cur = w; }
+                else { yield return (cur, curHard); cur = w; curHard = wHard; }
             }
 
-            yield return cur;
+            yield return (cur, curHard);
         }
     }
 }
