@@ -20,6 +20,7 @@ namespace DLS.Bench
             ("live project: sim thread computes Add4 from player inputs and syncs the dev pins", () => LiveAdd4(projectDir)),
             ("live project: switching chip keeps the sim thread going (Registre8 loads on the clock)", () => LiveRegister(projectDir)),
             ("live project: switching chip and back keeps the running memory (RAM word, register) and never draws driven wires as floating", () => LiveSwitchKeepsMemory(projectDir)),
+            ("live project: switching fast through never-visited chips never stops or breaks the sim thread", () => LiveManySwitches(projectDir)),
             ("live project: CREATE CHIP through the popup (selection cleared by the click, as in the app), then Ctrl+Z", () => LiveCreateChip(projectDir)),
         };
 
@@ -120,7 +121,8 @@ namespace DLS.Bench
                 uint ram9Back = Read("RAM", 9), regABack = Read("Registre A", 0);
                 if (ram9Back != ram9) return $"RAM[9] = {ram9Back} after switching chip and back, the running value was {ram9} (the sim restarted from the saved memory)";
                 if (regABack != regA) return $"Registre A = {regABack} after switching chip and back, the running value was {regA}";
-                return comingBack == null ? null : "back on the CPU: " + comingBack;
+                if (comingBack != null) return "back on the CPU: " + comingBack;
+                return p.simThreadExceptions == 0 ? null : $"{p.simThreadExceptions} exception(s) in the sim thread (see the log)";
             }
             finally { Close(p); }
         }
@@ -140,6 +142,28 @@ namespace DLS.Bench
             var floatingSettled = new HashSet<PinInstance>(AllPins(p).Where(pin => (pin.State >> 16) != 0));
             var wrong = flaggedEarly.Where(pin => !floatingSettled.Contains(pin)).ToList();
             return wrong.Count == 0 ? null : $"{wrong.Count} driven pins were drawn floating (flicker) before the new sim had settled: " + string.Join(", ", wrong.Take(8).Select(pin => $"{(pin.parent is SubChipInstance sc ? (string.IsNullOrEmpty(sc.Label) ? sc.Description.Name : sc.Label) : "pin")}.{pin.Name}"));
+        }
+
+        // 2026-10-02: the display sync read the arriving chip's sim before it existed (a never-visited chip is built
+        // while the sim thread runs): a NullReferenceException killed the sim thread for good. A frame just before each
+        // switch makes the sim thread sync exactly in that window.
+        static string LiveManySwitches(string projectDir)
+        {
+            Project p = Open(projectDir, "Add4");
+            try
+            {
+                Pump(p, () => false, 100);
+                string[] names = BenchProject.LoadLibrary(projectDir, out ChipDescription[] chips) != null ? chips.Select(c => c.Name).ToArray() : Array.Empty<string>();
+                foreach (string name in names)
+                {
+                    p.TickMainThreadForTests();
+                    p.LoadDevChipOrCreateNewIfDoesntExist(name);
+                }
+                p.LoadDevChipOrCreateNewIfDoesntExist("Registre8");
+                if (!Pump(p, () => p.rootSimChip.Program != null && p.rootSimChip.Program.StepsRun > 50, 5000)) return "the simulation stopped after switching through the chips (sim thread dead or stuck)";
+                return p.simThreadExceptions == 0 ? null : $"{p.simThreadExceptions} exception(s) in the sim thread while switching chips (see the log)";
+            }
+            finally { Close(p); }
         }
 
         static IEnumerable<PinInstance> AllPins(Project p)

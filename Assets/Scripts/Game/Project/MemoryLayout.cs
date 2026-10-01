@@ -89,11 +89,22 @@ namespace DLS.Game
 		public List<List<List<MemCell>>> Words; // word -> bit -> cells (latch banks)
 		public SimChip Builtin;                 // builtin ROM / RAM bank
 		public int BuiltinWords;
+		// Several memories on the SAME address (parallel chips, e.g. 3 RAM256 holding the 3 bytes of a 24-bit
+		// instruction) are ONE memory (user, 2026-10-02: "a memory is N addresses of words, full stop"): its word is
+		// the parts side by side, the first part in the low bits.
+		public List<MemoryBank> Parts;
 
-		public int WordCount => Builtin != null ? BuiltinWords : Words.Count;
+		public int WordCount => Parts != null ? Parts[0].WordCount : Builtin != null ? BuiltinWords : Words.Count;
 
 		public uint Read(int w)
 		{
+			if (Parts != null)
+			{
+				uint whole = 0;
+				int shift = 0;
+				foreach (MemoryBank part in Parts) { whole |= part.Read(w) << shift; shift += part.Bits; }
+				return whole;
+			}
 			if (Builtin != null) return Builtin.InternalState[w] & (uint)((1L << Bits) - 1);
 			uint v = 0;
 			List<List<MemCell>> word = Words[w];
@@ -103,6 +114,12 @@ namespace DLS.Game
 
 		public void Write(int w, uint value, SimProgram prog)
 		{
+			if (Parts != null)
+			{
+				int shift = 0;
+				foreach (MemoryBank part in Parts) { part.Write(w, (uint)((value >> shift) & ((1UL << part.Bits) - 1)), prog); shift += part.Bits; }
+				return;
+			}
 			if (Builtin != null)
 			{
 				Builtin.InternalState[w] = value & (uint)((1L << Bits) - 1);
@@ -283,6 +300,7 @@ namespace DLS.Game
 		{
 			error = null;
 			var banks = new List<MemoryBank>();
+			var where = new List<(string parentPath, ChipDescription parent, SubChipDescription? inst, ChipDescription type)>();
 			if (rules != null)
 			{
 				foreach (MemoryBankRef b in rules.banks)
@@ -290,11 +308,17 @@ namespace DLS.Game
 					SimChip s = chip;
 					ChipDescription d = desc;
 					string label = null;
+					ChipDescription parentDesc = desc;
+					SubChipDescription? inst = null;
+					var parentPath = new List<string>();
 					foreach (string step in b.path ?? Array.Empty<string>())
 					{
 						SubChipDescription? sdq = Component(d, step);
 						if (sdq == null) { error = $"bank \"{b.name}\": \"{d.Name}\" has no component \"{step}\""; return null; }
 						SubChipDescription sd = sdq.Value;
+						if (inst != null) parentPath.Add(inst.Value.ID.ToString());
+						parentDesc = d;
+						inst = sd;
 						(bool ok, SimChip c) = s.TryGetSubChipFromID(sd.ID);
 						if (!ok) { error = $"bank \"{b.name}\": component \"{step}\" missing in the simulation"; return null; }
 						s = c;
@@ -305,11 +329,61 @@ namespace DLS.Game
 					var words = ResolveWords(s, d, rules, lib, polarity, out string e);
 					if (words == null) { error = $"bank \"{b.name}\": {e}"; return null; }
 					banks.Add(new MemoryBank { Name = !string.IsNullOrEmpty(b.name) ? b.name : label ?? d.Name, Bits = words[0].Count, Words = words });
+					where.Add((string.Join("/", parentPath), parentDesc, inst, d));
 				}
+				banks = MergeParallel(banks, where, rules, desc);
 			}
 			banks.AddRange(BuiltinBanks(chip, desc, lib));
 			return banks;
 		}
+
+		// Memories whose address pins are all fed by the same sources, inside the same chip, are one memory with a
+		// wider word (parallel RAMs). Address pins = the inputs whose read procedure depends on the address `a`.
+		// Several words each, same word count, 32 bits at most together. Parts in natural name order (ram_prog0,
+		// ram_prog1, ram_prog2): the first is the low byte. Registers (one word) are never merged.
+		static List<MemoryBank> MergeParallel(List<MemoryBank> banks, List<(string parentPath, ChipDescription parent, SubChipDescription? inst, ChipDescription type)> where, MemoryRules rules, ChipDescription analysed)
+		{
+			string Key(int i)
+			{
+				var (parentPath, parent, inst, type) = where[i];
+				if (inst == null || banks[i].WordCount < 2) return null;
+				MemoryReadRule read = rules.reads.FirstOrDefault(r => string.Equals(r.type, type.Name, StringComparison.OrdinalIgnoreCase));
+				if (read == null) return null;
+				var parts = new List<string>();
+				foreach (MemoryPinValue pv in read.inputs.Where(x => UsesAddress(x.value)).OrderBy(x => x.pin, StringComparer.Ordinal))
+				{
+					PinDescription? pin = (type.InputPins ?? Array.Empty<PinDescription>()).Cast<PinDescription?>().FirstOrDefault(x => x.Value.Name == pv.pin);
+					if (pin == null) return null;
+					var sources = (parent.Wires ?? Array.Empty<WireDescription>())
+						.Where(w => w.TargetPinAddress.PinOwnerID == inst.Value.ID && w.TargetPinAddress.PinID == pin.Value.ID)
+						.Select(w => $"{w.SourcePinAddress.PinOwnerID}.{w.SourcePinAddress.PinID}").OrderBy(x => x, StringComparer.Ordinal).ToList();
+					if (sources.Count == 0) return null; // an unconnected address: nothing to prove they are parallel
+					parts.Add(pv.pin + "=" + string.Join(",", sources));
+				}
+				return parts.Count == 0 ? null : $"{parentPath}|{banks[i].WordCount}|{string.Join(";", parts)}";
+			}
+
+			var keys = Enumerable.Range(0, banks.Count).Select(Key).ToList();
+			var result = new List<MemoryBank>();
+			var done = new HashSet<int>();
+			for (int i = 0; i < banks.Count; i++)
+			{
+				if (done.Contains(i)) continue;
+				var group = keys[i] == null ? new List<int> { i } : Enumerable.Range(0, banks.Count).Where(j => keys[j] == keys[i]).ToList();
+				foreach (int j in group) done.Add(j);
+				if (group.Count < 2 || group.Sum(j => banks[j].Bits) > 32) { foreach (int j in group) result.Add(banks[j]); continue; }
+				var parts = group.Select(j => banks[j]).OrderBy(b => NaturalKey(b.Name), StringComparer.Ordinal).ToList();
+				var (parentPath, parent, _, _) = where[group[0]];
+				string name = string.IsNullOrEmpty(parentPath) ? analysed.Name : (parent?.Name ?? analysed.Name);
+				result.Add(new MemoryBank { Name = name, Bits = parts.Sum(b => b.Bits), Parts = parts });
+			}
+			return result;
+		}
+
+		static bool UsesAddress(string expr) => !string.IsNullOrEmpty(expr) && System.Text.RegularExpressions.Regex.IsMatch(expr, @"(?<![A-Za-z0-9_])a(?![A-Za-z0-9_])");
+
+		// "ram_prog10" sorts after "ram_prog2": digits padded
+		static string NaturalKey(string s) => System.Text.RegularExpressions.Regex.Replace(s ?? "", @"\d+", m => m.Value.PadLeft(10, '0'));
 
 		// The chip types of the rules' banks, walked from the analysed chip
 		public static List<string> BankTypes(ChipDescription desc, MemoryRules rules, ChipLibrary lib)

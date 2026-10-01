@@ -275,6 +275,13 @@ namespace DLS.Game
 				string got = DLS.Graphics.AskClaudeMenu.SelectedText(lines, (first, 0), (last, lines[last].text.Length));
 				return got == answer ? null : "copied as: " + got;
 			});
+			Check("memory editor: 24-bit word shown with a separator every 8 bits, pasted lines parsed", () =>
+			{
+				string g = DLS.Graphics.MemoryEditMenu.ConvertText("ABCDEF", 24, 0, 2);
+				if (g != "10101011 11001101 11101111") return "grouped as " + g;
+				var v = DLS.Graphics.MemoryEditMenu.ParsePasted("AB\r\nCD\nEF\n", 8, 0, out string err);
+				return err == null && v.Count == 3 && v[2] == 0xEF ? null : "paste parsed wrong";
+			});
 			Check("memory editor: cache JSON round trip", () =>
 			{
 				var c = new Dictionary<string, MemoryLayout.CacheEntry> { ["CPU"] = new MemoryLayout.CacheEntry { hash = "h", rules = rules, polarity = pol } };

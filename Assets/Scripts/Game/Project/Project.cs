@@ -776,6 +776,8 @@ namespace DLS.Game
 			finally { simPauseForExternalRequest = false; }
 		}
 
+		public volatile int simThreadExceptions; // caught in the sim thread (logged); 0 when all is well
+
 		void SimThread()
 		{
 			const int performanceTimeWindowMs = (int)(SimulationPerformanceTimeWindowSec * 1000);
@@ -787,87 +789,99 @@ namespace DLS.Game
 
 			while (simThreadActive)
 			{
-				// Park the sim thread while an external request (e.g. truth-table computation) uses the Simulator.
-				if (simPauseForExternalRequest)
+				try
 				{
-					simIsPausedForExternal = true;
-					Thread.Sleep(1);
-					continue;
-				}
-				simIsPausedForExternal = false;
-
-				Simulator.ApplyModifications();
-				// ---- A new frame has been reached on main thread  ----
-				if (mainThreadFrameCount > simLastMainThreadSyncFrame)
-				{
-					simLastMainThreadSyncFrame = mainThreadFrameCount;
-					// Update graphical state from sim
-					// Note: update graphical state even when paused so that subchips are automatically if viewed
-					// not before the (re)built sim has been compiled and stepped: until then every pin is "floating" and
-					// would be drawn flickering for the whole compile (the user saw wires change colour for ~2 s)
-					if ((ViewedSimChip.Program != null && ViewedSimChip.Program.SettledAfterBuild) || simPaused) ViewedChip.UpdateStateFromSim(ViewedSimChip, !CanEditViewedChip);
-
-					// Log sim time
-					if (debug_logSimTime)
+					// Park the sim thread while an external request (e.g. truth-table computation) uses the Simulator.
+					if (simPauseForExternalRequest)
 					{
-						double elapsedMs = stopwatchTotal.ElapsedTicks * (1000.0 / Stopwatch.Frequency);
-						int frame = Simulator.simulationFrame;
-						if (frame > 0) UnityEngine.Debug.Log($"Avg sim step time: {elapsedMs / frame} ms NumSteps: {frame} secs: {elapsedMs / 1000.0:0.00}");
+						simIsPausedForExternal = true;
+						Thread.Sleep(1);
+						continue;
 					}
-				}
+					simIsPausedForExternal = false;
 
-				// If sim is paused, sleep a bit and then check again
-				// Also handle advancing a single step
-				if (simPaused && !advanceSingleSimStep)
+					Simulator.ApplyModifications();
+					// ---- A new frame has been reached on main thread  ----
+					if (mainThreadFrameCount > simLastMainThreadSyncFrame)
+					{
+						simLastMainThreadSyncFrame = mainThreadFrameCount;
+						// Update graphical state from sim
+						// Note: update graphical state even when paused so that subchips are automatically if viewed
+						// not before the (re)built sim has been compiled and stepped: until then every pin is "floating" and
+						// would be drawn flickering for the whole compile (the user saw wires change colour for ~2 s)
+						// (the arriving chip's sim may not exist yet: it is built while this thread runs — reading it unguarded
+						// killed this thread when switching to a never-visited chip)
+						SimChip viewedSim = ViewedSimChip;
+						if (viewedSim != null && ((viewedSim.Program != null && viewedSim.Program.SettledAfterBuild) || simPaused)) ViewedChip.UpdateStateFromSim(viewedSim, !CanEditViewedChip);
+
+						// Log sim time
+						if (debug_logSimTime)
+						{
+							double elapsedMs = stopwatchTotal.ElapsedTicks * (1000.0 / Stopwatch.Frequency);
+							int frame = Simulator.simulationFrame;
+							if (frame > 0) UnityEngine.Debug.Log($"Avg sim step time: {elapsedMs / frame} ms NumSteps: {frame} secs: {elapsedMs / 1000.0:0.00}");
+						}
+					}
+
+					// If sim is paused, sleep a bit and then check again
+					// Also handle advancing a single step
+					if (simPaused && !advanceSingleSimStep)
+					{
+						Simulator.UpdateInPausedState();
+						stopwatchTotal.Stop();
+						Thread.Sleep(10);
+						continue;
+					}
+
+					if (advanceSingleSimStep)
+					{
+						simPausedSingleStepCounter++;
+						advanceSingleSimStep = false;
+					}
+					else simPausedSingleStepCounter = 0;
+
+					double targetTickDurationMs = 1000.0 / targetTicksPerSecond;
+					stopwatch.Restart();
+					if (!stopwatchTotal.IsRunning) stopwatchTotal.Start();
+
+					// ---- Run sim ----
+					Simulator.stepsPerClockTransition = stepsPerClockTransition;
+					SimChip simChip = rootSimChip;
+					if (simChip == null) continue; // Could potentially be null for a frame when switching between chips
+					// Paced (a real target rate) or single-stepping: one step at a time. Unbounded: batches, idle steps skipped.
+					bool paced = targetTicksPerSecond < 100000 || advanceSingleSimStep || simPausedSingleStepCounter > 0;
+					int stepsDone = paced ? 1 : 0;
+					if (paced) Simulator.RunSimulationStep(simChip, inputPins, audioState.simAudio);
+					else stepsDone = Simulator.RunSimulationSteps(simChip, inputPins, audioState.simAudio, 256);
+
+					// ---- Wait some amount of time (if needed) to try to hit the target ticks per second ----
+					while (true)
+					{
+						double elapsedMs = stopwatch.ElapsedTicks * (1000.0 / Stopwatch.Frequency);
+						double waitMs = targetTickDurationMs - elapsedMs;
+
+						if (waitMs <= 0) break;
+
+						// Wait some cycles before checking timer again (todo: better approach?)
+						Thread.SpinWait(10);
+					}
+
+					// ---- Update perf counter (average steps per second over the last window) ----
+					perfStepsInWindow += stepsDone;
+					long elapsedMsTotal = stopwatchTotal.ElapsedMilliseconds;
+					long windowMs = elapsedMsTotal - perfWindowStartMs;
+					if (windowMs >= performanceTimeWindowMs / 3)
+					{
+						simAvgTicksPerSec = perfStepsInWindow / (double)windowMs * 1000;
+						perfWindowStartMs = elapsedMsTotal;
+						perfStepsInWindow = 0;
+					}
+							}
+				catch (Exception e)
 				{
-					Simulator.UpdateInPausedState();
-					stopwatchTotal.Stop();
-					Thread.Sleep(10);
-					continue;
-				}
-
-				if (advanceSingleSimStep)
-				{
-					simPausedSingleStepCounter++;
-					advanceSingleSimStep = false;
-				}
-				else simPausedSingleStepCounter = 0;
-
-				double targetTickDurationMs = 1000.0 / targetTicksPerSecond;
-				stopwatch.Restart();
-				if (!stopwatchTotal.IsRunning) stopwatchTotal.Start();
-
-				// ---- Run sim ----
-				Simulator.stepsPerClockTransition = stepsPerClockTransition;
-				SimChip simChip = rootSimChip;
-				if (simChip == null) continue; // Could potentially be null for a frame when switching between chips
-				// Paced (a real target rate) or single-stepping: one step at a time. Unbounded: batches, idle steps skipped.
-				bool paced = targetTicksPerSecond < 100000 || advanceSingleSimStep || simPausedSingleStepCounter > 0;
-				int stepsDone = paced ? 1 : 0;
-				if (paced) Simulator.RunSimulationStep(simChip, inputPins, audioState.simAudio);
-				else stepsDone = Simulator.RunSimulationSteps(simChip, inputPins, audioState.simAudio, 256);
-
-				// ---- Wait some amount of time (if needed) to try to hit the target ticks per second ----
-				while (true)
-				{
-					double elapsedMs = stopwatch.ElapsedTicks * (1000.0 / Stopwatch.Frequency);
-					double waitMs = targetTickDurationMs - elapsedMs;
-
-					if (waitMs <= 0) break;
-
-					// Wait some cycles before checking timer again (todo: better approach?)
-					Thread.SpinWait(10);
-				}
-
-				// ---- Update perf counter (average steps per second over the last window) ----
-				perfStepsInWindow += stepsDone;
-				long elapsedMsTotal = stopwatchTotal.ElapsedMilliseconds;
-				long windowMs = elapsedMsTotal - perfWindowStartMs;
-				if (windowMs >= performanceTimeWindowMs / 3)
-				{
-					simAvgTicksPerSec = perfStepsInWindow / (double)windowMs * 1000;
-					perfWindowStartMs = elapsedMsTotal;
-					perfStepsInWindow = 0;
+					// never let one bad iteration kill the simulation for good (it did once: a null sim right after a switch)
+					if (simThreadExceptions++ < 5) UnityEngine.Debug.LogException(e);
+					Thread.Sleep(1);
 				}
 			}
 		}

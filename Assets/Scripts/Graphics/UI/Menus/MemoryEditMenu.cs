@@ -39,6 +39,10 @@ namespace DLS.Graphics
 		static string lastJson;
 		const int MaxAttempts = 3;
 		static Bounds2D scrollBounds;
+		static int lastFocusedRow;          // where PASTE starts (the word last clicked / typed in)
+		static string lastRaw = "";         // focused field text last frame (to see a separator being deleted)
+		static string pasteStatus;
+		static float pasteStatusUntil;
 
 		public static void OnMenuOpened()
 		{
@@ -282,9 +286,14 @@ namespace DLS.Graphics
 				pos = UI.PrevBounds.BottomLeft + Vector2.down * spacing;
 				int newMode = UI.WheelSelector(ID_mode, ModeNames, pos, new Vector2(sideSize.x, DrawSettings.SelectorWheelHeight), MenuHelper.Theme.OptionsWheel, Anchor.TopLeft);
 				pos = UI.PrevBounds.BottomLeft + Vector2.down * spacing;
-				int copyPaste = MenuHelper.DrawButtonPair("COPY ALL", "PASTE ALL", pos, sideSize.x, false);
+				int copyPaste = MenuHelper.DrawButtonPair("COPY ALL", "PASTE", pos, sideSize.x, false);
 				pos = UI.PrevBounds.BottomLeft + Vector2.down * spacing;
 				bool clear = UI.Button("CLEAR ALL", MenuHelper.Theme.ButtonTheme, pos, new Vector2(sideSize.x, 0), true, false, true, Anchor.TopLeft);
+				if (pasteStatus != null && Time.time < pasteStatusUntil)
+				{
+					pos = UI.PrevBounds.BottomLeft + Vector2.down * spacing;
+					UI.DrawText(pasteStatus, MenuHelper.Theme.FontRegular, MenuHelper.Theme.FontSizeRegular * 0.8f, pos, Anchor.TopLeft, new Color(0.6f, 0.9f, 0.6f));
+				}
 				pos = UI.PrevBounds.BottomLeft + Vector2.down * (spacing * 2);
 				MenuHelper.CancelConfirmResult result = MenuHelper.DrawCancelConfirmButtons(pos, sideSize.x, false, false);
 				MenuHelper.DrawReservedMenuPanel(sidePanel, UI.GetCurrentBoundsScope());
@@ -292,7 +301,7 @@ namespace DLS.Graphics
 				SetMode(newMode);
 				if (newBank != bankIndex) SelectBank(newBank);
 				if (copyPaste == 0) CopyAll();
-				else if (copyPaste == 1) PasteAll();
+				else if (copyPaste == 1) PasteFrom(lastFocusedRow);
 				else if (clear) for (int i = 0; i < rowIDs.Length; i++) UI.GetInputFieldState(rowIDs[i]).SetText(Format(0, bank.Bits), false);
 
 				if (result == MenuHelper.CancelConfirmResult.Cancel || KeyboardShortcuts.CancelShortcutTriggered) UIDrawer.SetActiveMenu(UIDrawer.MenuType.None);
@@ -315,6 +324,17 @@ namespace DLS.Graphics
 				if (flash > 0) t.bgCol = Color.Lerp(t.bgCol, new Color(0.55f, 0.47f, 0.15f), flash);
 				t.focusBorderCol = Color.clear;
 				UI.InputField(rowIDs[index], t, topLeft, size, "0", Anchor.TopLeft, 6, Validate);
+				if (state.focused)
+				{
+					if (lastFocusedRow != index) { lastFocusedRow = index; lastRaw = state.text; }
+					// several lines in the clipboard: they fill this word and the next ones (the field itself refuses them)
+					if (InputHelper.CtrlIsHeld && InputHelper.IsKeyDownThisFrame(KeyboardShortcuts.Physical(KeyCode.V)) && (InputHelper.GetClipboardContents() ?? "").Trim().Contains('\n'))
+						PasteFrom(index);
+					// separators placed by themselves while typing (binary: every 8 bits)
+					(string grouped, int caret) = Regroup(state.text, state.cursorBeforeCharIndex, lastRaw, banks[bankIndex].Bits, mode);
+					if (grouped != state.text) { state.SetText(grouped, true); state.SetCursorIndex(caret); }
+					lastRaw = state.text;
+				}
 				string label = index.ToString().PadLeft(banks[bankIndex].WordCount.ToString().Length, '0') + ":";
 				UI.DrawText(label, MenuHelper.Theme.FontBold, MenuHelper.Theme.FontSizeRegular, bounds.CentreLeft + Vector2.right * 0.52f, Anchor.TextCentreLeft, ColHelper.MakeCol(0.4f));
 				// Enter / Tab: next word, Shift: previous
@@ -333,6 +353,7 @@ namespace DLS.Graphics
 		// widest value, and a value that fits (8-bit word: FF / 255 / 11111111 at most).
 		public static bool FitsWord(string s, int bits, int m)
 		{
+			s = (s ?? "").Replace(" ", ""); // separators are display only
 			foreach (char c in s)
 			{
 				if (m == 0 && !Uri.IsHexDigit(c)) return false;
@@ -340,7 +361,7 @@ namespace DLS.Graphics
 				if (m == 2 && c is not ('0' or '1')) return false;
 			}
 			uint max = bits >= 32 ? uint.MaxValue : (uint)((1UL << bits) - 1);
-			return s.Length <= Format(max, bits, m).Length && TryParse(s, bits, m, out _);
+			return s.Length <= Format(max, bits, m).Replace(" ", "").Length && TryParse(s, bits, m, out _);
 		}
 
 		// The words follow the circuit while the editor is open (a clock edge that loads a register shows up at
@@ -384,13 +405,50 @@ namespace DLS.Graphics
 		{
 			0 => v.ToString("X").PadLeft((bits + 3) / 4, '0'),
 			1 => v.ToString(),
-			_ => Convert.ToString(v, 2).PadLeft(bits, '0')
+			_ => Group(Convert.ToString(v, 2).PadLeft(bits, '0'), bits, m)
 		};
+
+		// A pretty separator every 8 bits in binary for words wider than a byte, counted from the right so it falls on
+		// the byte boundaries ("00000001 00100011 01000101"). Display only: typing never needs it.
+		public static string Group(string digits, int bits, int m)
+		{
+			digits = (digits ?? "").Replace(" ", "");
+			if (m != 2 || bits <= 8 || digits.Length <= 8) return digits;
+			var sb = new StringBuilder();
+			for (int i = 0; i < digits.Length; i++)
+			{
+				if (i > 0 && (digits.Length - i) % 8 == 0) sb.Append(' ');
+				sb.Append(digits[i]);
+			}
+			return sb.ToString();
+		}
+
+		// The field after a keystroke, separators put back: the caret stays after the same digit. Deleting a separator
+		// (backspace / delete on it) deletes the digit next to it instead, otherwise it would come straight back.
+		public static (string text, int caret) Regroup(string text, int caret, string previous, int bits, int m)
+		{
+			text ??= "";
+			string digits = text.Replace(" ", "");
+			int digitsBefore = 0;
+			for (int i = 0; i < Math.Min(caret, text.Length); i++) if (text[i] != ' ') digitsBefore++;
+			string prevDigits = (previous ?? "").Replace(" ", "");
+			if (previous != null && text.Length < previous.Length && digits == prevDigits && digits.Length > 0)
+			{
+				int at = Math.Max(0, Math.Min(digitsBefore, digits.Length) - 1); // a separator went: the digit before it goes
+				if (digitsBefore == 0) at = 0;
+				digits = digits.Remove(at, 1);
+				digitsBefore = at;
+			}
+			string grouped = Group(digits, bits, m);
+			int newCaret = 0, seen = 0;
+			while (newCaret < grouped.Length && seen < digitsBefore) { if (grouped[newCaret] != ' ') seen++; newCaret++; }
+			return (grouped, newCaret);
+		}
 
 		public static bool TryParse(string s, int bits, int m, out uint v)
 		{
 			v = 0;
-			s = (s ?? "").Trim();
+			s = (s ?? "").Replace(" ", "").Replace("\t", "").Trim();
 			if (s.Length == 0) return true;
 			try
 			{
@@ -423,12 +481,47 @@ namespace DLS.Graphics
 			InputHelper.CopyToClipboard(sb.ToString());
 		}
 
-		static void PasteAll()
+		// The clipboard's lines, one word each (empty lines at the end ignored). Stops at the first line that is not a
+		// value of this width in this base, and says which.
+		public static List<uint> ParsePasted(string clipboard, int bits, int m, out string error)
 		{
-			string[] lines = StringHelper.SplitByLine(InputHelper.GetClipboardContents());
+			error = null;
+			var values = new List<uint>();
+			var lines = (clipboard ?? "").Replace("\r", "").Split('\n').ToList();
+			while (lines.Count > 0 && lines[lines.Count - 1].Trim().Length == 0) lines.RemoveAt(lines.Count - 1);
+			for (int i = 0; i < lines.Count; i++)
+			{
+				string l = lines[i].Trim();
+				if (l.Length == 0 || !FitsWord(l, bits, m) || !TryParse(l, bits, m, out uint v)) { error = $"line {i + 1} (\"{l}\") is not a {bits}-bit {ModeNames[m].ToLowerInvariant()} value"; break; }
+				values.Add(v);
+			}
+			return values;
+		}
+
+		// Ctrl+V of several lines in a word, or PASTE: the lines fill that word and the following ones
+		public static void PasteFrom(int start)
+		{
+			StoreFields();
 			int bits = banks[bankIndex].Bits;
-			for (int i = 0; i < Mathf.Min(rowIDs.Length, lines.Length); i++)
-				if (TryParse(lines[i], bits, mode, out uint v)) UI.GetInputFieldState(rowIDs[i]).SetText(Format(v, bits), false);
+			List<uint> values = ParsePasted(InputHelper.GetClipboardContents(), bits, mode, out string error);
+			int n = 0;
+			for (; n < values.Count && start + n < rowIDs.Length; n++)
+			{
+				texts[bankIndex][start + n] = Format(values[n], bits);
+				InputFieldState st = UI.GetInputFieldState(rowIDs[start + n]);
+				st.SetText(texts[bankIndex][start + n], st.focused);
+			}
+			if (rowIDs.Length > 0 && start < rowIDs.Length && UI.GetInputFieldState(rowIDs[start]).focused) lastRaw = UI.GetInputFieldState(rowIDs[start]).text;
+			pasteStatus = $"{n} word{(n == 1 ? "" : "s")} pasted from address {start}" + (n < values.Count ? $" ({values.Count - n} past the end ignored)" : "") + (error != null ? "; " + error : "");
+			pasteStatusUntil = Time.time + 4f;
+		}
+
+		// test hooks
+		public static void FocusForTests(int row) { lastFocusedRow = row; }
+		public static void PasteForTests(string clipboard)
+		{
+			InputHelper.CopyToClipboard(clipboard);
+			PasteFrom(lastFocusedRow);
 		}
 
 		static void Save()
