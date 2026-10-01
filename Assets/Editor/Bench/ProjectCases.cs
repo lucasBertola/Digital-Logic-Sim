@@ -94,15 +94,27 @@ namespace DLS.Bench
                 if (!p.chipLibrary.HasChip("MEMOIRE TEST")) return "new chip not in the library";
                 if (!File.Exists(Path.Combine(tmpDir, "Chips", "MEMOIRE TEST.json"))) return "new chip not saved";
                 if (!p.description.AllCustomChipNames.Contains("MEMOIRE TEST")) return "new chip not registered in the project (it would vanish on reload)";
-                if (p.ViewedChip.ChipName != "MEMOIRE TEST") return $"the new chip is not opened (open: {p.ViewedChip.ChipName})";
-                if (p.ViewedChip.Elements.OfType<SubChipInstance>().Count(s => s.Description.Name is "RAM256" or "Tampon8") != 2) return "the opened new chip does not hold RAM256 + Tampon8";
-                p.LoadDevChipOrCreateNewIfDoesntExist("CPU"); // back to the CPU: its unsaved edit must still be there
+                // behaviour change 2026-10-01 (user): stay on the same view to test it (it opened the new chip before)
+                if (p.ViewedChip.ChipName != "CPU") return $"the view changed to {p.ViewedChip.ChipName}, it must stay on the CPU";
                 var names = p.ViewedChip.Elements.OfType<SubChipInstance>().Select(s => s.Description.Name).ToList();
                 if (!names.Contains("MEMOIRE TEST") || names.Contains("RAM256") || names.Contains("Tampon8")) return "the selection was not replaced by the new chip: " + string.Join(", ", names);
                 Pump(p, () => false, 100); // the sim thread applies the modifications
                 p.ViewedChip.UndoController.TryUndo();
                 names = p.ViewedChip.Elements.OfType<SubChipInstance>().Select(s => s.Description.Name).ToList();
                 if (names.Contains("MEMOIRE TEST") || !names.Contains("RAM256") || !names.Contains("Tampon8")) return "Ctrl+Z did not restore the selection: " + string.Join(", ", names);
+                // ... and deletes the created chip everywhere
+                if (p.chipLibrary.HasChip("MEMOIRE TEST")) return "Ctrl+Z left the created chip in the library";
+                if (File.Exists(Path.Combine(tmpDir, "Chips", "MEMOIRE TEST.json"))) return "Ctrl+Z left the created chip's file";
+                if (p.description.AllCustomChipNames.Contains("MEMOIRE TEST")) return "Ctrl+Z left the created chip in the project list";
+                if (p.description.StarredList.Any(s => s.Name == "MEMOIRE TEST")) return "Ctrl+Z left the created chip in the bottom bar";
+                if (p.ViewedChip.ChipName != "CPU") return "Ctrl+Z changed the view";
+                // Ctrl+Y: created and replaced again
+                p.ViewedChip.UndoController.TryRedo();
+                names = p.ViewedChip.Elements.OfType<SubChipInstance>().Select(s => s.Description.Name).ToList();
+                if (!p.chipLibrary.HasChip("MEMOIRE TEST") || !File.Exists(Path.Combine(tmpDir, "Chips", "MEMOIRE TEST.json"))) return "Ctrl+Y did not create the chip again";
+                if (!names.Contains("MEMOIRE TEST") || names.Contains("RAM256")) return "Ctrl+Y did not replace the selection again: " + string.Join(", ", names);
+                Pump(p, () => false, 100);
+                p.ViewedChip.UndoController.TryUndo(); // and back, for the empty-selection check below
 
                 // nothing selected: the error is SHOWN (it used to be closed at once)
                 DLS.Graphics.CreateChipPopup.OpenForTests();

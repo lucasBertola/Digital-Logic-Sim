@@ -38,18 +38,25 @@ namespace DLS.Game
 			Result r = Extract(parent, selectedIDs, newName, p.chipLibrary, out string error);
 			if (r == null) return error;
 
-			Saver.SaveChip(r.NewChip, p.description.ProjectName);
-			p.chipLibrary.NotifyChipSaved(r.NewChip);
-			p.SetStarred(r.NewChip.Name, true, false, false);
-			p.UpdateAndSaveProjectDescription();
+			Register(p, r.NewChip);
 
 			var before = new UndoController.ChipSnapshot(dev);
 			foreach (IMoveable e in p.controller.SelectedElements) e.IsSelected = false;
 			p.controller.SelectedElements.Clear();
 			ApplyInPlace(dev, r, p.chipLibrary);
-			dev.UndoController.RecordClaudeTurn(before, new UndoController.ChipSnapshot(dev));
-			p.LoadDevChipOrCreateNewIfDoesntExist(r.NewChip.Name); // straight into the new chip (the edited chip stays open in memory, unsaved edits and undo kept)
+			// the user stays on this chip to test it (2026-10-01: "je veux tester sur la même vue"); Ctrl+Z restores the
+			// selection AND deletes the new chip, Ctrl+Y creates it again
+			dev.UndoController.RecordCreateChip(before, new UndoController.ChipSnapshot(dev), r.NewChip);
 			return null;
+		}
+
+		// file, library, starred (bottom bar), project list (the loader rebuilds the library from it)
+		public static void Register(Project p, ChipDescription chip)
+		{
+			Saver.SaveChip(chip, p.description.ProjectName);
+			p.chipLibrary.NotifyChipSaved(chip);
+			p.SetStarred(chip.Name, true, false, false);
+			p.UpdateAndSaveProjectDescription();
 		}
 
 		// The edited chip becomes the new parent without being rebuilt: the selection is deleted, the instance added,

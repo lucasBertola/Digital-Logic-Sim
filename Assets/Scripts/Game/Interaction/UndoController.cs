@@ -149,6 +149,37 @@ namespace DLS.Game
 			RecordUndoAction(new ClaudeTurnAction { before = before, after = after });
 		}
 
+		// CREATE CHIP: undo = the edited chip as before + the created chip deleted; redo = created again + replaced
+		public void RecordCreateChip(ChipSnapshot before, ChipSnapshot after, ChipDescription createdChip)
+		{
+			RecordUndoAction(new CreateChipAction { before = before, after = after, createdChip = createdChip });
+		}
+
+		class CreateChipAction : UndoAction
+		{
+			public ChipSnapshot before;
+			public ChipSnapshot after;
+			public ChipDescription createdChip;
+
+			public void Trigger(bool undo, DevChipInstance devChip)
+			{
+				Project p = Project.ActiveProject;
+				if (undo)
+				{
+					before.Apply(devChip);
+					// deleted unless the user has placed it in another chip meanwhile (that would remove it from there)
+					bool usedElsewhere = p.chipLibrary.allChips.Any(c => !c.NameMatch(devChip.ChipName) && (c.SubChips ?? Array.Empty<SubChipDescription>()).Any(s => ChipDescription.NameMatch(s.Name, createdChip.Name)));
+					if (usedElsewhere) Debug.Log($"Undo CREATE CHIP: \"{createdChip.Name}\" is used in another chip, kept");
+					else if (p.chipLibrary.HasChip(createdChip.Name)) p.DeleteChip(createdChip.Name);
+				}
+				else
+				{
+					if (!p.chipLibrary.HasChip(createdChip.Name)) ChipExtractor.Register(p, createdChip);
+					after.Apply(devChip);
+				}
+			}
+		}
+
 		class ClaudeTurnAction : UndoAction
 		{
 			public ChipSnapshot before;
@@ -335,6 +366,10 @@ namespace DLS.Game
 				else if (action is PinRenameAction rename)
 				{
 					rename.Trigger(undo, devChip);
+				}
+				else if (action is CreateChipAction create)
+				{
+					create.Trigger(undo, devChip);
 				}
 				else if (action is ClaudeTurnAction turn)
 				{
