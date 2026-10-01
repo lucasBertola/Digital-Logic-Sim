@@ -72,7 +72,8 @@ namespace DLS.Game
 		public int simPausedSingleStepCounter;
 		int mainThreadFrameCount;
 		DevPinInstance[] inputPins = Array.Empty<DevPinInstance>();
-		public int targetTicksPerSecond => Mathf.Max(1, description.Prefs_SimTargetStepsPerSecond);
+		public int targetTicksPerSecond => TargetFor(description);
+		public static int TargetFor(ProjectDescription d) => d.Prefs_SimMaxSpeed ? int.MaxValue : Mathf.Max(1, d.Prefs_SimTargetStepsPerSecond);
 		public int stepsPerClockTransition => description.Prefs_SimStepsPerClockTick;
 		public bool simPaused => description.Prefs_SimPaused;
 		public double simAvgTicksPerSec { get; private set; }

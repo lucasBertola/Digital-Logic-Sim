@@ -22,6 +22,7 @@ public static class LiveRate
             ProjectDescription pd = Serializer.DeserializeProjectDescription(File.ReadAllText(Path.Combine(dir, "ProjectDescription.json")));
             pd.ProjectName = "_LiveRate_readonly"; // nothing is saved anyway; never the user's project
             pd.Prefs_SimPaused = false;
+            if (Arg("-rateMax") != null) pd.Prefs_SimMaxSpeed = true;
             var p = new Project(pd, lib) { audioState = new AudioState() };
             p.LoadDevChipOrCreateNewIfDoesntExist(chip);
             p.StartSimulation();
@@ -29,7 +30,7 @@ public static class LiveRate
             double best = 0;
             while (sw.ElapsedMilliseconds < 4000) { p.TickMainThreadForTests(); Thread.Sleep(16); if (sw.ElapsedMilliseconds > 1500) best = Math.Max(best, p.simAvgTicksPerSec); }
             p.NotifyExit();
-            report = $"{chip}: {best:0} steps/s in the app's sim thread (target {pd.Prefs_SimTargetStepsPerSecond}, {pd.Prefs_SimStepsPerClockTick} steps per tick) = {best / (2.0 * pd.Prefs_SimStepsPerClockTick) / 1000:0} kHz shown";
+            report = $"{chip}: {best:0} steps/s in the app's sim thread (target {(pd.Prefs_SimMaxSpeed ? "MAX" : pd.Prefs_SimTargetStepsPerSecond.ToString())}, {pd.Prefs_SimStepsPerClockTick} steps per tick) = {best / (2.0 * pd.Prefs_SimStepsPerClockTick) / 1000:0} kHz shown";
         }
         catch (Exception e) { report = "EXCEPTION " + e; }
         File.AppendAllText(Path.Combine(BenchProject.RepoRoot, "Builds", "liverate.txt"), report + "\n");

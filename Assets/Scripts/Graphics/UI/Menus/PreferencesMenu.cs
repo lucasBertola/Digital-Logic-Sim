@@ -45,6 +45,12 @@ namespace DLS.Graphics
 			"Always"
 		};
 
+		static readonly string[] SimSpeedOptions =
+		{
+			"Limited",
+			"Max"
+		};
+
 		static readonly string[] SimulationStatusOptions =
 		{
 			"Active",
@@ -62,6 +68,7 @@ namespace DLS.Graphics
 		static readonly UIHandle ID_StraightWires = new("PREFS_StraightWires");
 		static readonly UIHandle ID_SimStatus = new("PREFS_SimStatus");
 		static readonly UIHandle ID_SimFrequencyField = new("PREFS_SimTickTarget");
+		static readonly UIHandle ID_SimSpeedMode = new("PREFS_SimSpeedMode");
 		static readonly UIHandle ID_ClockSpeedInput = new("PREFS_ClockSpeed");
 
 		static readonly string showGridLabel = "Show grid" + CreateShortcutString("Ctrl+G");
@@ -108,7 +115,9 @@ namespace DLS.Graphics
 				AddSpacing();
 				InputFieldState clockSpeedInputFieldState = MenuHelper.LabeledInputField("Steps per clock tick", labelCol, labelPosCurr, entrySize, ID_ClockSpeedInput, integerInputValidator, settingFieldSize.x, true);
 				AddSpacing();
-				InputFieldState freqState = MenuHelper.LabeledInputField("Steps per second (target)", labelCol, labelPosCurr, entrySize, ID_SimFrequencyField, integerInputValidator, settingFieldSize.x, true);
+				bool maxSpeed = MenuHelper.LabeledOptionsWheel("Speed", labelCol, labelPosCurr, entrySize, ID_SimSpeedMode, SimSpeedOptions, settingFieldSize.x, true) == 1;
+				AddSpacing();
+				InputFieldState freqState = MenuHelper.LabeledInputField(maxSpeed ? "Steps per second (target, unused at Max)" : "Steps per second (target)", labelCol, labelPosCurr, entrySize, ID_SimFrequencyField, integerInputValidator, settingFieldSize.x, true);
 				AddSpacing();
 				// Draw current simulation speed
 				Vector2 tickLabelRight = MenuHelper.DrawLabelSectionOfLabelInputPair(labelPosCurr, entrySize, "Steps per second (current)", labelCol * 0.75f, true);
@@ -118,7 +127,7 @@ namespace DLS.Graphics
 				// Real clock frequency: a clock period is two transitions of "steps per clock tick" steps each
 				int.TryParse(clockSpeedInputFieldState.text, out int stepsPerTickForFreq);
 				double clockHz = stepsPerTickForFreq > 0 && !project.simPaused ? simAvgTicksPerSec_delayedRefreshForUI / (2.0 * stepsPerTickForFreq) : 0;
-				string clockHzString = clockHz >= 1000 ? $"{clockHz / 1000:0.##} kHz" : clockHz >= 10 ? $"{clockHz:0.#} Hz" : $"{clockHz:0.##} Hz";
+				string clockHzString = FormatHz(clockHz);
 				Vector2 freqLabelRight = MenuHelper.DrawLabelSectionOfLabelInputPair(labelPosCurr, entrySize, "Clock frequency (current)", labelCol * 0.75f, true);
 				UI.DrawPanel(freqLabelRight, settingFieldSize, new Color(0.18f, 0.18f, 0.18f), Anchor.CentreRight);
 				UI.DrawText(clockHzString, theme.FontBold, theme.FontSizeRegular, freqLabelRight + new Vector2(inputTextPad - settingFieldSize.x, 0), Anchor.TextCentreLeft, currentSimSpeedStringColour);
@@ -137,7 +146,7 @@ namespace DLS.Graphics
 				// Parse target sim tick rate
 				int.TryParse(freqState.text, out int targetSimTicksPerSecond);
 				targetSimTicksPerSecond = Mathf.Max(1, targetSimTicksPerSecond);
-				if (project.targetTicksPerSecond != targetSimTicksPerSecond || project.simPaused != pauseSim) lastSimTickRateSetTime = Time.time;
+				if (project.description.Prefs_SimTargetStepsPerSecond != targetSimTicksPerSecond || project.description.Prefs_SimMaxSpeed != maxSpeed || project.simPaused != pauseSim) lastSimTickRateSetTime = Time.time;
 
 				// Assign changes immediately so can see them take effect in background
 				project.description.Prefs_MainPinNamesDisplayMode = mainPinNamesMode;
@@ -146,6 +155,7 @@ namespace DLS.Graphics
 				project.description.Prefs_Snapping = snappingMode;
 				project.description.Prefs_StraightWires = straightWireMode;
 				project.description.Prefs_SimTargetStepsPerSecond = targetSimTicksPerSecond;
+				project.description.Prefs_SimMaxSpeed = maxSpeed;
 				project.description.Prefs_SimStepsPerClockTick = clockSpeed;
 				project.description.Prefs_SimPaused = pauseSim;
 
@@ -215,6 +225,7 @@ namespace DLS.Graphics
 			UI.GetWheelSelectorState(ID_Snapping).index = projDesc.Prefs_Snapping;
 			UI.GetWheelSelectorState(ID_StraightWires).index = projDesc.Prefs_StraightWires;
 			UI.GetWheelSelectorState(ID_SimStatus).index = projDesc.Prefs_SimPaused ? 1 : 0;
+			UI.GetWheelSelectorState(ID_SimSpeedMode).index = projDesc.Prefs_SimMaxSpeed ? 1 : 0;
 			// -- Input fields
 			UI.GetInputFieldState(ID_SimFrequencyField).SetText(projDesc.Prefs_SimTargetStepsPerSecond + "", false);
 			UI.GetInputFieldState(ID_ClockSpeedInput).SetText(projDesc.Prefs_SimStepsPerClockTick + "", false);
@@ -257,7 +268,7 @@ namespace DLS.Graphics
 			{
 				simAvgTicksPerSec_delayedRefreshForUI = project.simAvgTicksPerSec;
 				lastSimAvgTicksPerSecRefreshTime = Time.time;
-				currentSimSpeedString = project.simPaused ? "0" : $"{simAvgTicksPerSec_delayedRefreshForUI:0}";
+				currentSimSpeedString = project.simPaused ? "0" : FormatCount(simAvgTicksPerSec_delayedRefreshForUI);
 				currentSimSpeedStringColour = GetSimFrequencyErrorCol();
 			}
 		}
@@ -277,6 +288,10 @@ namespace DLS.Graphics
 			{
 				frequencyErrorCol = new Color(1, 1, 1, 0.35f);
 			}
+			else if (Project.ActiveProject.description.Prefs_SimMaxSpeed)
+			{
+				// no target to miss
+			}
 			else
 			{
 				int simFreqError = Mathf.RoundToInt(Project.ActiveProject.targetTicksPerSecond - (float)Project.ActiveProject.simAvgTicksPerSec);
@@ -286,6 +301,30 @@ namespace DLS.Graphics
 			}
 
 			return frequencyErrorCol;
+		}
+
+		// 999 Hz, 1.5 kHz, 2.36 MHz, 1.2 GHz: the unit changes at each thousand
+		public static string FormatHz(double hz)
+		{
+			var inv = System.Globalization.CultureInfo.InvariantCulture;
+			string[] units = { "Hz", "kHz", "MHz", "GHz" };
+			int u = 0;
+			double v = Math.Max(0, hz);
+			while (u < units.Length - 1 && Math.Round(v, 2) >= 1000) { v /= 1000; u++; } // (999 999 Hz shows "1 MHz", not "1000 kHz")
+			return (u == 0 && v >= 10 ? v.ToString("0.#", inv) : v.ToString("0.##", inv)) + " " + units[u];
+		}
+
+		// 61043200 -> "61 043 200" (readable at a glance)
+		public static string FormatCount(double v)
+		{
+			string s = Math.Round(Math.Max(0, v)).ToString("0", System.Globalization.CultureInfo.InvariantCulture);
+			var sb = new System.Text.StringBuilder();
+			for (int i = 0; i < s.Length; i++)
+			{
+				if (i > 0 && (s.Length - i) % 3 == 0) sb.Append(' ');
+				sb.Append(s[i]);
+			}
+			return sb.ToString();
 		}
 
 		static string CreateShortcutString(string s) => UI.CreateColouredText("  " +s, new Color(1, 1, 1, 0.3f));
