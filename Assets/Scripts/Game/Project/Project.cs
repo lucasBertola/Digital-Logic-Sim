@@ -316,6 +316,11 @@ namespace DLS.Game
 			ClearSelectionFlags(editModeChip);
 			ClearSelectionFlags(devChip);
 
+			// the chip we leave keeps its running memory (RAM, registers...) for when we come back
+			DevChipInstance leaving = editModeChip;
+			if (leaving != null && leaving != devChip && leaving.SimChip != null)
+				RunWithSimulationPaused(() => leaving.LiveMemory = MemorySnapshot.Capture(leaving.SimChip));
+
 			controller = new ChipInteractionController(this);
 			editModeChip = devChip;
 			chipViewStack.Clear();
@@ -323,7 +328,12 @@ namespace DLS.Game
 
 			// Rebuild only the SIM from the live description (sub-chips resolved live) — the DevChipInstance
 			// itself is reused so its undo history survives the switch.
-			devChip.SetSimChip(Simulator.BuildSimChip(DescriptionCreator.CreateChipDescription(devChip), chipLibrary));
+			SimChip built = Simulator.BuildSimChip(DescriptionCreator.CreateChipDescription(devChip), chipLibrary);
+			if (devChip.LiveMemory != null) MemorySnapshot.Apply(built, devChip.LiveMemory); // the memory it had when we left it (ignored if its structure changed)
+			// its input pins go to the sim thread BEFORE its sim does: published only at the next Update, the new sim
+			// ran a while with the previous chip's input list, its inputs read as floating (drawn flickering)
+			inputPins = devChip.GetInputPins();
+			devChip.SetSimChip(built);
 
 			if (devChip.LastSavedDescription != null)
 			{
@@ -793,7 +803,9 @@ namespace DLS.Game
 					simLastMainThreadSyncFrame = mainThreadFrameCount;
 					// Update graphical state from sim
 					// Note: update graphical state even when paused so that subchips are automatically if viewed
-					ViewedChip.UpdateStateFromSim(ViewedSimChip, !CanEditViewedChip);
+					// not before the (re)built sim has been compiled and stepped: until then every pin is "floating" and
+					// would be drawn flickering for the whole compile (the user saw wires change colour for ~2 s)
+					if ((ViewedSimChip.Program != null && ViewedSimChip.Program.SettledAfterBuild) || simPaused) ViewedChip.UpdateStateFromSim(ViewedSimChip, !CanEditViewedChip);
 
 					// Log sim time
 					if (debug_logSimTime)

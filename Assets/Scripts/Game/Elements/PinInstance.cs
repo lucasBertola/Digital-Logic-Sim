@@ -35,7 +35,7 @@ namespace DLS.Game
 
 			IsBusPin = parent is SubChipInstance subchip && subchip.IsBus;
 			faceRight = isSourcePin;
-			PinState.SetAllDisconnectedLow(ref State);
+			State = 0; // a quiet 0 until the sim gives it a value: "disconnected" was drawn flickering on every pin of a chip just opened (user, 2026-10-01)
 		}
 
 		public Vector2 ForwardDir => faceRight ? Vector2.right : Vector2.left;

@@ -33,6 +33,10 @@ namespace DLS.Game
 			UndoController = new UndoController(this);
 		}
 
+		// The memory of this chip's simulation when the user switched to another chip: put back when its sim is
+		// rebuilt, so switching chips never reverts the memory to the last save (null = none / structure changed).
+		public ChipMemoryState LiveMemory;
+
 		public void SetSimChip(SimChip simChip)
 		{
 			hasSimChip = true;
@@ -42,7 +46,9 @@ namespace DLS.Game
 		public void RebuildSimulation()
 		{
 			ChipDescription desc = DescriptionCreator.CreateChipDescription(this);
+			if (hasSimChip && SimChip != null) Project.ActiveProject.RunWithSimulationPaused(() => LiveMemory = MemorySnapshot.Capture(SimChip));
 			SimChip simChip = Simulator.BuildSimChip(desc, Project.ActiveProject.chipLibrary);
+			if (LiveMemory != null) MemorySnapshot.Apply(simChip, LiveMemory); // (ignored when the structure changed)
 			SetSimChip(simChip);
 		}
 

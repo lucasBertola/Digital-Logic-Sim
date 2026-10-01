@@ -19,6 +19,7 @@ namespace DLS.Bench
         {
             ("live project: sim thread computes Add4 from player inputs and syncs the dev pins", () => LiveAdd4(projectDir)),
             ("live project: switching chip keeps the sim thread going (Registre8 loads on the clock)", () => LiveRegister(projectDir)),
+            ("live project: switching chip and back keeps the running memory (RAM word, register) and never draws driven wires as floating", () => LiveSwitchKeepsMemory(projectDir)),
             ("live project: CREATE CHIP through the popup (selection cleared by the click, as in the app), then Ctrl+Z", () => LiveCreateChip(projectDir)),
         };
 
@@ -72,6 +73,82 @@ namespace DLS.Bench
                 return null;
             }
             finally { Close(p); }
+        }
+
+        // User, 2026-10-01: "switching chips, wires change colour for 2 s; are those real values changing my RAM?" —
+        // reproduced: every pin was drawn floating (flicker) until the rebuilt sim had run, and the rebuilt sim
+        // started from the last SAVED memory (an edited RAM word came back to its saved value).
+        static string LiveSwitchKeepsMemory(string projectDir)
+        {
+            Project p = Open(projectDir, "CPU");
+            try
+            {
+                foreach (DevPinInstance d in p.ViewedChip.Elements.OfType<DevPinInstance>().Where(d => d.IsInputPin)) d.Pin.PlayerInputState = 0; // nothing loads: the memory holds
+                // wait until the SIM sees them (not a fixed delay: a cold first run is slower, and an edit made while the
+                // saved Load_A / We_RAM were still 1 got overwritten at the next clock edge — the case failed once that way)
+                if (!Pump(p, () => p.rootSimChip.Program != null && p.rootSimChip.Program.StepsRun > 2000 && p.rootSimChip.InputPins.All(pin => (pin.State & 0xFFFF) == 0), 5000)) return "test setup: the inputs never reached 0 in the sim";
+                Pump(p, () => false, 100);
+                MemoryRules rules = MemoryLayout.ParseRules(MemoryLayoutCases.CpuRulesJson, out _);
+                var pol = new Dictionary<string, int[]>();
+                ChipDescription cpu = p.chipLibrary.GetChipDescription("CPU");
+                foreach (string t in MemoryLayout.BankTypes(cpu, rules, p.chipLibrary)) { string e = MemoryLayout.Verify(t, rules, p.chipLibrary, pol); if (e != null) return "layout: " + e; }
+                List<MemoryBank> Banks() => MemoryLayout.Banks(p.rootSimChip, cpu, rules, pol, p.chipLibrary, out _);
+                uint Read(string bank, int w) { uint v = 0; p.RunWithSimulationPaused(() => v = Banks().First(b => b.Name == bank).Read(w)); return v; }
+
+                uint ram9 = (Read("RAM", 9) ^ 0x5A) & 0xFF, regA = (Read("Registre A", 0) ^ 0x33) & 0xFF;
+                p.RunWithSimulationPaused(() =>
+                {
+                    var bk = Banks();
+                    bk.First(b => b.Name == "RAM").Write(9, ram9, p.rootSimChip.Program);
+                    bk.First(b => b.Name == "Registre A").Write(0, regA, p.rootSimChip.Program);
+                });
+                Pump(p, () => false, 150);
+                { uint r9 = Read("RAM", 9), ra = Read("Registre A", 0); if (r9 != ram9 || ra != regA) return $"test setup: the edit did not hold before switching (RAM[9] {r9} wrote {ram9}, A {ra} wrote {regA})"; }
+
+                p.LoadDevChipOrCreateNewIfDoesntExist("Add4"); // FIRST visit of Add4
+                // no main-thread frame (a slow frame): once Add4's sim has run some steps, it must already have its input
+                // pins (waiting on the steps, not on a fixed delay: a loaded machine compiled late and failed once)
+                var waitSteps = Stopwatch.StartNew();
+                while (!(p.rootSimChip.Program != null && p.rootSimChip.Program.StepsRun >= 20) && waitSteps.ElapsedMilliseconds < 5000) Thread.Sleep(1);
+                int floatingInputs = p.rootSimChip.InputPins.Count(pin => (pin.State >> 16) != 0);
+                if (floatingInputs > 0) { DLS.Simulation.SimProgram pr = p.rootSimChip.Program; return $"{floatingInputs} of Add4's inputs float in its sim until the next frame (it ran with the previous chip's input list) [program {(pr == null ? "null" : "ok")}, steps run {pr?.StepsRun}, input list {(pr?.InputPinsArray == null ? "none" : ((System.Array)pr.InputPinsArray).Length + " pins, found " + pr.InputSimPins.Count(x => x != null))}]"; }
+                string firstVisit = Flicker(p);
+                if (firstVisit != null) return "first visit of Add4: " + firstVisit;
+                p.LoadDevChipOrCreateNewIfDoesntExist("CPU"); // back
+                string comingBack = Flicker(p);
+
+                uint ram9Back = Read("RAM", 9), regABack = Read("Registre A", 0);
+                if (ram9Back != ram9) return $"RAM[9] = {ram9Back} after switching chip and back, the running value was {ram9} (the sim restarted from the saved memory)";
+                if (regABack != regA) return $"Registre A = {regABack} after switching chip and back, the running value was {regA}";
+                return comingBack == null ? null : "back on the CPU: " + comingBack;
+            }
+            finally { Close(p); }
+        }
+
+        // every frame after a switch: pins drawn floating (tristate flags reach the display) that are driven once settled
+        static string Flicker(Project p)
+        {
+            var flaggedEarly = new HashSet<PinInstance>();
+            var sw = Stopwatch.StartNew();
+            while (sw.ElapsedMilliseconds < 800)
+            {
+                p.TickMainThreadForTests();
+                Thread.Sleep(2);
+                foreach (PinInstance pin in AllPins(p)) if ((pin.State >> 16) != 0) flaggedEarly.Add(pin);
+            }
+            Pump(p, () => false, 300);
+            var floatingSettled = new HashSet<PinInstance>(AllPins(p).Where(pin => (pin.State >> 16) != 0));
+            var wrong = flaggedEarly.Where(pin => !floatingSettled.Contains(pin)).ToList();
+            return wrong.Count == 0 ? null : $"{wrong.Count} driven pins were drawn floating (flicker) before the new sim had settled: " + string.Join(", ", wrong.Take(8).Select(pin => $"{(pin.parent is SubChipInstance sc ? (string.IsNullOrEmpty(sc.Label) ? sc.Description.Name : sc.Label) : "pin")}.{pin.Name}"));
+        }
+
+        static IEnumerable<PinInstance> AllPins(Project p)
+        {
+            foreach (IMoveable e in p.ViewedChip.Elements)
+            {
+                if (e is SubChipInstance s) { foreach (PinInstance pin in s.InputPins) yield return pin; foreach (PinInstance pin in s.OutputPins) yield return pin; }
+                else if (e is DevPinInstance d) yield return d.Pin;
+            }
         }
 
         static string LiveCreateChip(string projectDir)

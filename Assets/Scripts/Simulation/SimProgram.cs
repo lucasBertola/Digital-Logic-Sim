@@ -758,8 +758,22 @@ namespace DLS.Simulation
 			return t;
 		}
 
+		// real steps run by this program, and "nothing is pending": the display waits for one of them after a
+		// rebuild (the first steps are the circuit settling from its restored state, not values worth showing)
+		public long StepsRun;
+		public bool NothingPending
+		{
+			get
+			{
+				foreach (ulong w in dirty) if (w != 0) return false;
+				return true;
+			}
+		}
+		public bool SettledAfterBuild => StepsRun >= 64 || (StepsRun > 0 && NothingPending);
+
 		public unsafe void Step(SimAudio audio)
 		{
+			StepsRun++;
 			int gc = gateCount;
 			if (gc == 0) return;
 			uint[] states = this.states;

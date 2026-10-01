@@ -54,6 +54,7 @@ namespace DLS.Simulation
 			{
 				uint s = State;
 				if ((s >> 16) == 0) return s;
+				if (stateArray == null) return s & 0xFFFF; // not compiled yet (sim paused right after a rebuild): no value is known to float
 				bool[] q = quietArray;
 				return q != null && stateArray != null && stateIndex < q.Length && q[stateIndex] ? 0u : s;
 			}
