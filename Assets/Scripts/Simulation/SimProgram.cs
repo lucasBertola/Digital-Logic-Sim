@@ -897,7 +897,7 @@ namespace DLS.Simulation
 			// (noise re-draws due during the span are not an event: their budget accrues and they are all applied at
 			// the next real step — a re-draw moved by half a clock period is still "a few times a second")
 			int span = maxSteps;
-			if (clockGates.Length > 0 && Simulator.forcedClockState < 0)
+			if (Simulator.forcedClockState < 0 && AnyClockRunning())
 			{
 				int period = Simulator.stepsPerClockTransition;
 				if (period <= 0) return 0;
@@ -908,6 +908,17 @@ namespace DLS.Simulation
 				span = Math.Min(span, untilClock);
 			}
 			return span < 0 ? 0 : span;
+		}
+
+		// a clock stopped by the user (TURN OFF) never changes level by itself: it must not cut the idle spans
+		bool AnyClockRunning()
+		{
+			foreach (int g in clockGates)
+			{
+				uint[] cs = internalState[g];
+				if (cs.Length < 2 || cs[0] == 0) return true;
+			}
+			return false;
 		}
 
 		// The state after `steps` idle steps is the same as now; only the noise budget accrues.

@@ -19,6 +19,7 @@ namespace DLS.Bench
             ("clock stopped: a stopped clock saved in the chip is stopped when the chip is built", FromDescription),
             ("clock stopped: the state is saved with the chip, a running clock saves exactly as before", SaveRoundTrip),
             ("clock stopped: a test driving the clocks (forcedClockState) still drives it", ForcedWins),
+            ("clock stopped: it does not force a real step every clock period (idle spans are not cut)", NoRealStepsWhenStopped),
         };
 
         static UnitCases.Circuit ClockCircuit(uint[] data = null) => UnitCases.Build("t_clock_stop", new string[0], new[] { "C" }, b =>
@@ -102,6 +103,24 @@ namespace DLS.Bench
                 if (!UnsavedChangeDetector.IsEquivalentJson(Saver.CreateSerializedChipDescription(c.desc), Saver.CreateSerializedChipDescription(back))) return $"chip with clock {want} does not reload clean";
             }
             return null;
+        }
+
+        static string NoRealStepsWhenStopped()
+        {
+            var c = ClockCircuit(new uint[] { 1, 0 });
+            Simulator.stepsPerClockTransition = 10;
+            Simulator.forcedClockState = -1;
+            c.StepBatched(100);
+            long before = Simulator.RealSteps;
+            int n = c.StepBatched(100000);
+            long real = Simulator.RealSteps - before;
+            if (real > n / 100) return $"{real} real steps over {n} idle steps with the clock stopped (it cut the spans at every period of 10)";
+            // and a running clock still does (its edges are real steps)
+            Clock(c).UpdateInternalState(new uint[] { 0, 0 });
+            before = Simulator.RealSteps;
+            n = c.StepBatched(10000);
+            real = Simulator.RealSteps - before;
+            return real >= n / 10 ? null : $"running clock: only {real} real steps over {n} (period 10: an edge every 10 steps)";
         }
 
         static string ForcedWins()
