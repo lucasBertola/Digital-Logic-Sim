@@ -362,6 +362,7 @@ namespace DLS.Game
 				FastBuilder.Build(c, lib, back, inst);
 				return inst.Count > 0 && back.Entries.Count() == cache.Entries.Count() ? null : $"cache round trip: {back.Entries.Count()} of {cache.Entries.Count()} entries, {inst.Count} models";
 			});
+			report.AppendLine("      burst experiment: " + BurstBench.Run());
 			Check("memory editor: cache JSON round trip", () =>
 			{
 				var c = new Dictionary<string, MemoryLayout.CacheEntry> { ["CPU"] = new MemoryLayout.CacheEntry { hash = "h", rules = rules, polarity = pol } };
