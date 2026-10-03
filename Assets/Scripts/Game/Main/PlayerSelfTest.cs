@@ -319,6 +319,19 @@ namespace DLS.Game
 				uint st = CircuitTester.TargetOf(r).OutputPins[0].State;
 				return (st >> 16) == 0 ? null : $"OUT floats (state {st:X8})";
 			});
+			Check("a chip saved with a new interface: the chips using it lose the removed pin's wires, keep a re-created one's", () =>
+			{
+				lib.TryGetChipDescription("FullA", out ChipDescription fa);
+				lib.TryGetChipDescription("Add4", out ChipDescription add4);
+				ChipDescription faNew = Serializer.DeserializeChipDescription(Serializer.SerializeChipDescription(fa));
+				int cin = fa.InputPins.First(x => x.Name == "C_in").ID, a0 = fa.InputPins.First(x => x.Name == "A0").ID;
+				faNew.InputPins = faNew.InputPins.Where(x => x.Name != "C_in").Select(x => { if (x.Name == "A0") x.ID = 777; return x; }).ToArray();
+				ChipDescription r = ChipInterfaceUpdate.Apply(add4, "FullA", fa, faNew, out bool changed);
+				var faIDs = new HashSet<int>(add4.SubChips.Where(s => s.Name == "FullA").Select(s => s.ID));
+				int To(ChipDescription d, int pin) => d.Wires.Count(w => faIDs.Contains(w.TargetPinAddress.PinOwnerID) && w.TargetPinAddress.PinID == pin);
+				if (!changed || To(r, cin) != 0) return "wires to the removed C_in kept";
+				return To(r, 777) == To(add4, a0) && To(add4, a0) > 0 ? null : "the re-created A0 lost its wires";
+			});
 			Check("memory editor: cache JSON round trip", () =>
 			{
 				var c = new Dictionary<string, MemoryLayout.CacheEntry> { ["CPU"] = new MemoryLayout.CacheEntry { hash = "h", rules = rules, polarity = pol } };

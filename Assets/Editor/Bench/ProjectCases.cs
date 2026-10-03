@@ -21,6 +21,8 @@ namespace DLS.Bench
             ("live project: switching chip keeps the sim thread going (Registre8 loads on the clock)", () => LiveRegister(projectDir)),
             ("live project: switching chip and back keeps the running memory (RAM word, register) and never draws driven wires as floating", () => LiveSwitchKeepsMemory(projectDir)),
             ("live project: switching fast through never-visited chips never stops or breaks the sim thread", () => LiveManySwitches(projectDir)),
+            ("live project: a chip's new interface reaches the chips using it when it is SAVED (removed pin unwired, same-name pin kept, new pin shown, no star)", () => LiveInterfaceChange(projectDir)),
+            ("live project: a parent with its own unsaved edits keeps them (and its star) when a chip it uses is saved with a new interface", () => LiveInterfaceDirtyParent(projectDir)),
             ("live project: CREATE CHIP through the popup (selection cleared by the click, as in the app), then Ctrl+Z", () => LiveCreateChip(projectDir)),
         };
 
@@ -164,6 +166,112 @@ namespace DLS.Bench
                 return p.simThreadExceptions == 0 ? null : $"{p.simThreadExceptions} exception(s) in the sim thread while switching chips (see the log)";
             }
             finally { Close(p); }
+        }
+
+        // User, 2026-10-03: "I edit a chip (remove an input, add another), go to the chips using it: I still see it as it
+        // was, and unwired". At the save of the edited chip, its users (open or not) must show its new interface: a
+        // removed pin's wires go, a pin re-created with the SAME name keeps them, a new pin appears; no red star.
+        static string LiveInterfaceChange(string projectDir)
+        {
+            const string tmpName = "_BenchInterface";
+            string tmpDir = SavePaths.GetProjectPath(tmpName);
+            if (Directory.Exists(tmpDir)) Directory.Delete(tmpDir, true);
+            CopyDir(projectDir, tmpDir);
+            Project p = Open(tmpDir, "Add4", tmpName);
+            try
+            {
+                SubChipInstance[] FullAs() => p.ViewedChip.Elements.OfType<SubChipInstance>().Where(s => s.Description.Name == "FullA").ToArray();
+                int WiresTo(string pinName) => p.ViewedChip.Wires.Count(w => w.TargetPin.parent is SubChipInstance s && s.Description.Name == "FullA" && w.TargetPin.Name == pinName);
+                int a1Before = WiresTo("A1"), a0Before = WiresTo("A0"), cinBefore = WiresTo("C_in");
+                if (a1Before == 0 || cinBefore == 0) return "test setup: Add4 should wire FullA's A1 and C_in";
+
+                // in FullA: remove C_in, remove A0 and re-create it with the same name, add NEW (nothing saved yet)
+                p.LoadDevChipOrCreateNewIfDoesntExist("FullA");
+                DevChipInstance fa = p.ViewedChip;
+                DevPinInstance Pin(string n) => fa.Elements.OfType<DevPinInstance>().First(d => d.IsInputPin && d.Name == n);
+                fa.DeleteDevPin(Pin("C_in"));
+                DevPinInstance a0 = Pin("A0");
+                var a0Desc = new PinDescription("A0", IDGenerator.GenerateNewElementID(fa), a0.Position, PinBitCount.Bit1, PinColour.Red, PinValueDisplayMode.Off);
+                fa.DeleteDevPin(a0);
+                fa.AddNewDevPin(new DevPinInstance(a0Desc, true), false);
+                fa.AddNewDevPin(new DevPinInstance(new PinDescription("NEW", IDGenerator.GenerateNewElementID(fa), new UnityEngine.Vector2(-8, -3), PinBitCount.Bit1, PinColour.Red, PinValueDisplayMode.Off), true), false);
+                p.SaveFromDescription(DescriptionCreator.CreateChipDescription(fa));
+
+                p.LoadDevChipOrCreateNewIfDoesntExist("Add4");
+                foreach (SubChipInstance s in FullAs())
+                {
+                    string names = string.Join(",", s.InputPins.Select(x => x.Name).OrderBy(x => x));
+                    if (names != "A0,A1,NEW") return $"Add4 (open) shows FullA with inputs {names} after the save, expected A0,A1,NEW";
+                }
+                if (WiresTo("C_in") != 0) return "a wire to the removed C_in is still there";
+                if (WiresTo("A1") != a1Before) return $"wires to A1: {WiresTo("A1")}, were {a1Before}";
+                if (WiresTo("A0") != a0Before) return $"wires to A0 (re-created with the same name): {WiresTo("A0")}, were {a0Before}";
+                if (p.IsChipDirty("Add4")) return "Add4 got a red star from FullA's save";
+                Close(p);
+
+                // reopened from the files: the same
+                p = Open(tmpDir, "Add4", tmpName);
+                foreach (SubChipInstance s in FullAs())
+                {
+                    string names = string.Join(",", s.InputPins.Select(x => x.Name).OrderBy(x => x));
+                    if (names != "A0,A1,NEW") return $"Add4 (reopened) shows FullA with inputs {names}";
+                }
+                if (WiresTo("A0") != a0Before || WiresTo("A1") != a1Before || WiresTo("C_in") != 0) return "Add4 (reopened): wires not as expected";
+                if (p.ActiveChipHasUnsavedChanges()) return "Add4 (reopened) shows a red star";
+                return null;
+            }
+            finally
+            {
+                Close(p);
+                if (Directory.Exists(tmpDir)) Directory.Delete(tmpDir, true);
+            }
+        }
+
+        static string LiveInterfaceDirtyParent(string projectDir)
+        {
+            const string tmpName = "_BenchInterface2";
+            string tmpDir = SavePaths.GetProjectPath(tmpName);
+            if (Directory.Exists(tmpDir)) Directory.Delete(tmpDir, true);
+            CopyDir(projectDir, tmpDir);
+            Project p = Open(tmpDir, "Add4", tmpName);
+            try
+            {
+                // Add4's own unsaved edit: its XOR deleted
+                SubChipInstance xor = p.ViewedChip.Elements.OfType<SubChipInstance>().First(s => s.Description.Name == "XOR");
+                p.ViewedChip.DeleteSubChip(xor);
+                if (!p.IsChipDirty("Add4")) return "test setup: Add4 should be dirty";
+
+                p.LoadDevChipOrCreateNewIfDoesntExist("FullA");
+                DevChipInstance fa = p.ViewedChip;
+                fa.DeleteDevPin(fa.Elements.OfType<DevPinInstance>().First(d => d.IsInputPin && d.Name == "C_in"));
+                p.SaveFromDescription(DescriptionCreator.CreateChipDescription(fa));
+
+                p.LoadDevChipOrCreateNewIfDoesntExist("Add4");
+                if (p.ViewedChip.Elements.OfType<SubChipInstance>().Any(s => s.Description.Name == "XOR")) return "Add4's own unsaved edit (XOR deleted) was lost";
+                if (!p.IsChipDirty("Add4")) return "Add4 lost its red star (its own edit is still unsaved)";
+                if (p.ViewedChip.Elements.OfType<SubChipInstance>().Where(s => s.Description.Name == "FullA").Any(s => s.InputPins.Any(x => x.Name == "C_in"))) return "Add4 still shows FullA's removed C_in";
+                // on disk: the interface change, but NOT Add4's own unsaved edit
+                ChipDescription onDisk = Serializer.DeserializeChipDescription(File.ReadAllText(Path.Combine(tmpDir, "Chips", "Add4.json")));
+                if (!onDisk.SubChips.Any(s => s.Name == "XOR")) return "Add4's unsaved edit was written to its file";
+                ChipDescription faSaved = p.chipLibrary.GetChipDescription("FullA");
+                var faIDs = new HashSet<int>(onDisk.SubChips.Where(s => s.Name == "FullA").Select(s => s.ID));
+                var faPins = new HashSet<int>(faSaved.InputPins.Concat(faSaved.OutputPins).Select(x => x.ID));
+                if (onDisk.Wires.Any(w => (faIDs.Contains(w.TargetPinAddress.PinOwnerID) && !faPins.Contains(w.TargetPinAddress.PinID)) || (faIDs.Contains(w.SourcePinAddress.PinOwnerID) && !faPins.Contains(w.SourcePinAddress.PinID))))
+                    return "Add4's file still has a wire to a pin FullA no longer has";
+                return null;
+            }
+            finally
+            {
+                Close(p);
+                if (Directory.Exists(tmpDir)) Directory.Delete(tmpDir, true);
+            }
+        }
+
+        static void CopyDir(string from, string to)
+        {
+            Directory.CreateDirectory(to);
+            foreach (string f in Directory.GetFiles(from)) File.Copy(f, Path.Combine(to, Path.GetFileName(f)));
+            foreach (string d in Directory.GetDirectories(from)) CopyDir(d, Path.Combine(to, Path.GetFileName(d)));
         }
 
         static IEnumerable<PinInstance> AllPins(Project p)

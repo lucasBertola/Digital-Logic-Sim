@@ -194,7 +194,8 @@ namespace DLS.Game
 
 			// If this chip hasn't been saved before, it can't have been used anyway so no need to update anything
 			// (same thing if saving a new version of it)
-			if (ViewedChip.LastSavedDescription != null && saveMode != SaveMode.SaveAs)
+			// (a rename updates the chips using it here; a normal save updates them after the save, see PropagateInterface)
+			if (ViewedChip.LastSavedDescription != null && saveMode == SaveMode.Rename)
 			{
 				UpdateAndSaveAffectedChips(ViewedChip.LastSavedDescription, saveChipDescription, false);
 			}
@@ -237,7 +238,8 @@ namespace DLS.Game
 				RecordVisit(saveChipDescription.Name);
 			}
 
-			ReconcileOpenChipsAfterSave(saveChipDescription.Name, oldSavedBaseline, saveChipDescription);
+			if (saveMode == SaveMode.Rename) ReconcileOpenChipsAfterSave(saveChipDescription.Name, oldSavedBaseline, saveChipDescription);
+			else if (saveMode == SaveMode.Normal && oldSavedBaseline != null) PropagateInterface(saveChipDescription.Name, oldSavedBaseline, saveChipDescription);
 
 			// The user saved: persist the Ask Claude conversation alongside the project so it can be resumed.
 			AskClaude.SaveForProject(description.ProjectName);
@@ -439,6 +441,44 @@ namespace DLS.Game
 
 		// After saving a chip whose pins changed, remove now-dangling wires (to removed pins of that chip)
 		// from every OPEN chip that uses it, so parents don't keep broken connections.
+		// The saved chip's interface reaches every chip using it (user, 2026-10-03: "changes in the others happen at the
+		// save"): files of the chips using it are updated (ChipInterfaceUpdate: removed pins unwired, same-name pins
+		// kept, new pins shown), and the ones open in memory are reloaded with the new interface — keeping their own
+		// unsaved edits, and getting no red star from this when they had none.
+		void PropagateInterface(string childName, ChipDescription oldChild, ChipDescription newChild)
+		{
+			var parents = new HashSet<string>(chipLibrary.GetDirectParentChips(childName).Select(d => d.Name), ChipDescription.NameComparer);
+			foreach (var kv in openChips)
+				if (kv.Value != editModeChip && (DescriptionCreator.CreateChipDescription(kv.Value).SubChips ?? Array.Empty<SubChipDescription>()).Any(s => ChipDescription.NameMatch(s.Name, childName)))
+					parents.Add(kv.Key);
+			parents.RemoveWhere(n => ChipDescription.NameMatch(n, childName));
+
+			foreach (string parentName in parents)
+			{
+				bool onDisk = chipLibrary.TryGetChipDescription(parentName, out ChipDescription saved);
+				bool savedChanged = false;
+				ChipDescription savedNew = onDisk ? ChipInterfaceUpdate.Apply(saved, childName, oldChild, newChild, out savedChanged) : null;
+				bool writeSaved = onDisk && savedChanged;
+
+				if (openChips.TryGetValue(parentName, out DevChipInstance dc) && dc != editModeChip)
+				{
+					bool wasDirty = IsDirty(dc);
+					ChipDescription live = ChipInterfaceUpdate.Apply(DescriptionCreator.CreateChipDescription(dc), childName, oldChild, newChild, out _);
+					if (!wasDirty && onDisk) { savedNew = live; writeSaved = true; } // nothing of its own unsaved: the file follows exactly
+					if (writeSaved) { Saver.SaveChip(savedNew, description.ProjectName); chipLibrary.NotifyChipSaved(savedNew); }
+					(DevChipInstance fresh, bool _) = DevChipInstance.LoadFromDescriptionTest(live, chipLibrary);
+					fresh.LastSavedDescription = chipLibrary.TryGetChipDescription(parentName, out ChipDescription baseline) ? baseline : dc.LastSavedDescription;
+					fresh.LiveMemory = dc.LiveMemory;
+					openChips[parentName] = fresh; // (its undo history goes: it referred to the old interface)
+				}
+				else if (writeSaved)
+				{
+					Saver.SaveChip(savedNew, description.ProjectName);
+					chipLibrary.NotifyChipSaved(savedNew);
+				}
+			}
+		}
+
 		void ReconcileOpenChipsAfterSave(string chipName, ChipDescription oldDesc, ChipDescription newDesc)
 		{
 			if (oldDesc == null || newDesc == null) return;

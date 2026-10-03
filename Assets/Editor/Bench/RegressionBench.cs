@@ -100,6 +100,7 @@ namespace DLS.Bench
                         cases.AddRange(SpeedPrefsCases.All());
                         cases.AddRange(TranscriptCopyCases.All());
                         cases.AddRange(UnconnectedCases.All());
+                        cases.AddRange(ChipInterfaceCases.All());
                         cases.AddRange(MemoryMergeCases.All(lib, chips));
                         serial.AddRange(ProjectCases.All(dir));
                         serial.Add(SpeedPrefsCases.Live(dir));
