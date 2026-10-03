@@ -15,7 +15,7 @@ namespace DLS.Simulation
 		public byte* quiet, armed;
 	}
 
-	// The hot part of a step compiled by Burst (branch burst-experiment): it runs the pending NAND / NAND+inverter /
+	// The hot part of a step compiled by Burst: it runs the pending NAND / NAND+inverter /
 	// no-op gates in schedule order exactly like the managed loop, and stops at the first gate it cannot run (any
 	// other builtin, a gate in the noise list, a NAND reading a floating line that is not quiet) with that gate's
 	// dirty bit still set; SimProgram runs it, then calls again from the position after it. Same order, same marks,
