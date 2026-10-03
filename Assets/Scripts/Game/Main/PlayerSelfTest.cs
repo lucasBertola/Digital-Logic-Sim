@@ -390,7 +390,8 @@ namespace DLS.Game
 				return inst.Count > 0 && back.Entries.Count() == cache.Entries.Count() ? null : $"cache round trip: {back.Entries.Count()} of {cache.Entries.Count()} entries, {inst.Count} models";
 			});
 			report.AppendLine("      burst experiment: " + BurstBench.Run());
-			Check("burst stepper = managed stepper in the built player (CPU, every slot, 1500 steps)", () =>
+			foreach (bool fastTree in new[] { false, true })
+			Check(fastTree ? "burst stepper = managed stepper in the built player (CPU RUN FAST tree: models in the kernel, every slot, 1500 steps)" : "burst stepper = managed stepper in the built player (CPU, every slot, 1500 steps)", () =>
 			{
 				lib.TryGetChipDescription("CPU", out ChipDescription c);
 				var traces = new List<uint[]>[2];
@@ -399,7 +400,7 @@ namespace DLS.Game
 					SimProgram.UseBurst = pass == 1;
 					try
 					{
-						SimChip root = Simulator.BuildSimChip(c, lib);
+						SimChip root = fastTree ? FastBuilder.Build(c, lib, new FastCache(), new List<FastBuilder.Instance>()) : Simulator.BuildSimChip(c, lib);
 						Simulator.ResetForTests(77);
 						var rnd = new System.Random(5);
 						traces[pass] = new List<uint[]>();
@@ -414,7 +415,7 @@ namespace DLS.Game
 					finally { SimProgram.UseBurst = true; Simulator.forcedClockState = -1; Simulator.ClearTestSeed(); }
 				}
 				for (int s = 0; s < 1500; s++) if (!traces[0][s].SequenceEqual(traces[1][s])) return "states differ at step " + s;
-				return null;
+				return SimKernel.CompiledByBurst() == 1 ? null : "the kernel is not compiled by Burst in the player";
 			});
 			report.AppendLine("      burst on the CPU, batched like the sim thread: " + BurstCpuRate());
 			Check("memory editor: cache JSON round trip", () =>
