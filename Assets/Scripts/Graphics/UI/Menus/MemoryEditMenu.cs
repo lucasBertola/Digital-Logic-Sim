@@ -528,11 +528,11 @@ namespace DLS.Graphics
 		}
 
 		// Ctrl+V of several lines in a word, or PASTE: the lines fill that word and the following ones
-		public static void PasteFrom(int start)
+		public static void PasteFrom(int start, string text = null)
 		{
 			StoreFields();
 			int bits = banks[bankIndex].Bits;
-			List<uint> values = ParsePasted(InputHelper.GetClipboardContents(), bits, mode, out string error);
+			List<uint> values = ParsePasted(text ?? InputHelper.GetClipboardContents(), bits, mode, out string error);
 			int n = 0;
 			for (; n < values.Count && start + n < rowIDs.Length; n++)
 			{
@@ -547,11 +547,8 @@ namespace DLS.Graphics
 
 		// test hooks
 		public static void FocusForTests(int row) { lastFocusedRow = row; }
-		public static void PasteForTests(string clipboard)
-		{
-			InputHelper.CopyToClipboard(clipboard);
-			PasteFrom(lastFocusedRow);
-		}
+		// (the text is handed over directly: the OS clipboard is shared with every other program and made the bench flaky)
+		public static void PasteForTests(string clipboard) => PasteFrom(lastFocusedRow, clipboard);
 
 		static void Save()
 		{
