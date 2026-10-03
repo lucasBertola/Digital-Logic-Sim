@@ -288,6 +288,37 @@ namespace DLS.Game
 				var v = DLS.Graphics.MemoryEditMenu.ParsePasted(program, 24, 0, out string err);
 				return err == null && v.Count == 5 && v[0] == 0x500005 && v[4] == 0x300000 ? null : $"{v.Count} words, {err}";
 			});
+			Check("an unconnected input through a MERGE 1->4 is a driven 0 (the user's ALU4 shifters)", () =>
+			{
+				ChipDescription merge = lib.GetChipDescription(ChipTypeHelper.GetName(ChipType.Merge_1To4Bit));
+				int next = 1;
+				PinDescription[] ins = ChipEmitHelper.MakePins(new[] { "C_in", "A3", "A2", "A1" }, true, ref next);
+				PinDescription[] outs = ChipEmitHelper.MakePins(new[] { "OUT" }, false, ref next);
+				outs[0].BitCount = PinBitCount.Bit4;
+				var subs = new List<SubChipDescription>();
+				int m = ChipEmitHelper.AddSubChip(subs, ref next, merge.Name, ChipType.Merge_1To4Bit);
+				var wires = new List<WireDescription>();
+				for (int i = 0; i < 4; i++) wires.Add(ChipEmitHelper.Wire(new PinAddress(ins[i].ID, 0), new PinAddress(m, merge.InputPins[i].ID)));
+				wires.Add(ChipEmitHelper.Wire(new PinAddress(m, merge.OutputPins[0].ID), new PinAddress(outs[0].ID, 0)));
+				ChipDescription shifter = ChipEmitHelper.Assemble("SELFTEST SHIFT", Color.gray, NameDisplayLocation.Centre, Vector2.zero, ins, outs, subs, wires);
+				lib.NotifyChipSaved(shifter); // this self-test's own library, nothing is written
+				// a parent that leaves C_in unconnected and drives A3..A1
+				next = 1;
+				PinDescription[] pIns = ChipEmitHelper.MakePins(new[] { "A3", "A2", "A1" }, true, ref next);
+				PinDescription[] pOuts = ChipEmitHelper.MakePins(new[] { "OUT" }, false, ref next);
+				pOuts[0].BitCount = PinBitCount.Bit4;
+				var pSubs = new List<SubChipDescription>();
+				int s = ChipEmitHelper.AddSubChip(pSubs, ref next, shifter.Name, ChipType.Custom);
+				var pWires = new List<WireDescription>();
+				for (int i = 0; i < 3; i++) pWires.Add(ChipEmitHelper.Wire(new PinAddress(pIns[i].ID, 0), new PinAddress(s, ins[i + 1].ID)));
+				pWires.Add(ChipEmitHelper.Wire(new PinAddress(s, outs[0].ID), new PinAddress(pOuts[0].ID, 0)));
+				ChipDescription parent = ChipEmitHelper.Assemble("SELFTEST PARENT", Color.gray, NameDisplayLocation.Centre, Vector2.zero, pIns, pOuts, pSubs, pWires);
+				SimChip r = CircuitTester.BuildIsolatedSim(parent, lib);
+				for (int i = 0; i < 3; i++) r.InputPins[i].State = PinState.Make(1, 0);
+				for (int k = 0; k < 2000; k++) Simulator.RunSimulationStep(r, Array.Empty<DevPinInstance>(), new SimAudio());
+				uint st = CircuitTester.TargetOf(r).OutputPins[0].State;
+				return (st >> 16) == 0 ? null : $"OUT floats (state {st:X8})";
+			});
 			Check("memory editor: cache JSON round trip", () =>
 			{
 				var c = new Dictionary<string, MemoryLayout.CacheEntry> { ["CPU"] = new MemoryLayout.CacheEntry { hash = "h", rules = rules, polarity = pol } };

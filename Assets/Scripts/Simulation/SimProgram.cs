@@ -211,7 +211,7 @@ namespace DLS.Simulation
 				if (isDriver[i] || aliasOf[i] >= 0) continue;
 				if (nSrc[i] >= 2) isDriver[i] = true;                 // merge node
 				else if (nSrc[i] == 1) aliasOf[i] = srcList[srcStart[i]];
-				else { isDriver[i] = true; isConstant[i] = true; }     // unconnected: floating, low, forever
+				else { isDriver[i] = true; isConstant[i] = true; }     // unconnected: a quiet driven 0, forever
 			}
 
 			int[] slotOf = new int[n];
@@ -370,7 +370,9 @@ namespace DLS.Simulation
 			// ---- state slots ----
 			uint[] states = previous != null && previous.states.Length >= nextSlot ? previous.states : new uint[nextSlot + nextSlot / 4 + 64];
 			for (int i = 0; i < n; i++)
-				if (isDriver[i]) states[slotOf[i]] = isConstant[i] ? PinState.FloatingLow : old[i];
+				// an undriven pin holds a DRIVEN 0: "floating low" was read as 0 by logic, but a merge / split / enabled
+				// buffer copied its floating flag along (the user's ALU4: an unconnected C_in made a 4-bit OUT flicker)
+				if (isDriver[i]) states[slotOf[i]] = isConstant[i] ? PinState.LogicLow : old[i];
 			prog.states = states;
 			for (int i = 0; i < n; i++)
 			{
