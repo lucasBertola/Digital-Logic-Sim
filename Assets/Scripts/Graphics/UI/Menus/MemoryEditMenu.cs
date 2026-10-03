@@ -53,6 +53,7 @@ namespace DLS.Graphics
 			message = null;
 			chip = ContextMenu.interactionContext as SubChipInstance;
 			Project project = Project.ActiveProject;
+			project?.StopFastMode(); // the memory edited is the gates
 			if (chip == null || project == null) { Fail("Nothing to edit."); return; }
 			chipDesc = project.chipLibrary.GetChipDescriptionForSim(chip.Description.Name) ?? chip.Description;
 			liveChip = null;

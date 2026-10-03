@@ -349,6 +349,19 @@ namespace DLS.Game
 				string grid = CircuitTester.ReadLcdGrid(t);
 				return grid.Split('\n').Length == 16 ? null : "the text rendering for Claude is not 16 lines";
 			});
+			Check("RUN FAST: the CPU's fast tree gives the gates' outputs, cycle after cycle; the cache survives its file", () =>
+			{
+				lib.TryGetChipDescription("CPU", out ChipDescription c);
+				var cache = new FastCache();
+				uint[] ins = c.InputPins.Select(x => x.InputState).ToArray();
+				string diff = FastVerify.Compare(c, lib, cache, 70, 200, ins);
+				if (diff != null) return "gates and fast mode differ at " + diff;
+				var back = new FastCache();
+				FastCacheFile.FromJson(FastCacheFile.ToJson(cache), back);
+				var inst = new List<FastBuilder.Instance>();
+				FastBuilder.Build(c, lib, back, inst);
+				return inst.Count > 0 && back.Entries.Count() == cache.Entries.Count() ? null : $"cache round trip: {back.Entries.Count()} of {cache.Entries.Count()} entries, {inst.Count} models";
+			});
 			Check("memory editor: cache JSON round trip", () =>
 			{
 				var c = new Dictionary<string, MemoryLayout.CacheEntry> { ["CPU"] = new MemoryLayout.CacheEntry { hash = "h", rules = rules, polarity = pol } };

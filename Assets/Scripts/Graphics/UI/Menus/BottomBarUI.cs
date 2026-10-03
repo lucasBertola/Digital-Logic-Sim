@@ -117,6 +117,7 @@ namespace DLS.Graphics
 			if (AskClaude.ConsumeCancelled()) ShowToast("Claude: cancelled, changes reverted");
 			if (AskClaude.ConsumeQuickTurnFinished(out string quickSummary)) ShowToast(quickSummary);
 			DrawClaudeBusyIndicator();
+			DrawFastModeIndicator();
 			DrawToast();
 
 			if (UIDrawer.ActiveMenu == UIDrawer.MenuType.BottomBarMenuPopup)
@@ -642,6 +643,23 @@ namespace DLS.Graphics
 			}
 
 			UI.DrawText(label, theme.FontRegular, theme.FontSizeRegular, spin + Vector2.right * (spinnerW / 2f), Anchor.TextCentreLeft, Color.white);
+		}
+
+		// RUN FAST: a pill at the top while the chip runs fast (or is being prepared), and its status as a toast
+		static string lastFastStatus;
+		static void DrawFastModeIndicator()
+		{
+			Project p = Project.ActiveProject;
+			if (p == null) return;
+			if (p.FastModeStatus != lastFastStatus) { lastFastStatus = p.FastModeStatus; if (!string.IsNullOrEmpty(lastFastStatus)) ShowToast(lastFastStatus); }
+			if (!p.FastModeActive && !p.FastModePreparing) return;
+			DrawSettings.UIThemeDLS theme = DrawSettings.ActiveUITheme;
+			string label = p.FastModePreparing ? "Preparing fast mode..." : $"FAST MODE  ({p.FastModeModules} modules)  -  right-click > STOP FAST";
+			float w = Draw.CalculateTextBoundsSize(label, theme.FontSizeRegular, theme.FontRegular).x + 2f;
+			const float h = 2.2f;
+			Vector2 centre = new(UI.Width / 2f, UI.Height - 0.5f - h / 2f - (AskClaude.Waiting && !AskClaudeMenu.IsOpen ? h + 0.4f : 0));
+			UI.DrawPanel(centre, new Vector2(w, h), new Color(0.35f, 0.18f, 0.02f, 0.92f));
+			UI.DrawText(label, theme.FontRegular, theme.FontSizeRegular, centre, Anchor.TextCentre, new Color(1f, 0.85f, 0.4f));
 		}
 
 		static void DrawToast()

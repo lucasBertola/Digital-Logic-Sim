@@ -23,6 +23,7 @@ namespace DLS.Bench
             ("live project: switching fast through never-visited chips never stops or breaks the sim thread", () => LiveManySwitches(projectDir)),
             ("live project: a chip's new interface reaches the chips using it when it is SAVED (removed pin unwired, same-name pin kept, new pin shown, no star)", () => LiveInterfaceChange(projectDir)),
             ("live project: a parent with its own unsaved edits keeps them (and its star) when a chip it uses is saved with a new interface", () => LiveInterfaceDirtyParent(projectDir)),
+            ("live project: RUN FAST takes the state over, runs, leaves on an edit or a chip switch, and gives the state back to the gates", () => LiveRunFast(projectDir)),
             ("live project: CREATE CHIP through the popup (selection cleared by the click, as in the app), then Ctrl+Z", () => LiveCreateChip(projectDir)),
         };
 
@@ -259,6 +260,69 @@ namespace DLS.Bench
                 if (onDisk.Wires.Any(w => (faIDs.Contains(w.TargetPinAddress.PinOwnerID) && !faPins.Contains(w.TargetPinAddress.PinID)) || (faIDs.Contains(w.SourcePinAddress.PinOwnerID) && !faPins.Contains(w.SourcePinAddress.PinID))))
                     return "Add4's file still has a wire to a pin FullA no longer has";
                 return null;
+            }
+            finally
+            {
+                Close(p);
+                if (Directory.Exists(tmpDir)) Directory.Delete(tmpDir, true);
+            }
+        }
+
+        static string LiveRunFast(string projectDir)
+        {
+            const string tmpName = "_BenchRunFast";
+            string tmpDir = SavePaths.GetProjectPath(tmpName);
+            if (Directory.Exists(tmpDir)) Directory.Delete(tmpDir, true);
+            CopyDir(projectDir, tmpDir);
+            Project p = Open(tmpDir, "CPU", tmpName);
+            try
+            {
+                DevPinInstance In(string n) => p.ViewedChip.Elements.OfType<DevPinInstance>().First(d => d.IsInputPin && d.Name == n);
+                foreach (DevPinInstance d in p.ViewedChip.Elements.OfType<DevPinInstance>().Where(d => d.IsInputPin)) d.Pin.PlayerInputState = 0;
+                if (!Pump(p, () => p.rootSimChip.Program != null && p.rootSimChip.Program.StepsRun > 2000 && p.rootSimChip.InputPins.All(pin => (pin.State & 0xFFFF) == 0), 5000)) return "test setup: inputs never reached 0";
+                MemoryRules rules = MemoryLayout.ParseRules(MemoryLayoutCases.CpuRulesJson, out _);
+                var pol = new Dictionary<string, int[]>();
+                ChipDescription cpu = p.chipLibrary.GetChipDescription("CPU");
+                foreach (string t in MemoryLayout.BankTypes(cpu, rules, p.chipLibrary)) { string e = MemoryLayout.Verify(t, rules, p.chipLibrary, pol); if (e != null) return "layout: " + e; }
+                uint Read(string bank, int w) { uint v = 0; p.RunWithSimulationPaused(() => v = MemoryLayout.Banks(p.rootSimChip, cpu, rules, pol, p.chipLibrary, out _).First(b => b.Name == bank).Read(w)); return v; }
+                uint ram9 = (Read("RAM", 9) ^ 0x5A) & 0xFF, regA = (Read("Registre A", 0) ^ 0x33) & 0xFF;
+                p.RunWithSimulationPaused(() =>
+                {
+                    var bk = MemoryLayout.Banks(p.rootSimChip, cpu, rules, pol, p.chipLibrary, out _);
+                    bk.First(b => b.Name == "RAM").Write(9, ram9, p.rootSimChip.Program);
+                    bk.First(b => b.Name == "Registre A").Write(0, regA, p.rootSimChip.Program);
+                });
+                Pump(p, () => false, 100);
+
+                // RUN FAST: the models take the state over
+                p.RunFastNowForTests();
+                if (!p.FastModeActive) return "fast mode did not start: " + p.FastModeStatus;
+                if (!Pump(p, () => p.rootSimChip.Program != null && p.rootSimChip.Program.StepsRun > 500, 5000)) return "the fast tree never ran";
+                if (p.rootSimChip.Program.GateCount > 2000) return $"the fast tree has {p.rootSimChip.Program.GateCount} gates: modules were not replaced";
+                SeqModel Model(string label) => (SeqModel)p.rootSimChip.SubChips.First(c => c.ID == cpu.SubChips.First(s => s.Label == label || (s.Name == label && string.IsNullOrEmpty(s.Label))).ID).Model;
+                if (Model("RAM256").State[9] != ram9) return $"the fast RAM holds {Model("RAM256").State[9]} at 9, the gates held {ram9}";
+                if (Model("Registre A").State[0] != regA) return $"the fast Registre A holds {Model("Registre A").State[0]}, the gates held {regA}";
+
+                // in fast mode, load Registre B through the inputs and the running clock, as a program would
+                In("ENTREE").Pin.PlayerInputState = 0x3C; In("OE_entree").Pin.PlayerInputState = 1; In("Load_B").Pin.PlayerInputState = 1;
+                if (!Pump(p, () => Model("Registre B").State[0] == 0x3C, 8000)) return $"Registre B never loaded 3C in fast mode (holds {Model("Registre B").State[0]:X})";
+                In("Load_B").Pin.PlayerInputState = 0; In("OE_entree").Pin.PlayerInputState = 0;
+                Pump(p, () => false, 300);
+
+                // an edit of the chip leaves fast mode, and the gates get the state back
+                var extra = new DevPinInstance(new PinDescription("EXTRA", IDGenerator.GenerateNewElementID(p.ViewedChip), new UnityEngine.Vector2(-20, -20), PinBitCount.Bit1, PinColour.Red, PinValueDisplayMode.Off), true);
+                p.ViewedChip.AddNewDevPin(extra, false);
+                if (p.FastModeActive) return "an edit of the chip did not leave fast mode";
+                Pump(p, () => false, 200);
+                if (Read("Registre B", 0) != 0x3C) return $"after leaving fast mode the gates' Registre B = {Read("Registre B", 0):X}, it was 3C in fast mode";
+                if (Read("RAM", 9) != ram9 || Read("Registre A", 0) != regA) return "the state taken over at RUN FAST was lost on the way back";
+                if (!File.Exists(Path.Combine(tmpDir, "FastModels.json"))) return "the fast-mode cache was not saved in the project";
+
+                // the second time: from the cache; a chip switch leaves it too
+                p.RunFastNowForTests();
+                if (!p.FastModeActive) return "fast mode did not start the second time";
+                p.LoadDevChipOrCreateNewIfDoesntExist("Add4");
+                return p.FastModeActive ? "switching chip did not leave fast mode" : null;
             }
             finally
             {

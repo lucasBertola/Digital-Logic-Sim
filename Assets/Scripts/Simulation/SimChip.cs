@@ -32,6 +32,16 @@ namespace DLS.Simulation
 			ID = -1;
 		}
 
+		// RUN FAST: a module run by its model — its pins only, no inside
+		public FastModel Model;
+
+		public SimChip(ChipDescription desc, int id, FastModel model) : this(desc, id, null, Array.Empty<SimChip>())
+		{
+			ChipType = ChipType.FastModel;
+			IsBuiltin = true;
+			Model = model;
+		}
+
 		public SimChip(ChipDescription desc, int id, uint[] internalState, SimChip[] subChips)
 		{
 			SubChips = subChips;

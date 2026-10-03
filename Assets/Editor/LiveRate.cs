@@ -26,11 +26,12 @@ public static class LiveRate
             var p = new Project(pd, lib) { audioState = new AudioState() };
             p.LoadDevChipOrCreateNewIfDoesntExist(chip);
             p.StartSimulation();
+            if (Arg("-rateFast") != null) { p.RunFastNowForTests(); if (!p.FastModeActive) throw new Exception("fast mode did not start: " + p.FastModeStatus); }
             var sw = System.Diagnostics.Stopwatch.StartNew();
             double best = 0;
             while (sw.ElapsedMilliseconds < 4000) { p.TickMainThreadForTests(); Thread.Sleep(16); if (sw.ElapsedMilliseconds > 1500) best = Math.Max(best, p.simAvgTicksPerSec); }
             p.NotifyExit();
-            report = $"{chip}: {best:0} steps/s in the app's sim thread (target {(pd.Prefs_SimMaxSpeed ? "MAX" : pd.Prefs_SimTargetStepsPerSecond.ToString())}, {pd.Prefs_SimStepsPerClockTick} steps per tick) = {best / (2.0 * pd.Prefs_SimStepsPerClockTick) / 1000:0} kHz shown";
+            report = $"{chip}: {best:0} steps/s in the app's sim thread (target {(pd.Prefs_SimMaxSpeed ? "MAX" : pd.Prefs_SimTargetStepsPerSecond.ToString())}{(Arg("-rateFast") != null ? ", FAST MODE" : "")}, {pd.Prefs_SimStepsPerClockTick} steps per tick) = {best / (2.0 * pd.Prefs_SimStepsPerClockTick) / 1000:0} kHz shown";
         }
         catch (Exception e) { report = "EXCEPTION " + e; }
         File.AppendAllText(Path.Combine(BenchProject.RepoRoot, "Builds", "liverate.txt"), report + "\n");

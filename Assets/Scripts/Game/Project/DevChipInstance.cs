@@ -230,6 +230,7 @@ namespace DLS.Game
 
 		public void AddNewSubChip(SubChipInstance subChip, bool isLoading)
 		{
+			Project.ActiveProject?.NotifyChipEditing(this);
 			AddElement(subChip);
 			if (!isLoading)
 			{
@@ -239,6 +240,7 @@ namespace DLS.Game
 
 		public void AddNewDevPin(DevPinInstance pin, bool isLoadingFromFile)
 		{
+			Project.ActiveProject?.NotifyChipEditing(this);
 			AddElement(pin);
 			if (!isLoadingFromFile)
 			{
@@ -248,6 +250,7 @@ namespace DLS.Game
 
 		public void AddWire(WireInstance wire, bool isLoading, int insertIndex = -1)
 		{
+			Project.ActiveProject?.NotifyChipEditing(this);
 			bool insert = insertIndex != -1;
 			if (insert) Wires.Insert(insertIndex, wire);
 			else Wires.Add(wire);
@@ -274,6 +277,7 @@ namespace DLS.Game
 
 		public void DeleteDevPin(DevPinInstance devPin)
 		{
+			Project.ActiveProject?.NotifyChipEditing(this);
 			DeleteWiresAttachedToPin(devPin.Pin);
 			RemoveElement(devPin);
 			Simulator.RemovePin(SimChip, devPin.ID);
@@ -281,6 +285,7 @@ namespace DLS.Game
 
 		public void DeleteWire(WireInstance wireToDelete)
 		{
+			Project.ActiveProject?.NotifyChipEditing(this);
 			bool success = Wires.Remove(wireToDelete);
 			if (!success) return; // Wire already deleted
 
@@ -377,6 +382,7 @@ namespace DLS.Game
 
 		public void DeleteSubChip(SubChipInstance subChip)
 		{
+			Project.ActiveProject?.NotifyChipEditing(this);
 			DeleteWiresAttachedToElement(subChip.ID);
 			RemoveElement(subChip);
 

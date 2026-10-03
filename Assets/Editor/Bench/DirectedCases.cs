@@ -518,13 +518,18 @@ namespace DLS.Bench
             readonly Dictionary<string, int> inIdx = new(), outIdx = new();
             readonly Dictionary<string, (SimChip chip, ChipDescription desc)> probes = new();
 
-            public Fixture(ChipDescription desc, ChipLibrary lib)
+            // buildRoot: another simulation tree of the same chip (RUN FAST's), run as its own root
+            public Fixture(ChipDescription desc, ChipLibrary lib, Func<SimChip> buildRoot = null)
             {
                 this.desc = desc;
                 Simulator.ResetForTests(GoldenRunner.StableHash(desc.Name) + 7);
                 Simulator.stepsPerClockTransition = 250;
-                lock (buildLock) root = CircuitTester.BuildIsolatedSim(desc, lib);
-                target = CircuitTester.TargetOf(root);
+                if (buildRoot != null) { lock (buildLock) root = buildRoot(); target = root; }
+                else
+                {
+                    lock (buildLock) root = CircuitTester.BuildIsolatedSim(desc, lib);
+                    target = CircuitTester.TargetOf(root);
+                }
                 for (int i = 0; i < desc.InputPins.Length; i++) inIdx.TryAdd(desc.InputPins[i].Name, i);
                 for (int i = 0; i < desc.OutputPins.Length; i++) outIdx.TryAdd(desc.OutputPins[i].Name, i);
                 foreach (SubChipDescription sd in desc.SubChips)

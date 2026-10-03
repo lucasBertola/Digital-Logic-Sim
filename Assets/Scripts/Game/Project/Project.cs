@@ -42,7 +42,7 @@ namespace DLS.Game
 		// live (possibly unsaved) versions via chipLibrary.SimOverride, so unsaved edits apply everywhere.
 		readonly Dictionary<string, DevChipInstance> openChips = new(ChipDescription.NameComparer);
 
-		SimChip ViewedSimChip => ViewedChip.SimChip;
+		SimChip ViewedSimChip => fastActive ? fastRoot : ViewedChip.SimChip;
 
 		// The chip currently in view. This chip may be in view-only mode.
 		public DevChipInstance ViewedChip => chipViewStack.Peek();
@@ -77,7 +77,76 @@ namespace DLS.Game
 		public int stepsPerClockTransition => description.Prefs_SimStepsPerClockTick;
 		public bool simPaused => description.Prefs_SimPaused;
 		public double simAvgTicksPerSec { get; private set; }
-		public SimChip rootSimChip => editModeChip.SimChip;
+		public SimChip rootSimChip => fastActive ? fastRoot : editModeChip.SimChip;
+
+		// ---- RUN FAST (user, 2026-10-03): the viewed chip run with its modules replaced by verified models ----
+		// Right-click on empty space > RUN FAST. Leaves on any edit of that chip, a chip switch, a save, an edit of a
+		// ROM / key / pulse / LED, opening the memory editor; the state goes back into the gates when it leaves.
+		volatile bool fastActive;
+		SimChip fastRoot;
+		DevChipInstance fastChip;
+		FastCache fastCache;
+		public bool FastModeActive => fastActive;
+		public bool FastModePreparing { get; private set; }
+		public int FastModeModules { get; private set; }
+		public string FastModeStatus { get; private set; }
+
+		public void RunFastNowForTests() { StartFastMode(); if (FastModePreparing) BuildFastModeNow(); }
+
+		public void StartFastMode()
+		{
+			if (fastActive || FastModePreparing || editModeChip == null) return;
+			FastModePreparing = true; // the next Update builds it (one frame to show "preparing")
+		}
+
+		void BuildFastModeNow()
+		{
+			FastModePreparing = false;
+			fastCache ??= FastCacheFile.Load(description.ProjectName);
+			DevChipInstance chip = editModeChip;
+			string error = null;
+			var instances = new List<FastBuilder.Instance>();
+			RunWithSimulationPaused(() =>
+			{
+				try
+				{
+					ChipDescription desc = DescriptionCreator.CreateChipDescription(chip);
+					SimChip root = FastBuilder.Build(desc, chipLibrary, fastCache, instances);
+					FastState.CopyIn(chip.SimChip, root, chipLibrary);
+					fastRoot = root;
+					fastChip = chip;
+					fastActive = true;
+				}
+				catch (Exception e) { error = e.Message; }
+			});
+			if (fastCache.Changed) { FastCacheFile.Save(description.ProjectName, fastCache); fastCache.Changed = false; }
+			FastModeModules = instances.Count;
+			FastModeStatus = error != null ? "Fast mode failed: " + error
+				: instances.Count == 0 ? "Fast mode: no module could be modelled, the chip runs as usual"
+				: $"Fast mode: {instances.Count} modules run by their models";
+		}
+
+		// Back to the gates, the state going with it (called before anything that edits or leaves the chip)
+		public void StopFastMode()
+		{
+			FastModePreparing = false;
+			if (!fastActive) return;
+			RunWithSimulationPaused(() =>
+			{
+				try { FastState.CopyOut(fastRoot, fastChip.SimChip, chipLibrary); }
+				catch (Exception) { /* the gates keep the state they had at RUN FAST */ }
+				fastActive = false;
+				fastRoot = null;
+			});
+			fastChip = null;
+			FastModeStatus = "Fast mode off";
+		}
+
+		// a dev chip is about to be edited: if it is the one running fast, leave fast mode first
+		public void NotifyChipEditing(DevChipInstance dc)
+		{
+			if (fastActive && dc == fastChip) StopFastMode();
+		}
 
 		public Project(ProjectDescription description, ChipLibrary chipLibrary)
 		{
@@ -90,6 +159,7 @@ namespace DLS.Game
 
 		public void Update()
 		{
+			if (FastModePreparing) BuildFastModeNow();
 			HandleProjectInput();
 
 			if (UIDrawer.ActiveMenu is UIDrawer.MenuType.None or UIDrawer.MenuType.BottomBarMenuPopup)
@@ -184,6 +254,7 @@ namespace DLS.Game
 
 		public void SaveFromDescription(ChipDescription saveChipDescription, SaveMode saveMode = SaveMode.Normal)
 		{
+			StopFastMode(); // the memory saved is the gates': bring the fast state back first
 			ChipDescription oldSavedBaseline = ViewedChip.LastSavedDescription; // for reconciling open parents
 
 			// The memory state (latches, RAM...) is saved with the chip, edited or not: captured from the live simulation
@@ -318,6 +389,7 @@ namespace DLS.Game
 			ClearSelectionFlags(editModeChip);
 			ClearSelectionFlags(devChip);
 
+			StopFastMode();
 			// the chip we leave keeps its running memory (RAM, registers...) for when we come back
 			DevChipInstance leaving = editModeChip;
 			if (leaving != null && leaving != devChip && leaving.SimChip != null)
@@ -556,6 +628,7 @@ namespace DLS.Game
 		// Key chip has been bound to a different key, so simulation must be updated
 		public void NotifyKeyChipBindingChanged(SubChipInstance keyChip, char newKey)
 		{
+			StopFastMode();
 			SimChip simChip = rootSimChip.GetSubChipFromID(keyChip.ID);
 			simChip.InternalState[0] = newKey;
 			keyChip.SetKeyChipActivationChar(newKey);
@@ -564,6 +637,7 @@ namespace DLS.Game
 		// Chip's pulse width has been changed, so simulation must be updated
 		public void NotifyPulseWidthChanged(SubChipInstance chip, uint widthNew)
 		{
+			StopFastMode();
 			SimChip simChip = rootSimChip.GetSubChipFromID(chip.ID);
 			simChip.InternalState[0] = widthNew;
 			chip.InternalData[0] = widthNew;
@@ -579,12 +653,14 @@ namespace DLS.Game
 		// Rom has been edited, so simulation must be updated
 		public void NotifyRomContentsEdited(SubChipInstance romChip)
 		{
+			StopFastMode();
 			SimChip simChip = rootSimChip.GetSubChipFromID(romChip.ID);
 			simChip.UpdateInternalState(romChip.InternalData);
 		}
 
 		public void NotifyLEDColourChanged(SubChipInstance ledChip, uint colIndex)
 		{
+			StopFastMode();
 			SimChip simChip = rootSimChip.GetSubChipFromID(ledChip.ID);
 			simChip.InternalState[0] = colIndex;
 			ledChip.InternalData[0] = colIndex;

@@ -1150,6 +1150,17 @@ namespace DLS.Simulation
 					break;
 				}
 
+				case (byte)ChipType.FastModel: // RUN FAST: a module run by its model
+				{
+					FastModel m = chipOfGate[g].Model;
+					uint[] mi = m.In, mo = m.Out;
+					for (int j = 0; j < mi.Length; j++) mi[j] = In(st, ins[i + j], k);
+					m.Run();
+					for (int j = 0; j < mo.Length; j++) Write(states, outs[os + j], mo[j]);
+					if (m.RerunNextStep) { m.RerunNextStep = false; SetDirty(k); }
+					break;
+				}
+
 				case (byte)ChipType.LcdDem122032:
 				{
 					uint db = In(st, ins[i], k), a0 = In(st, ins[i + 1], k), rw = In(st, ins[i + 2], k), e1 = In(st, ins[i + 3], k), e2 = In(st, ins[i + 4], k), res = In(st, ins[i + 5], k);

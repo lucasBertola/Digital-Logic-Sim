@@ -176,8 +176,17 @@ namespace DLS.Graphics
 		{
 			new(Format("IN/OUT"), OpenInOutPopup, CanEditCurrentChip),
 			new(Format("CLEAN UP"), BottomBarUI.CleanUp, CanEditCurrentChip),
-			new(Format("ASK CLAUDE"), QuickAskBar.Open, CanEditCurrentChip)
+			new(Format("ASK CLAUDE"), QuickAskBar.Open, CanEditCurrentChip),
+			new(() => Format(Project.ActiveProject != null && Project.ActiveProject.FastModeActive ? "STOP FAST" : "RUN FAST"), ToggleFastMode, () => Project.ActiveProject != null)
 		};
+
+		// RUN FAST: the viewed chip with its modules run by verified models (Project.StartFastMode)
+		static void ToggleFastMode()
+		{
+			Project p = Project.ActiveProject;
+			if (p.FastModeActive) p.StopFastMode();
+			else p.StartFastMode();
+		}
 
 		public static bool IsOpen { get; private set; }
 		public static IInteractable interactionContext { get; private set; }
