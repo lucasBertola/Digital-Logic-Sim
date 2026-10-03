@@ -968,7 +968,12 @@ namespace DLS.Game
 					bool paced = targetTicksPerSecond < 100000 || advanceSingleSimStep || simPausedSingleStepCounter > 0;
 					int stepsDone = paced ? 1 : 0;
 					if (paced) Simulator.RunSimulationStep(simChip, inputPins, audioState.simAudio);
-					else stepsDone = Simulator.RunSimulationSteps(simChip, inputPins, audioState.simAudio, 256);
+					else
+					{
+						long tr0 = Simulator.Profile ? Stopwatch.GetTimestamp() : 0;
+						stepsDone = Simulator.RunSimulationSteps(simChip, inputPins, audioState.simAudio, 256);
+						if (Simulator.Profile && tr0 != 0) { Simulator.ProfInBatch += Stopwatch.GetTimestamp() - tr0; Simulator.ProfLoopSteps += stepsDone; }
+					}
 
 					// ---- Wait some amount of time (if needed) to try to hit the target ticks per second ----
 					while (true)

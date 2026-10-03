@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using DLS.Description;
 using DLS.Simulation;
 
@@ -26,7 +27,12 @@ namespace DLS.Game
 					if (fc.Model is SeqModel m)
 					{
 						if (intoFast) m.LoadState(FastTemplates.ReadLive(m, m.Desc, lib, lc));
-						else FastTemplates.WriteLive(m, m.Desc, lib, lc);
+						else
+						{
+							// the inputs it last ran on, from its pins (the compiled step keeps no copy of them)
+							m.RefreshLastInputs(fc.InputPins.Select(p => p.State).ToArray());
+							FastTemplates.WriteLive(m, m.Desc, lib, lc);
+						}
 					}
 					if (intoFast)
 					{

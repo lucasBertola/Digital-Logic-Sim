@@ -33,6 +33,7 @@ public static class FastBench
             sw.Restart();
             FastBuilder.Build(d, lib, cache, new List<FastBuilder.Instance>());
             double cachedMs = sw.Elapsed.TotalMilliseconds;
+            sb.Append($"kernel compiled by Burst: {DLS.Simulation.SimKernel.CompiledByBurst() == 1}; ");
             sb.Append($"{chip}: fast tree built in {buildMs:0} ms ({cachedMs:0} ms with the cache); models: {string.Join(", ", inst.GroupBy(i => i.Desc.Name + (i.Leaf.Model is LutModel ? " (table)" : " (model)")).Select(g => g.Count() + " x " + g.Key))}\n");
             SimChip gates = Simulator.BuildSimChip(d, lib);
             foreach ((string name, SimChip root) in new[] { ("gates", gates), ("fast", fast) })
@@ -85,17 +86,41 @@ public static class FastBench
                     sb.Append($"    Program.Step with nothing to run: {swp.Elapsed.TotalMilliseconds:0} ns each\n");
                     Simulator.forcedClockState = -1;
                     // A/B in the same run (the machine's speed varies between runs): reference loop vs batched loop
-                    double[] bestAB = new double[2];
-                    for (int round = 0; round < 6; round++)
+                    double[] bestAB = new double[3];
+                    for (int round = 0; round < 9; round++)
                     {
-                        int mode = round & 1;
+                        int mode = round % 3; DLS.Simulation.SimProgram.UseBurst = mode != 1;
+                        SimChip ab = FastBuilder.Build(d, lib, cache, new List<FastBuilder.Instance>());
+                        Simulator.ResetForTests(5);
+                        Simulator.stepsPerClockTransition = pd.Prefs_SimStepsPerClockTick;
+                        for (int q = 0; q < d.InputPins.Length; q++) ab.InputPins[q].State = PinState.Make((ushort)d.InputPins[q].InputState, 0);
+                        for (int q = 0; q < 2000; q++) Simulator.RunSimulationStep(ab, Array.Empty<DevPinInstance>(), audio);
+                        long realAB = Simulator.RealSteps;
                         swp.Restart();
                         for (int i = 0; i < 3000000;)
-                            i += mode == 0 ? Simulator.RunSimulationStepsReference(root, Array.Empty<DevPinInstance>(), audio, Math.Min(256, 3000000 - i))
-                                           : Simulator.RunSimulationSteps(root, Array.Empty<DevPinInstance>(), audio, Math.Min(256, 3000000 - i));
+                            i += mode == 0 ? Simulator.RunSimulationStepsReference(ab, Array.Empty<DevPinInstance>(), audio, Math.Min(256, 3000000 - i))
+                                           : Simulator.RunSimulationSteps(ab, Array.Empty<DevPinInstance>(), audio, Math.Min(256, 3000000 - i));
                         bestAB[mode] = Math.Max(bestAB[mode], 3000000 / swp.Elapsed.TotalSeconds);
+                        if (round >= 6) sb.Append($"      mode {mode}: real steps {(Simulator.RealSteps - realAB) * 100.0 / 3000000:0.00} %, kernel switched off {ab.Program.KernelSwitchedOff}" + "\n");
                     }
-                    sb.Append($"    A/B: reference loop {bestAB[0]:0} steps/s, batched loop {bestAB[1]:0} steps/s (x{bestAB[1] / bestAB[0]:0.00})\n");
+                    DLS.Simulation.SimProgram.UseBurst = true;
+                    {
+                        SimChip ab = FastBuilder.Build(d, lib, cache, new List<FastBuilder.Instance>());
+                        Simulator.ResetForTests(5);
+                        Simulator.stepsPerClockTransition = pd.Prefs_SimStepsPerClockTick;
+                        for (int q = 0; q < d.InputPins.Length; q++) ab.InputPins[q].State = PinState.Make((ushort)d.InputPins[q].InputState, 0);
+                        for (int q = 0; q < 2000; q++) Simulator.RunSimulationStep(ab, Array.Empty<DevPinInstance>(), audio);
+                        Simulator.ProfFirst = Simulator.ProfIdle = Simulator.ProfStep = Simulator.ProfBatches = Simulator.ProfSteps = 0; Simulator.ProfKernel = Simulator.ProfKernelCalls = 0; Array.Clear(Simulator.ProfBailTypes, 0, 256);
+                        Simulator.Profile = true;
+                        swp.Restart();
+                        for (int i = 0; i < 3000000;) i += Simulator.RunSimulationSteps(ab, Array.Empty<DevPinInstance>(), audio, Math.Min(256, 3000000 - i));
+                        double total = swp.Elapsed.TotalMilliseconds;
+                        Simulator.Profile = false;
+                        double ms(long ticks) => ticks * 1000.0 / Stopwatch.Frequency;
+                        double halfs = 3000000.0 / pd.Prefs_SimStepsPerClockTick;
+                        sb.Append($"    profile per half-period ({total * 1e6 / halfs:0} ns): first step of a batch {ms(Simulator.ProfFirst) * 1e6 / halfs:0} ns ({Simulator.ProfBatches / halfs:0.00} per half), Program.Step {ms(Simulator.ProfStep) * 1e6 / halfs:0} ns ({Simulator.ProfSteps / halfs:0.00} per half), IdleSteps {ms(Simulator.ProfIdle) * 1e6 / halfs:0} ns, rest {(total - ms(Simulator.ProfFirst) - ms(Simulator.ProfStep) - ms(Simulator.ProfIdle)) * 1e6 / halfs:0} ns; in Step: kernel calls {Simulator.ProfKernelCalls / halfs:0.00} per half taking {ms(Simulator.ProfKernel) * 1e6 / halfs:0} ns; handed back: " + string.Join(", ", Enumerable.Range(0, 256).Where(x => Simulator.ProfBailTypes[x] > 0).Select(x => (x == 255 ? "Merge" : ((ChipType)x).ToString()) + " " + (Simulator.ProfBailTypes[x] / halfs).ToString("0.00"))) + "\n");
+                    }
+                    sb.Append($"    A/B: reference loop {bestAB[0]:0} steps/s, batched without Burst {bestAB[1]:0}, batched with Burst {bestAB[2]:0} (x{bestAB[2] / bestAB[0]:0.00}); kernel switched off: {root.Program.KernelSwitchedOff}, kernel ran {root.Program.KernelRunsLastStep} of {root.Program.GatesRunLastStep} gates in the last step" + "\n");
                 }
             }
             // equivalence on THIS chip: gates and fast run the same clock cycles; every top-level component's outputs

@@ -1,4 +1,6 @@
 using System;
+using System.Linq;
+using DLS.Simulation;
 using System.IO;
 using System.Threading;
 using DLS.Bench;
@@ -28,11 +30,22 @@ public static class LiveRate
             p.LoadDevChipOrCreateNewIfDoesntExist(chip);
             p.StartSimulation();
             if (Arg("-rateFast") != null) { p.RunFastNowForTests(); if (!p.FastModeActive) throw new Exception("fast mode did not start: " + p.FastModeStatus); }
+            bool prof = Arg("-rateProfile") != null;
             var sw = System.Diagnostics.Stopwatch.StartNew();
+            long profStart = 0;
             double best = 0;
-            while (sw.ElapsedMilliseconds < 4000) { p.TickMainThreadForTests(); Thread.Sleep(16); if (sw.ElapsedMilliseconds > 1500) best = Math.Max(best, p.simAvgTicksPerSec); }
+            while (sw.ElapsedMilliseconds < 4000) { p.TickMainThreadForTests(); Thread.Sleep(16); if (sw.ElapsedMilliseconds > 1500) best = Math.Max(best, p.simAvgTicksPerSec); if (prof && profStart == 0 && sw.ElapsedMilliseconds > 1500) { Simulator.ProfInBatch = Simulator.ProfLoopSteps = Simulator.ProfStep = Simulator.ProfIdle = Simulator.ProfSteps = Simulator.ProfFirst = Simulator.ProfBatches = 0; Simulator.ProfGates = Simulator.ProfKernelGates = Simulator.ProfNoise = Simulator.ProfKernel = Simulator.ProfKernelCalls = 0; Array.Clear(Simulator.ProfBailTypes, 0, 256); Simulator.Profile = true; profStart = System.Diagnostics.Stopwatch.GetTimestamp(); } }
+            Simulator.Profile = false;
+            string profReport = "";
+            if (prof)
+            {
+                double wall = (System.Diagnostics.Stopwatch.GetTimestamp() - profStart) * 1e9 / System.Diagnostics.Stopwatch.Frequency;
+                double halfs = Simulator.ProfLoopSteps / (double)pd.Prefs_SimStepsPerClockTick;
+                double ns(long ticks) => ticks * 1e9 / System.Diagnostics.Stopwatch.Frequency / halfs;
+                profReport = $" | per half-period: wall {wall / halfs:0} ns, inside RunSimulationSteps {ns(Simulator.ProfInBatch):0} ns (Step {ns(Simulator.ProfStep):0}, IdleSteps {ns(Simulator.ProfIdle):0}, first full steps {ns(Simulator.ProfFirst):0} x{Simulator.ProfBatches / halfs:0.00}), real steps {Simulator.ProfSteps / halfs:0.00}, gates run {Simulator.ProfGates / halfs:0.0} (kernel {Simulator.ProfKernelGates / halfs:0.0}), kernel calls {Simulator.ProfKernelCalls / halfs:0.00} taking {ns(Simulator.ProfKernel):0} ns, noise list {Simulator.ProfNoise / (double)Math.Max(1, Simulator.ProfSteps):0.0}, handed back: " + string.Join(", ", Enumerable.Range(0, 256).Where(x => Simulator.ProfBailTypes[x] > 0).Select(x => (x == 255 ? "Merge" : ((DLS.Description.ChipType)x).ToString()) + " " + (Simulator.ProfBailTypes[x] / halfs).ToString("0.00")));
+            }
             p.NotifyExit();
-            report = $"{chip}: {best:0} steps/s in the app's sim thread (target {(pd.Prefs_SimMaxSpeed ? "MAX" : pd.Prefs_SimTargetStepsPerSecond.ToString())}{(Arg("-rateFast") != null ? ", FAST MODE" : "")}, {pd.Prefs_SimStepsPerClockTick} steps per tick) = {best / (2.0 * pd.Prefs_SimStepsPerClockTick) / 1000:0} kHz shown";
+            report = $"{chip}: {best:0} steps/s in the app's sim thread (target {(pd.Prefs_SimMaxSpeed ? "MAX" : pd.Prefs_SimTargetStepsPerSecond.ToString())}{(Arg("-rateFast") != null ? ", FAST MODE" : "")}, {pd.Prefs_SimStepsPerClockTick} steps per tick) = {best / (2.0 * pd.Prefs_SimStepsPerClockTick) / 1000:0} kHz shown" + profReport;
         }
         catch (Exception e) { report = "EXCEPTION " + e; }
         File.AppendAllText(Path.Combine(BenchProject.RepoRoot, "Builds", "liverate.txt"), report + "\n");

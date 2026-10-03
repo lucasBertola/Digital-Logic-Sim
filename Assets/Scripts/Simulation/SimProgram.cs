@@ -420,7 +420,81 @@ namespace DLS.Simulation
 			prog.armedAt = new byte[gc];
 			prog.ClearNoise();
 			prog.MarkAllDirty();
+			prog.BuildModelTable();
+			prog.BuildKernelCtx();
 			return prog;
+		}
+
+		// ---- RUN FAST models in compiled form (SimKernel runs them; Run() stays for the managed path) ----
+		// modelOff[g] = offset in modelData of [kind, first pointer index, inputs, outputs, params...], -1 = none
+		int[] modelOff = Array.Empty<int>(), modelData = Array.Empty<int>();
+		ulong[] modelPtrs = Array.Empty<ulong>();
+		System.Runtime.InteropServices.GCHandle[] modelHandles = Array.Empty<System.Runtime.InteropServices.GCHandle>();
+
+		void BuildModelTable()
+		{
+			if (!Array.Exists(cType, t => t == (byte)ChipType.FastModel)) return;
+			var data = new List<int>();
+			var handles = new List<System.Runtime.InteropServices.GCHandle>();
+			modelOff = new int[gateCount];
+			for (int g = 0; g < gateCount; g++)
+			{
+				modelOff[g] = -1;
+				if (cType[g] != (byte)ChipType.FastModel) continue;
+				FastModel m = chipOfGate[g].Model;
+				int kind = m?.KernelKind ?? 0;
+				if (kind == 0) continue;
+				int[] p = m.KernelParams();
+				uint[][] arrays = m.KernelArrays();
+				modelOff[g] = data.Count;
+				data.Add(kind); data.Add(handles.Count); data.Add(cInCount[g]); data.Add(cOutCount[g]);
+				data.AddRange(p);
+				foreach (uint[] a in arrays) handles.Add(System.Runtime.InteropServices.GCHandle.Alloc(a, System.Runtime.InteropServices.GCHandleType.Pinned));
+			}
+			modelData = data.Count > 0 ? data.ToArray() : new int[1];
+			modelHandles = handles.ToArray();
+			modelPtrs = new ulong[Math.Max(1, handles.Count)];
+			for (int i = 0; i < handles.Count; i++) modelPtrs[i] = (ulong)handles[i].AddrOfPinnedObject().ToInt64();
+		}
+
+		// The Burst kernel's context: every array it touches pinned for the program's life (they are only ever
+		// reallocated during Compile, before this runs), in unmanaged memory so the step hands over one pointer.
+		IntPtr kernelCtx;
+		System.Runtime.InteropServices.GCHandle[] ctxHandles = Array.Empty<System.Runtime.InteropServices.GCHandle>();
+
+		unsafe void BuildKernelCtx()
+		{
+			if (gateCount == 0) return;
+			var handles = new List<System.Runtime.InteropServices.GCHandle>();
+			IntPtr Pin(Array a)
+			{
+				var h = System.Runtime.InteropServices.GCHandle.Alloc(a, System.Runtime.InteropServices.GCHandleType.Pinned);
+				handles.Add(h);
+				return h.AddrOfPinnedObject();
+			}
+			kernelCtx = System.Runtime.InteropServices.Marshal.AllocHGlobal(sizeof(StepCtx));
+			StepCtx* c = (StepCtx*)kernelCtx;
+			*c = default;
+			c->st = (uint*)Pin(states); c->type = (byte*)Pin(sType); c->armed = (byte*)Pin(armedAt);
+			c->in0 = (int*)Pin(sIn0); c->in1 = (int*)Pin(sIn1); c->out0 = (int*)Pin(sOut0); c->out1 = (int*)Pin(sOut1);
+			c->dirty = (ulong*)Pin(dirty); c->top = (ulong*)Pin(dirtyTop);
+			c->words = dirty.Length; c->topWords = dirtyTop.Length; c->gc = gateCount;
+			c->consStart = (int*)Pin(slotConsStart); c->consPos = (int*)Pin(slotConsPos); c->consOther = (int*)Pin(slotConsOther); c->consOut = (int*)Pin(slotConsOut);
+			c->quiet = (byte*)Pin(quiet);
+			c->canon = (int*)Pin(sCanon); c->inStart = (int*)Pin(cInStart); c->outStart = (int*)Pin(cOutStart);
+			c->inSlots = (int*)Pin(inSlots); c->outSlots = (int*)Pin(outSlots);
+			c->hasModels = modelOff.Length > 0 ? 1 : 0;
+			if (c->hasModels != 0) { c->modelOff = (int*)Pin(modelOff); c->modelData = (int*)Pin(modelData); c->modelPtrs = (ulong*)Pin(modelPtrs); }
+			c->noiseList = (int*)Pin(noiseList); c->noisePos = (int*)Pin(noisePos);
+			c->pcg = &c->pcgV; c->noiseCount = &c->noiseCountV;
+			ctxHandles = handles.ToArray();
+		}
+
+		~SimProgram()
+		{
+			foreach (var h in modelHandles) if (h.IsAllocated) h.Free();
+			foreach (var h in ctxHandles) if (h.IsAllocated) h.Free();
+			if (kernelCtx != IntPtr.Zero) System.Runtime.InteropServices.Marshal.FreeHGlobal(kernelCtx);
 		}
 
 		// NAND + sole inverter consumer -> one NandNot gate (see NandNotType). The inverter must be scheduled after
@@ -815,45 +889,42 @@ namespace DLS.Simulation
 
 			int ran = 0;
 			if (TraceGates) LastStepGates.Clear();
-			// the kernel pays when it runs many NANDs per call; a tree of models (RUN FAST) hands almost every gate back,
-			// and each call costs more than the gate: such a program runs managed, with a kernel step now and then to
-			// re-measure. Both paths give the same result (bench "burst stepper = managed stepper").
-			if (UseBurst && !CollectStats && !TraceGates && (!kernelNotWorth || (++kernelSampleTick & 255) == 0))
+			// The kernel runs NANDs, fused pairs, no-ops and RUN FAST models; every other gate is handed back and runs
+			// here. A program with little for the kernel (each call costs more than the gate it hands back) runs managed,
+			// with a kernel step now and then to re-measure. Both paths give the same result (bench "burst stepper =
+			// managed stepper"). The kernel's context (every array pinned) is built once per compile (BuildKernelCtx):
+			// pinning ~20 arrays and filling it at every step cost more than the step itself in RUN FAST.
+			if (UseBurst && !CollectStats && !TraceGates && kernelCtx != IntPtr.Zero && (!kernelNotWorth || (++kernelSampleTick & 255) == 0))
 			{
-				// NAND / NAND+inverter / no-op gates run by the Burst kernel, every other gate here, same order
-				fixed (uint* st = states)
-				fixed (byte* type = sType, arm = armedAt)
-				fixed (int* in0 = sIn0, in1 = sIn1, out0 = sOut0, out1 = sOut1)
-				fixed (ulong* dirtyBits = dirty, top = dirtyTop)
-				fixed (int* cs = slotConsStart, cp = slotConsPos, co = slotConsOther, cu = slotConsOut)
-				fixed (bool* q = quiet)
+				StepCtx* ctx = (StepCtx*)kernelCtx;
+				ctx->pcgV = Simulator.PcgState;
+				ctx->noiseCountV = noiseCount;
+				int kernelRan = 0, after = -1;
+				while (true)
 				{
-					StepCtx ctx = new StepCtx
-					{
-						st = st, type = type, in0 = in0, in1 = in1, out0 = out0, out1 = out1, dirty = dirtyBits, top = top,
-						words = dirty.Length, topWords = dirtyTop.Length, gc = gc, consStart = cs, consPos = cp, consOther = co,
-						consOut = cu, quiet = (byte*)q, armed = arm
-					};
-					int kernelRan = 0, after = -1;
-					while (true)
-					{
-						int k = SimKernel.Run(&ctx, after, &kernelRan);
-						if (k < 0) break;
-						dirtyBits[k >> 6] &= ~(1UL << (k & 63));
-						ran++;
-						RunOne(k, st, type, in0, in1, out0, clockHigh, audio);
-						after = k;
-						kernelBails++;
-					}
-					ran += kernelRan;
-					kernelGates += kernelRan;
-					if (++kernelSteps == 64)
-					{
-						kernelNotWorth = kernelGates < 2 * kernelBails;
-						kernelSteps = 0; kernelGates = 0; kernelBails = 0;
-					}
-					KernelRunsLastStep = kernelRan;
+					long tk0 = Simulator.Profile ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
+					int k = SimKernel.Run(ctx, after, &kernelRan);
+					if (Simulator.Profile && tk0 != 0) { Simulator.ProfKernel += System.Diagnostics.Stopwatch.GetTimestamp() - tk0; Simulator.ProfKernelCalls++; }
+					if (k < 0) break;
+					if (Simulator.Profile) Simulator.ProfBailTypes[ctx->type[k]]++;
+					ctx->dirty[k >> 6] &= ~(1UL << (k & 63));
+					ran++;
+					Simulator.PcgState = ctx->pcgV; noiseCount = ctx->noiseCountV; // the managed gate draws / arms through the fields
+					RunOne(k, ctx->st, ctx->type, ctx->in0, ctx->in1, ctx->out0, clockHigh, audio);
+					ctx->pcgV = Simulator.PcgState; ctx->noiseCountV = noiseCount;
+					after = k;
+					kernelBails++;
 				}
+				ran += kernelRan;
+				kernelGates += kernelRan;
+				if (++kernelSteps == 64)
+				{
+					kernelNotWorth = kernelGates < 2 * kernelBails;
+					kernelSteps = 0; kernelGates = 0; kernelBails = 0;
+				}
+				KernelRunsLastStep = kernelRan;
+				if (Simulator.Profile) { Simulator.ProfGates += ran; Simulator.ProfKernelGates += kernelRan; Simulator.ProfNoise += noiseCount; }
+				Simulator.PcgState = ctx->pcgV; noiseCount = ctx->noiseCountV;
 				GatesRunLastStep = ran;
 				return;
 			}

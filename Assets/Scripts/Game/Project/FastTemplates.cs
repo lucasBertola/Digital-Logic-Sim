@@ -332,18 +332,18 @@ namespace DLS.Game
 		readonly int addrBits;
 		readonly ChipDescription desc;
 		public ChipDescription Desc => desc;
-		uint lastClk;
 		uint[] lastIn;
+		// The running scalars live in one array (Regs) so the compiled step (SimKernel) and Run() share them:
+		// [0] last clock level; [1] D sampled before the edge; [2] the output shown; [3] show pending (1/0);
+		// [4] LOAD sampled; [5] RESET sampled.
 		// master-slave behaviour: D / LOAD / a synchronous reset are taken while the clock is at the level BEFORE the
 		// edge, and applied at the edge — a value changed in the same step by a neighbour's new output (the counter's
-		// increment logic) does not race through, as with the user's NAND flip-flops
-		uint sampledD;
-		// the output shows the state one step after it changed (clock-to-output delay): at the clock fall the user's
+		// increment logic) does not race through, as with the user's NAND flip-flops.
+		// The output shows the state one step after it changed (clock-to-output delay): at the clock fall the user's
 		// AND gate releases the RAM's WE in 1-2 steps while their master-slave registers change a few steps later; an
-		// instant register output let the RAM see the NEW address with WE still high
-		uint shown;
-		bool showPending;
-		bool sampledLoad, sampledReset;
+		// instant register output let the RAM see the NEW address with WE still high.
+		public uint[] Regs = new uint[6];
+		const int RLastClk = 0, RSampledD = 1, RShown = 2, RShowPending = 3, RSampledLoad = 4, RSampledReset = 5;
 
 		public int StateLength => Spec.Kind == FastTemplates.Kind.Ram ? 1 << addrBits : 1;
 
@@ -358,6 +358,19 @@ namespace DLS.Game
 			lastIn = new uint[d.InputPins.Length];
 		}
 
+		public override int KernelKind => 2;
+		public override uint[][] KernelArrays() => new[] { State, Regs };
+
+		// What the compiled step needs (SimKernel.RunSeq): kind, pins, polarities, mask, address pins + widths.
+		public override int[] KernelParams()
+		{
+			FastTemplates.Spec s = Spec;
+			int flags = (s.Rising ? 1 : 0) | (s.LoadHigh ? 2 : 0) | (s.ResetHigh ? 4 : 0) | (s.OeHigh ? 8 : 0) | (s.CsHigh ? 16 : 0) | (s.WeHigh ? 32 : 0);
+			var p = new List<int> { (int)s.Kind, s.D, s.Clk, s.Load, s.Reset, s.Oe, s.Cs, s.We, s.Q, s.QN, flags, s.ResetMode, (int)mask, s.Addr.Length };
+			foreach (int a in s.Addr) { p.Add(a); p.Add((int)desc.InputPins[a].BitCount); }
+			return p.ToArray();
+		}
+
 		public override FastModel Clone()
 		{
 			var c = (SeqModel)MemberwiseClone();
@@ -365,6 +378,7 @@ namespace DLS.Game
 			c.State = (uint[])State.Clone();
 			c.Initial = (uint[])Initial.Clone();
 			c.lastIn = (uint[])lastIn.Clone();
+			c.Regs = (uint[])Regs.Clone();
 			return c;
 		}
 
@@ -374,8 +388,8 @@ namespace DLS.Game
 		{
 			Array.Copy(s, State, Math.Min(s.Length, State.Length));
 			Initial = (uint[])State.Clone();
-			shown = State[0];
-			showPending = false;
+			Regs[RShown] = State[0];
+			Regs[RShowPending] = 0;
 		}
 
 		// runs again while it asks to (the verification and the state transfer have no step loop to do it)
@@ -390,26 +404,30 @@ namespace DLS.Game
 			Array.Copy(inputs, lastIn, Math.Min(inputs.Length, lastIn.Length));
 			if (Spec.Clk >= 0)
 			{
-				lastClk = inputs[Spec.Clk] & 1;
+				Regs[RLastClk] = inputs[Spec.Clk] & 1;
 				Array.Copy(inputs, In, Math.Min(inputs.Length, In.Length));
 				Sample();
 			}
 		}
+		// the inputs it last ran on, read back from its pins (the compiled step does not keep In / lastIn)
+		public void RefreshLastInputs(uint[] inputs) => Array.Copy(inputs, lastIn, Math.Min(inputs.Length, lastIn.Length));
 
 		void Sample()
 		{
 			FastTemplates.Spec s = Spec;
-			sampledD = In[s.D] & mask;
-			sampledLoad = s.Load < 0 || Active(s.Load, s.LoadHigh);
-			sampledReset = s.Reset >= 0 && Active(s.Reset, s.ResetHigh);
+			Regs[RSampledD] = In[s.D] & mask;
+			Regs[RSampledLoad] = s.Load < 0 || Active(s.Load, s.LoadHigh) ? 1u : 0u;
+			Regs[RSampledReset] = s.Reset >= 0 && Active(s.Reset, s.ResetHigh) ? 1u : 0u;
 		}
 		public uint[] LastInputs() => (uint[])lastIn.Clone();
 
 		bool Active(int pin, bool high) => pin >= 0 && ((In[pin] & 1) == 1) == high;
 
+		// (SimKernel.RunSeq is the same function on the program's slots: keep them in step)
 		public override void Run()
 		{
 			FastTemplates.Spec s = Spec;
+			uint[] r = Regs;
 			Array.Copy(In, lastIn, In.Length);
 			if (s.Kind == FastTemplates.Kind.Ram)
 			{
@@ -419,23 +437,23 @@ namespace DLS.Game
 				Out[s.Q] = sel && (s.Oe < 0 || Active(s.Oe, s.OeHigh)) ? State[a] : floating;
 				return;
 			}
-			if (showPending) { shown = State[0]; showPending = false; }
+			if (r[RShowPending] != 0) { r[RShown] = State[0]; r[RShowPending] = 0; }
 			uint clk = In[s.Clk] & 1;
-			bool edge = s.Rising ? lastClk == 0 && clk == 1 : lastClk == 1 && clk == 0;
+			bool edge = s.Rising ? r[RLastClk] == 0 && clk == 1 : r[RLastClk] == 1 && clk == 0;
 			bool beforeEdgeLevel = s.Rising ? clk == 0 : clk == 1;
-			lastClk = clk;
+			r[RLastClk] = clk;
 			if (s.Reset >= 0 && s.ResetMode == 2 && Active(s.Reset, s.ResetHigh)) State[0] = 0;
 			else if (edge)
 			{
-				if (s.Reset >= 0 && s.ResetMode == 1 && sampledReset) State[0] = 0;
-				else if (s.Kind == FastTemplates.Kind.Register) { if (sampledLoad) State[0] = sampledD; }
-				else State[0] = sampledLoad ? sampledD : (State[0] + 1) & mask;
+				if (s.Reset >= 0 && s.ResetMode == 1 && r[RSampledReset] != 0) State[0] = 0;
+				else if (s.Kind == FastTemplates.Kind.Register) { if (r[RSampledLoad] != 0) State[0] = r[RSampledD]; }
+				else State[0] = r[RSampledLoad] != 0 ? r[RSampledD] : (State[0] + 1) & mask;
 			}
 			if (beforeEdgeLevel) Sample();
-			if (State[0] != shown) { showPending = true; RerunNextStep = true; }
+			if (State[0] != r[RShown]) { r[RShowPending] = 1; RerunNextStep = true; }
 			bool on = s.Oe < 0 || Active(s.Oe, s.OeHigh);
-			Out[s.Q] = on ? shown : floating;
-			if (s.QN >= 0) Out[s.QN] = on ? ~shown & mask : floating;
+			Out[s.Q] = on ? r[RShown] : floating;
+			if (s.QN >= 0) Out[s.QN] = on ? ~r[RShown] & mask : floating;
 		}
 	}
 }

@@ -14,6 +14,13 @@ namespace DLS.Simulation
 		public abstract void Run();
 		public virtual FastModel Clone() => (FastModel)MemberwiseClone();
 
+		// The compiled form SimKernel runs in place of Run() (0 = none: the program calls Run): its kind (1 table,
+		// 2 sequential template), its int parameters, and the arrays it reads / writes (pinned by the program, shared
+		// with Run so both paths see the same state).
+		public virtual int KernelKind => 0;
+		public virtual int[] KernelParams() => null;
+		public virtual uint[][] KernelArrays() => null;
+
 		protected FastModel(int inputs, int outputs)
 		{
 			In = new uint[inputs];
@@ -52,5 +59,9 @@ namespace DLS.Simulation
 		}
 
 		public override FastModel Clone() => new LutModel(InputBits, Out.Length, Table);
+
+		public override int KernelKind => 1;
+		public override int[] KernelParams() => InputBits;
+		public override uint[][] KernelArrays() => new[] { Table };
 	}
 }

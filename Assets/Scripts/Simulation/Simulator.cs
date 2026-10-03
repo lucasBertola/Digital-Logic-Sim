@@ -139,31 +139,47 @@ namespace DLS.Simulation
 		// Runs up to maxSteps steps, SKIPPING the idle ones: when nothing is pending and no clock transition or
 		// noise re-draw is due, the state after k steps is the state now, so the frame counter just advances.
 		// Returns the number of steps accounted for (>= 1). The live sim thread uses this; tests step one by one.
-		// The same steps as RunSimulationStepsReference, value for value (same random draws; bench "batched loop =
-		// reference loop"), with the per-step bookkeeping kept in locals: in RUN FAST a real step runs ~3 gates, and the
+		// The same steps as RunSimulationStepsReference, value for value when the inputs do not change during the batch
+		// (same random draws; bench "batched loop = reference loop"), with the per-step bookkeeping kept in locals: in RUN FAST a real step runs ~3 gates, and the
 		// thread-static reads, the audio clock and the input copies around it cost 3x the step itself. A circuit with a
 		// buzzer (audio every step) takes the reference loop.
 		public static int RunSimulationSteps(SimChip rootSimChip, DevPinInstance[] inputPins, SimAudio audioState, int maxSteps)
 		{
-			RunSimulationStep(rootSimChip, inputPins, audioState); // compile / reschedule / audio exactly as usual
-			int done = 1;
+			// the first step takes the full path only when something must be (re)compiled or the root changed
+			int done = 0;
+			if (needsOrderPass || rootSimChip != prevRootSimChip || rootSimChip.Program == null || rootSimChip.Program.HasBuzzer || maxSteps <= 1)
+			{
+				long tp0 = Profile ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
+				RunSimulationStep(rootSimChip, inputPins, audioState); // compile / reschedule / audio exactly as usual
+				done = 1;
+				if (Profile && tp0 != 0) { ProfFirst += System.Diagnostics.Stopwatch.GetTimestamp() - tp0; ProfBatches++; }
+			}
 			SimProgram prog = rootSimChip.Program;
-			if (prog.HasBuzzer || maxSteps <= 1) return done + (maxSteps > 1 ? RunSimulationStepsReference(rootSimChip, inputPins, audioState, maxSteps - 1) : 0);
+			if (prog.HasBuzzer || maxSteps <= 1) return done + (maxSteps > done ? RunSimulationStepsReference(rootSimChip, inputPins, audioState, maxSteps - done) : 0);
+			bool stepFirst = done == 0; // the plain loop always begins with a real step
 
 			Random r = testRng ?? rng;
 			int frame = simulationFrame, period = stepsPerClockTransition, forced = forcedClockState;
 			long real = 0;
+			// the player's inputs are read once per batch (a change is seen within maxSteps steps, i.e. microseconds):
+			// copying them twice per real step cost more than the step in RUN FAST
+			CopyPlayerInputs(rootSimChip, inputPins);
 			while (true)
 			{
-				CopyPlayerInputs(rootSimChip, inputPins); // so that a change made meanwhile is seen by IdleSteps
-				int idle = prog.IdleSteps(maxSteps - done, frame, period, forced);
-				if (idle > 0)
+				if (!stepFirst)
 				{
-					prog.SkipIdleSteps(idle);
-					frame = WrapFrame(frame + idle, period);
-					done += idle;
+					long ti0 = Profile ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
+					int idle = prog.IdleSteps(maxSteps - done, frame, period, forced);
+					if (Profile && ti0 != 0) ProfIdle += System.Diagnostics.Stopwatch.GetTimestamp() - ti0;
+					if (idle > 0)
+					{
+						prog.SkipIdleSteps(idle);
+						frame = WrapFrame(frame + idle, period);
+						done += idle;
+					}
+					if (done >= maxSteps) break;
 				}
-				if (done >= maxSteps) break;
+				stepFirst = false;
 
 				// a real step (RunSimulationStep without what cannot change inside a batch: the root, the program)
 				real++;
@@ -171,8 +187,9 @@ namespace DLS.Simulation
 				bool reorder = frame % 100 == 0;
 				frame = WrapFrame(frame + 1, period);
 				if (reorder) { simulationFrame = frame; prog.Reschedule(); }
-				CopyPlayerInputs(rootSimChip, inputPins);
+				long ts0 = Profile ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
 				prog.Step(audioState, frame, period, forced);
+				if (Profile && ts0 != 0) { ProfStep += System.Diagnostics.Stopwatch.GetTimestamp() - ts0; ProfSteps++; }
 				done++;
 			}
 			simulationFrame = frame;
@@ -180,6 +197,13 @@ namespace DLS.Simulation
 			UpdateAudioState(); // no buzzer: only the fade-out of a previous one, by real elapsed time
 			return done;
 		}
+
+		// probe (FastBench): where the batched loop's time goes, in Stopwatch ticks
+		public static bool Profile;
+		public static long ProfFirst, ProfIdle, ProfStep, ProfBatches, ProfSteps, ProfKernel, ProfKernelCalls;
+		public static long[] ProfBailTypes = new long[256];
+		public static long ProfInBatch, ProfLoopSteps; // live sim thread (LiveRate)
+		public static long ProfGates, ProfKernelGates, ProfNoise;
 
 		static int WrapFrame(int frame, int period)
 		{
@@ -233,6 +257,9 @@ namespace DLS.Simulation
 		// ---- Random draws: ALL through the seeded per-thread stream, so a seeded run is exactly reproducible ----
 
 		// 16 random bits (one PCG step), for the value carried by a floating (high-impedance) line
+		// the stream's state, handed to the Burst kernel and back (SimProgram.Step)
+		public static uint PcgState { get => pcg_rngState; set => pcg_rngState = value; }
+
 		public static ushort RandomBits16()
 		{
 			pcg_rngState = pcg_rngState * 747796405 + 2891336453;

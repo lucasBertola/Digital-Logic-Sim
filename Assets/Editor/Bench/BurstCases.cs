@@ -18,18 +18,21 @@ namespace DLS.Bench
             foreach (string name in new[] { "CPU", "RAM256", "Registre8", "ALU8", "Bascule D", "PC" })
                 if (chips.Any(c => c.Name == name))
                     list.Add(($"burst stepper = managed stepper, every slot after every step: {name}", () => Same(lib, chips.First(c => c.Name == name), false, 1200)));
-            // RUN FAST tree: mostly model gates, so the kernel is found not worth it and runs one step in 256 to re-measure;
-            // long enough to go through that switch both ways
+            // RUN FAST tree: its models (tables, registers, RAM) run in the kernel, floating bus reads (noise) included
             if (chips.Any(c => c.Name == "CPU"))
-                list.Add(("burst stepper = managed stepper on the RUN FAST tree of the CPU (kernel switched off and sampled)", () => Same(lib, chips.First(c => c.Name == "CPU"), true, 6000)));
+                list.Add(("burst stepper = managed stepper on the RUN FAST tree of the CPU (models run by the kernel, noise included)", () => Same(lib, chips.First(c => c.Name == "CPU"), true, 6000, true)));
+            // 3-state buffers + split / merge only: nothing for the kernel, which is found not worth it and runs one step
+            // in 256 to re-measure (until 2026-10-03 the RUN FAST tree was the circuit checking this switch)
+            if (chips.Any(c => c.Name == "Tampon8"))
+                list.Add(("burst stepper = managed stepper on Tampon8 (nothing for the kernel: switched off and sampled)", () => Same(lib, chips.First(c => c.Name == "Tampon8"), false, 6000, false, true)));
             return list;
         }
 
-        static string Same(ChipLibrary lib, ChipDescription d, bool fast, int steps)
+        static string Same(ChipLibrary lib, ChipDescription d, bool fast, int steps, bool modelsInKernel = false, bool expectSwitchOff = false)
         {
             var traces = new List<uint[]>[2];
             var runs = new List<int>[2];
-            int kernelRuns = 0; bool switchedOff = false;
+            int kernelRuns = 0, modelKernelRuns = 0; bool switchedOff = false;
             for (int pass = 0; pass < 2; pass++)
             {
                 bool burst = pass == 1;
@@ -56,7 +59,7 @@ namespace DLS.Bench
                         Simulator.RunSimulationStep(root, Array.Empty<DevPinInstance>(), audio);
                         traces[pass].Add((uint[])root.Program.states.Clone());
                         runs[pass].Add(root.Program.GatesRunLastStep);
-                        if (burst) { kernelRuns += root.Program.KernelRunsLastStep; switchedOff |= root.Program.KernelSwitchedOff; }
+                        if (burst) { kernelRuns += root.Program.KernelRunsLastStep; switchedOff |= root.Program.KernelSwitchedOff; if (fast) modelKernelRuns += root.Program.KernelRunsLastStep; }
                     }
                 }
                 finally
@@ -73,7 +76,8 @@ namespace DLS.Bench
                 if (a.Length != b.Length) return $"step {s}: state sizes differ";
                 for (int i = 0; i < a.Length; i++) if (a[i] != b[i]) return $"step {s}: slot {i} managed {a[i]:X} burst {b[i]:X}";
             }
-            if (fast) return switchedOff ? null : "the RUN FAST tree (models only) never switched the kernel off";
+            if (expectSwitchOff) return switchedOff ? null : "a circuit with nothing for the kernel never switched it off";
+            if (modelsInKernel && modelKernelRuns == 0) return "the kernel never ran a model";
             return kernelRuns > 0 ? null : "the Burst kernel never ran a gate (the comparison compared the managed loop with itself)";
         }
     }
