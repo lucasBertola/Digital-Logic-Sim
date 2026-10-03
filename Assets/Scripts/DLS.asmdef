@@ -3,7 +3,9 @@
   "rootNamespace": "",
   "references": [
     "GUID:d4f8eab5cdd4a544c9923829818c11c0",
-    "GUID:2b65bcfb6aad3f1459e94b356ff58293"
+    "GUID:2b65bcfb6aad3f1459e94b356ff58293",
+    "Unity.Burst",
+    "Unity.Mathematics"
   ],
   "includePlatforms": [],
   "excludePlatforms": [],

@@ -813,6 +813,48 @@ namespace DLS.Simulation
 
 			int ran = 0;
 			if (TraceGates) LastStepGates.Clear();
+			// the kernel pays when it runs many NANDs per call; a tree of models (RUN FAST) hands almost every gate back,
+			// and each call costs more than the gate: such a program runs managed, with a kernel step now and then to
+			// re-measure. Both paths give the same result (bench "burst stepper = managed stepper").
+			if (UseBurst && !CollectStats && !TraceGates && (!kernelNotWorth || (++kernelSampleTick & 255) == 0))
+			{
+				// NAND / NAND+inverter / no-op gates run by the Burst kernel, every other gate here, same order
+				fixed (uint* st = states)
+				fixed (byte* type = sType, arm = armedAt)
+				fixed (int* in0 = sIn0, in1 = sIn1, out0 = sOut0, out1 = sOut1)
+				fixed (ulong* dirtyBits = dirty, top = dirtyTop)
+				fixed (int* cs = slotConsStart, cp = slotConsPos, co = slotConsOther, cu = slotConsOut)
+				fixed (bool* q = quiet)
+				{
+					StepCtx ctx = new StepCtx
+					{
+						st = st, type = type, in0 = in0, in1 = in1, out0 = out0, out1 = out1, dirty = dirtyBits, top = top,
+						words = dirty.Length, topWords = dirtyTop.Length, gc = gc, consStart = cs, consPos = cp, consOther = co,
+						consOut = cu, quiet = (byte*)q, armed = arm
+					};
+					int kernelRan = 0, after = -1;
+					while (true)
+					{
+						int k = SimKernel.Run(&ctx, after, &kernelRan);
+						if (k < 0) break;
+						dirtyBits[k >> 6] &= ~(1UL << (k & 63));
+						ran++;
+						RunOne(k, st, type, in0, in1, out0, clockHigh, audio);
+						after = k;
+						kernelBails++;
+					}
+					ran += kernelRan;
+					kernelGates += kernelRan;
+					if (++kernelSteps == 64)
+					{
+						kernelNotWorth = kernelGates < 2 * kernelBails;
+						kernelSteps = 0; kernelGates = 0; kernelBails = 0;
+					}
+					KernelRunsLastStep = kernelRan;
+				}
+				GatesRunLastStep = ran;
+				return;
+			}
 			fixed (uint* st = states)
 			fixed (byte* type = sType)
 			fixed (int* in0 = sIn0, in1 = sIn1, out0 = sOut0)
@@ -839,33 +881,7 @@ namespace DLS.Simulation
 						ran++;
 						if (CollectStats) { RunsByType[type[k]]++; if (RunsByGate.Length != gateCount) RunsByGate = new long[gateCount]; RunsByGate[sCanon[k]]++; }
 						if (TraceGates) LastStepGates.Add(sCanon[k]);
-						if (armedAt[k] != 0) DisarmNoise(k); // re-armed below if it still reads a floating bit
-
-						byte tk = type[k];
-						if (tk == (byte)ChipType.Nand || tk == NandNotType)
-						{
-							int ia = in0[k], ic = in1[k];
-							uint a = st[ia], c = st[ic];
-							if (((a | c) & 0x10000) != 0)
-							{
-								bool[] q = quiet;
-								bool na = (a & 0x10000) != 0 && !q[ia], ncc = (c & 0x10000) != 0 && !q[ic];
-								if (na) a = Noisy(a);
-								if (ncc) c = Noisy(c);
-								if (na || ncc) ArmNoise(k);
-							}
-							uint v = (1 ^ (a & c)) & 1;
-							int o = out0[k];
-							if (tk == (byte)ChipType.Nand) { if (st[o] != v) { st[o] = v; MarkConsumers(o); } }
-							else
-							{
-								st[o] = v; // the NAND's own pin (its only reader is the fused inverter)
-								int o2 = sOut1[k];
-								uint nv = (1 ^ v) & 1;
-								if (st[o2] != nv) { st[o2] = nv; MarkConsumers(o2); }
-							}
-						}
-						else if (tk != NopType) RunGate(k, st, clockHigh, audio);
+						RunOne(k, st, type, in0, in1, out0, clockHigh, audio);
 
 						// gates later in this word may have been marked by what just ran: take them this step
 						bits = dirtyBits[w] & (b == 63 ? 0 : ~((bit << 1) - 1));
@@ -876,6 +892,48 @@ namespace DLS.Simulation
 				}
 			}
 			GatesRunLastStep = ran;
+		}
+
+		// Burst experiment: the step's NAND gates run by SimKernel (false = the managed loop only, for comparison)
+		public int KernelRunsLastStep; // gates of the last step run by the Burst kernel
+		bool kernelNotWorth;
+		public bool KernelSwitchedOff => kernelNotWorth;
+		int kernelSampleTick, kernelSteps;
+		long kernelGates, kernelBails;
+		public static bool UseBurst { get => !managedOnly && BurstEnabled; set => managedOnly = !value; }
+		public static volatile bool BurstEnabled = true; // every thread (probes: -noBurst)
+		[ThreadStatic] static bool managedOnly; // per thread: a bench case compares both while others run
+
+		// one gate (its dirty bit already cleared)
+		unsafe void RunOne(int k, uint* st, byte* type, int* in0, int* in1, int* out0, bool clockHigh, SimAudio audio)
+		{
+			if (armedAt[k] != 0) DisarmNoise(k); // re-armed below if it still reads a floating bit
+
+			byte tk = type[k];
+			if (tk == (byte)ChipType.Nand || tk == NandNotType)
+			{
+				int ia = in0[k], ic = in1[k];
+				uint a = st[ia], c = st[ic];
+				if (((a | c) & 0x10000) != 0)
+				{
+					bool[] q = quiet;
+					bool na = (a & 0x10000) != 0 && !q[ia], ncc = (c & 0x10000) != 0 && !q[ic];
+					if (na) a = Noisy(a);
+					if (ncc) c = Noisy(c);
+					if (na || ncc) ArmNoise(k);
+				}
+				uint v = (1 ^ (a & c)) & 1;
+				int o = out0[k];
+				if (tk == (byte)ChipType.Nand) { if (st[o] != v) { st[o] = v; MarkConsumers(o); } }
+				else
+				{
+					st[o] = v; // the NAND's own pin (its only reader is the fused inverter)
+					int o2 = sOut1[k];
+					uint nv = (1 ^ v) & 1;
+					if (st[o2] != nv) { st[o2] = nv; MarkConsumers(o2); }
+				}
+			}
+			else if (tk != NopType) RunGate(k, st, clockHigh, audio);
 		}
 
 		// A pin's state was written from outside the step (memory editor, sim thread parked): the gates reading it

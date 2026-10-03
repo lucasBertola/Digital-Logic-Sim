@@ -69,6 +69,7 @@ public static class SimBench
             }
 
             bool batch = GetArg("-benchBatch") != null;
+            DLS.Simulation.SimProgram.BurstEnabled = GetArg("-noBurst") == null;
             if (batch) sb.Append("batched stepping (idle steps skipped)\n");
             string toggle = GetArg("-benchToggle");
             int toggleIdx = string.IsNullOrEmpty(toggle) ? -1 : Array.FindIndex(desc.InputPins, p => p.Name == toggle.Trim());
