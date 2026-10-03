@@ -48,6 +48,55 @@ public static class FastBench
                 for (int i = 0; i < n;) i += Simulator.RunSimulationSteps(root, Array.Empty<DevPinInstance>(), audio, Math.Min(256, n - i));
                 double s = sw.Elapsed.TotalSeconds;
                 sb.Append($"  {name}: {root.Program.GateCount} gates, {n / s:0} steps/s = {n / s / (2.0 * pd.Prefs_SimStepsPerClockTick) / 1000:0.0} kHz, real steps {(Simulator.RealSteps - real0) * 100.0 / n:0.00} %\n");
+                {
+                    // profile: gate runs per type over 200 000 batched steps
+                    root.Program.CollectStats = true;
+                    Array.Clear(root.Program.RunsByType, 0, 256);
+                    long r0 = Simulator.RealSteps;
+                    for (int i = 0; i < 200000;) i += Simulator.RunSimulationSteps(root, Array.Empty<DevPinInstance>(), audio, Math.Min(256, 200000 - i));
+                    root.Program.CollectStats = false;
+                    long real = Simulator.RealSteps - r0; double halfs = 200000.0 / pd.Prefs_SimStepsPerClockTick;
+                    long[] rt = root.Program.RunsByType;
+                    sb.Append($"    per half-period: {real / halfs:0.0} real steps, {rt.Sum() / halfs:0.0} gate runs: " + string.Join(", ", Enumerable.Range(0, 256).Where(k => rt[k] > 0).OrderByDescending(k => rt[k]).Select(k => (k == 254 ? "NandNot" : k == 253 ? "Nop" : k == 255 ? "Merge" : ((ChipType)k).ToString()) + " " + (rt[k] / halfs).ToString("0.0"))) + "\n");
+                }
+                if (name == "fast")
+                {
+                    // where a real step's time goes: the models' Run, the idle check, the fixed cost of a step
+                    var swp = Stopwatch.StartNew();
+                    foreach (var grp in root.SubChips.Where(c => c.Model != null).GroupBy(c => c.Model.GetType().Name))
+                    {
+                        SimChip[] cs = grp.ToArray();
+                        swp.Restart();
+                        const int reps = 200000;
+                        for (int r = 0; r < reps; r++) foreach (SimChip c in cs) c.Model.Run();
+                        sb.Append($"    {grp.Key}.Run: {swp.Elapsed.TotalMilliseconds * 1e6 / (reps * (double)cs.Length):0} ns each ({cs.Length} models)\n");
+                        foreach (SimChip c in cs) c.Model.RerunNextStep = false;
+                    }
+                    swp.Restart();
+                    for (int r = 0; r < 1000000; r++) root.Program.IdleSteps(256);
+                    sb.Append($"    IdleSteps: {swp.Elapsed.TotalMilliseconds:0} ns each\n");
+                    Simulator.forcedClockState = 0;
+                    for (int r = 0; r < 100; r++) Simulator.RunSimulationStep(root, Array.Empty<DevPinInstance>(), audio);
+                    swp.Restart();
+                    for (int r = 0; r < 1000000; r++) Simulator.RunSimulationStep(root, Array.Empty<DevPinInstance>(), audio);
+                    sb.Append($"    RunSimulationStep with nothing to run: {swp.Elapsed.TotalMilliseconds:0} ns each ({root.Program.GatesRunLastStep} gates in the last)\n");
+                    swp.Restart();
+                    for (int r = 0; r < 1000000; r++) root.Program.Step(audio);
+                    sb.Append($"    Program.Step with nothing to run: {swp.Elapsed.TotalMilliseconds:0} ns each\n");
+                    Simulator.forcedClockState = -1;
+                    // A/B in the same run (the machine's speed varies between runs): reference loop vs batched loop
+                    double[] bestAB = new double[2];
+                    for (int round = 0; round < 6; round++)
+                    {
+                        int mode = round & 1;
+                        swp.Restart();
+                        for (int i = 0; i < 3000000;)
+                            i += mode == 0 ? Simulator.RunSimulationStepsReference(root, Array.Empty<DevPinInstance>(), audio, Math.Min(256, 3000000 - i))
+                                           : Simulator.RunSimulationSteps(root, Array.Empty<DevPinInstance>(), audio, Math.Min(256, 3000000 - i));
+                        bestAB[mode] = Math.Max(bestAB[mode], 3000000 / swp.Elapsed.TotalSeconds);
+                    }
+                    sb.Append($"    A/B: reference loop {bestAB[0]:0} steps/s, batched loop {bestAB[1]:0} steps/s (x{bestAB[1] / bestAB[0]:0.00})\n");
+                }
             }
             // equivalence on THIS chip: gates and fast run the same clock cycles; every top-level component's outputs
             // are compared just before each clock edge (settled points)

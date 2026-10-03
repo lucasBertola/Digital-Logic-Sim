@@ -773,7 +773,10 @@ namespace DLS.Simulation
 		}
 		public bool SettledAfterBuild => StepsRun >= 64 || (StepsRun > 0 && NothingPending);
 
-		public unsafe void Step(SimAudio audio)
+		public void Step(SimAudio audio) => Step(audio, Simulator.simulationFrame, Simulator.stepsPerClockTransition, Simulator.forcedClockState);
+
+		// (frame, period, forced clock passed in: the batched loop keeps them in locals, a thread-static read costs)
+		public unsafe void Step(SimAudio audio, int frame, int period, int forcedClock)
 		{
 			StepsRun++;
 			int gc = gateCount;
@@ -802,10 +805,9 @@ namespace DLS.Simulation
 				SetDirty(posOfCanon[noiseList[Simulator.RandomIndex(noiseCount)]]);
 			}
 
-			int forcedClock = Simulator.forcedClockState;
 			bool clockHigh = forcedClock >= 0
 				? forcedClock == 1
-				: Simulator.stepsPerClockTransition != 0 && ((Simulator.simulationFrame / Simulator.stepsPerClockTransition) & 1) == 0;
+				: period != 0 && ((frame / period) & 1) == 0;
 			int clockLevel = clockHigh ? 1 : 0;
 			if (clockLevel != lastClockLevel) { lastClockLevel = clockLevel; foreach (int g in clockGates) SetDirty(posOfCanon[g]); }
 			int keyVersion = SimKeyboardHelper.Version;
@@ -955,7 +957,9 @@ namespace DLS.Simulation
 		// How many steps from now can pass without anything running: no gate is pending, the root inputs did
 		// not change, no ROM was edited, and no clock transition is due before then.
 		// (Keyboard changes cannot be predicted; the caller keeps spans short and the next real step sees them.)
-		public int IdleSteps(int maxSteps)
+		public int IdleSteps(int maxSteps) => IdleSteps(maxSteps, Simulator.simulationFrame, Simulator.stepsPerClockTransition, Simulator.forcedClockState);
+
+		public int IdleSteps(int maxSteps, int frame, int period, int forcedClock)
 		{
 			if (HasBuzzer || maxSteps <= 0) return 0;
 			for (int t = 0; t < dirtyTop.Length; t++)
@@ -971,13 +975,12 @@ namespace DLS.Simulation
 			// (noise re-draws due during the span are not an event: their budget accrues and they are all applied at
 			// the next real step — a re-draw moved by half a clock period is still "a few times a second")
 			int span = maxSteps;
-			if (Simulator.forcedClockState < 0 && AnyClockRunning())
+			if (forcedClock < 0 && AnyClockRunning())
 			{
-				int period = Simulator.stepsPerClockTransition;
 				if (period <= 0) return 0;
 				// the level of a step is decided by its frame / period, so the clock changes on the step whose frame is
 				// the next multiple of period: that step must be a real one, only the steps before it can be skipped
-				int f = Simulator.simulationFrame;
+				int f = frame;
 				int untilClock = period - f % period - 1;
 				span = Math.Min(span, untilClock);
 			}

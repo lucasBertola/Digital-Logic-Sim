@@ -104,6 +104,7 @@ namespace DLS.Bench
                         cases.AddRange(LcdCases.All());
                         if (dir.EndsWith("PC")) cases.AddRange(FastCases.All(lib, chips));
                         cases.AddRange(BurstCases.All(lib, chips));
+                        cases.AddRange(BatchLoopCases.All(lib, chips));
                         cases.AddRange(MemoryMergeCases.All(lib, chips));
                         serial.AddRange(ProjectCases.All(dir));
                         serial.Add(SpeedPrefsCases.Live(dir));

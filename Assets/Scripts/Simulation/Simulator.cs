@@ -139,7 +139,57 @@ namespace DLS.Simulation
 		// Runs up to maxSteps steps, SKIPPING the idle ones: when nothing is pending and no clock transition or
 		// noise re-draw is due, the state after k steps is the state now, so the frame counter just advances.
 		// Returns the number of steps accounted for (>= 1). The live sim thread uses this; tests step one by one.
+		// The same steps as RunSimulationStepsReference, value for value (same random draws; bench "batched loop =
+		// reference loop"), with the per-step bookkeeping kept in locals: in RUN FAST a real step runs ~3 gates, and the
+		// thread-static reads, the audio clock and the input copies around it cost 3x the step itself. A circuit with a
+		// buzzer (audio every step) takes the reference loop.
 		public static int RunSimulationSteps(SimChip rootSimChip, DevPinInstance[] inputPins, SimAudio audioState, int maxSteps)
+		{
+			RunSimulationStep(rootSimChip, inputPins, audioState); // compile / reschedule / audio exactly as usual
+			int done = 1;
+			SimProgram prog = rootSimChip.Program;
+			if (prog.HasBuzzer || maxSteps <= 1) return done + (maxSteps > 1 ? RunSimulationStepsReference(rootSimChip, inputPins, audioState, maxSteps - 1) : 0);
+
+			Random r = testRng ?? rng;
+			int frame = simulationFrame, period = stepsPerClockTransition, forced = forcedClockState;
+			long real = 0;
+			while (true)
+			{
+				CopyPlayerInputs(rootSimChip, inputPins); // so that a change made meanwhile is seen by IdleSteps
+				int idle = prog.IdleSteps(maxSteps - done, frame, period, forced);
+				if (idle > 0)
+				{
+					prog.SkipIdleSteps(idle);
+					frame = WrapFrame(frame + idle, period);
+					done += idle;
+				}
+				if (done >= maxSteps) break;
+
+				// a real step (RunSimulationStep without what cannot change inside a batch: the root, the program)
+				real++;
+				pcg_rngState = (uint)r.Next();
+				bool reorder = frame % 100 == 0;
+				frame = WrapFrame(frame + 1, period);
+				if (reorder) { simulationFrame = frame; prog.Reschedule(); }
+				CopyPlayerInputs(rootSimChip, inputPins);
+				prog.Step(audioState, frame, period, forced);
+				done++;
+			}
+			simulationFrame = frame;
+			RealSteps += real;
+			UpdateAudioState(); // no buzzer: only the fade-out of a previous one, by real elapsed time
+			return done;
+		}
+
+		static int WrapFrame(int frame, int period)
+		{
+			if (frame < FrameWrapAt) return frame;
+			int cycle = 200 * Math.Max(1, period);
+			return frame - cycle * (frame / cycle - 1000);
+		}
+
+		// The plain loop (one RunSimulationStep per real step), kept as the reference the batched loop is checked against.
+		public static int RunSimulationStepsReference(SimChip rootSimChip, DevPinInstance[] inputPins, SimAudio audioState, int maxSteps)
 		{
 			int done = 0;
 			while (done < maxSteps)
