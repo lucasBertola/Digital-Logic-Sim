@@ -52,7 +52,10 @@ namespace DLS.Description
 		// ---- Constants ----
 		// Note: enum values are serialized (ChipDescription.ChipType), so only ever APPEND new types here.
 		Vcc,
-		Gnd
+		Gnd,
+
+		// ---- Graphic LCD ----
+		LcdDem122032 // DEM122032A, 122 x 32 black and white, 2 x SED1520 (Simulation/LcdDem122032.cs)
 
 	}
 }

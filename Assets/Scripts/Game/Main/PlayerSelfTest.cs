@@ -30,6 +30,7 @@ namespace DLS.Game
 		static int failures;
 		static int phase;
 		static ChipLibrary lib;
+		static Project loadedProject;
 		static ChipDescription claudeChip;
 		static int attempt;
 		static string lastJson;
@@ -63,6 +64,7 @@ namespace DLS.Game
 				{
 					Project p = Loader.LoadProject(ProjectName);
 					lib = p.chipLibrary;
+					loadedProject = p;
 					return lib.TryGetChipDescription("CPU", out _) ? null : "no CPU chip";
 				});
 				if (lib != null) SyncChecks();
@@ -331,6 +333,21 @@ namespace DLS.Game
 				int To(ChipDescription d, int pin) => d.Wires.Count(w => faIDs.Contains(w.TargetPinAddress.PinOwnerID) && w.TargetPinAddress.PinID == pin);
 				if (!changed || To(r, cin) != 0) return "wires to the removed C_in kept";
 				return To(r, 777) == To(add4, a0) && To(add4, a0) > 0 ? null : "the re-created A0 lost its wires";
+			});
+			Check("LCD DEM122032A: in the DISPLAY collection of an existing project, driven through its pins", () =>
+			{
+				if (!loadedProject.description.ChipCollections.Any(col => col.Chips.Any(ch => ch == "LCD DEM122032A"))) return "not added to the collections of an existing project";
+				ChipDescription lcd = lib.GetChipDescription("LCD DEM122032A");
+				SimChip r = CircuitTester.BuildIsolatedSim(lcd, lib);
+				SimChip t = CircuitTester.TargetOf(r);
+				void Set(int pin, uint v) => r.InputPins[pin].State = PinState.Make((ushort)v, 0);
+				void Send(int a0, uint v) { Set(2, 0); Set(1, (uint)a0); Set(0, v); Step(r, 2); Set(3, 1); Step(r, 2); Set(3, 0); Step(r, 2); }
+				for (int i = 0; i < 6; i++) Set(i, 0);
+				Step(r, 2);
+				Send(0, 0xAF); Send(0, 0xB8); Send(0, 4); Send(1, 0x01); // display on, page 0, column 4, top pixel
+				if (!LcdDem122032.Pixel(t.InternalState, 4, 0)) return "pixel (4, 0) not lit after the commands";
+				string grid = CircuitTester.ReadLcdGrid(t);
+				return grid.Split('\n').Length == 16 ? null : "the text rendering for Claude is not 16 lines";
 			});
 			Check("memory editor: cache JSON round trip", () =>
 			{

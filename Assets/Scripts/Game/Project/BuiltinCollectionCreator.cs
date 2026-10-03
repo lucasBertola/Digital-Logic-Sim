@@ -52,7 +52,8 @@ namespace DLS.Game
 					ChipType.SevenSegmentDisplay,
 					ChipType.DisplayDot,
 					ChipType.DisplayRGB,
-					ChipType.DisplayLED
+					ChipType.DisplayLED,
+					ChipType.LcdDem122032
 				),
 				CreateChipCollection("MEMORY",
 					ChipType.Rom_256x16
@@ -68,7 +69,8 @@ namespace DLS.Game
 		static readonly (ChipType type, string collection)[] LateAddedBuiltins =
 		{
 			(ChipType.Vcc, "BASIC"),
-			(ChipType.Gnd, "BASIC")
+			(ChipType.Gnd, "BASIC"),
+			(ChipType.LcdDem122032, "DISPLAY")
 		};
 
 		// ProjectDescription is a struct, but ChipCollections is a reference type: mutating the list (and the

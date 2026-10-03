@@ -71,6 +71,15 @@ namespace DLS.Simulation
 				// first 256 bits = display buffer, next 256 bits = back buffer, last bit = clock state (to allow edge-trigger behaviour)
 				InternalState = new uint[addressSize_8Bit * 2 + 1];
 			}
+			else if (ChipType is ChipType.LcdDem122032)
+			{
+				InternalState = new uint[LcdDem122032.StateSize];
+				// display RAM: garbage at power on, as on the real module (seeded: tests are reproducible)
+				Span<byte> randomByte = stackalloc byte[1];
+				for (int c = 0; c < 2; c++)
+					for (int a = 0; a < LcdDem122032.Ram; a++) { Simulator.NextBytes(randomByte); InternalState[c * LcdDem122032.Block + a] = randomByte[0]; }
+				LcdDem122032.PowerOn(InternalState);
+			}
 			else if (ChipType is ChipType.dev_Ram_8Bit)
 			{
 				InternalState = new uint[addressSize_8Bit + 1]; // +1 for clock state (to allow edge-trigger behaviour)

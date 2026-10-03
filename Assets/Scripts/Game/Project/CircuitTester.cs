@@ -325,7 +325,7 @@ namespace DLS.Game
                         }
                         else
                         {
-                            string grid = dr.type == ChipType.DisplayRGB ? ReadRgbGrid(dsim) : ReadDotGrid(dsim);
+                            string grid = dr.type == ChipType.DisplayRGB ? ReadRgbGrid(dsim) : dr.type == ChipType.LcdDem122032 ? ReadLcdGrid(dsim) : ReadDotGrid(dsim);
                             if (grid != prevGrids[d])
                             {
                                 prevGrids[d] = grid;
@@ -345,7 +345,7 @@ namespace DLS.Game
                     foreach (string g in gridBlocks) sb.AppendLine(g);
                 }
 
-                if (displays.Any(d => d.type is ChipType.DisplayRGB or ChipType.DisplayDot))
+                if (displays.Any(d => d.type is ChipType.DisplayRGB or ChipType.DisplayDot or ChipType.LcdDem122032))
                     sb.AppendLine("(Les grilles d'ecran ne sont reaffichees que lorsqu'elles changent.)");
             }
             catch (Exception e)
@@ -438,7 +438,7 @@ namespace DLS.Game
                     return;
                 }
 
-                if (d.DisplayType is not (ChipType.SevenSegmentDisplay or ChipType.DisplayLED or ChipType.DisplayRGB or ChipType.DisplayDot)) return;
+                if (d.DisplayType is not (ChipType.SevenSegmentDisplay or ChipType.DisplayLED or ChipType.DisplayRGB or ChipType.DisplayDot or ChipType.LcdDem122032)) return;
 
                 string label = path.Count == 1 ? baseLabel : baseLabel + ">" + ShortName(d.DisplayType);
                 string unique = label;
@@ -454,6 +454,7 @@ namespace DLS.Game
             ChipType.DisplayLED => "LED",
             ChipType.DisplayRGB => "RGB",
             ChipType.DisplayDot => "DOT",
+            ChipType.LcdDem122032 => "LCD",
             _ => t.ToString()
         };
 
@@ -565,6 +566,23 @@ namespace DLS.Game
             for (int i = 0; i < 7; i++)
                 if (pat[i] == '1') lit.Add(seg[i]);
             return "segments " + new string(lit.ToArray());
+        }
+
+        // 122 x 32 in 16 text lines: one character = 2 pixels stacked (upper half, lower half, both, none)
+        public static string ReadLcdGrid(SimChip sim)
+        {
+            var sb = new StringBuilder();
+            for (int y = 0; y < LcdDem122032.Height; y += 2)
+            {
+                sb.Append("  ");
+                for (int x = 0; x < LcdDem122032.Width; x++)
+                {
+                    bool top = LcdDem122032.Pixel(sim.InternalState, x, y), bottom = LcdDem122032.Pixel(sim.InternalState, x, y + 1);
+                    sb.Append(top ? (bottom ? '\u2588' : '\u2580') : (bottom ? '\u2584' : '.'));
+                }
+                if (y < LcdDem122032.Height - 2) sb.Append('\n');
+            }
+            return sb.ToString();
         }
 
         static string ReadDotGrid(SimChip sim)

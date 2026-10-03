@@ -14,7 +14,7 @@ namespace DLS.SaveSystem
     {
         static readonly HashSet<ChipType> StatefulBuiltins = new()
         {
-            ChipType.Clock, ChipType.Pulse, ChipType.dev_Ram_8Bit, ChipType.DisplayRGB, ChipType.DisplayDot
+            ChipType.Clock, ChipType.Pulse, ChipType.dev_Ram_8Bit, ChipType.DisplayRGB, ChipType.DisplayDot, ChipType.LcdDem122032
         };
 
         // Behaviour of the ATOMIC builtin primitives (the only ones that can't be rebuilt from NAND).
@@ -41,6 +41,7 @@ namespace DLS.SaveSystem
             { "7-SEGMENT", "afficheur 7 segments." },
             { "RGB DISPLAY", "afficheur RGB." },
             { "DOT DISPLAY", "afficheur matriciel (points)." },
+            { "LCD DEM122032A", "LCD graphique 122x32 noir et blanc, 2 controleurs SED1520 (E1 = colonnes 0-60, E2 = 61-121), bus 68 : DB(8) + A0 (0 commande/etat, 1 donnee) + R/W (1 lecture) ; ecriture prise au FRONT DESCENDANT de E1/E2 ; lecture : DB OUT pilote tant que E est haut (flotte sinon), la 1re lecture de donnee apres une adresse rend l'ancien latch (lecture fantome). Commandes : AF/AE affichage on/off, B8+p page (0-3, 8 lignes, bit 0 en haut), 00-4F colonne (la colonne avance seule apres chaque octet), C0+l ligne de depart, A0/A1 ADC, A4/A5 tout allume, E0/EE read-modify-write, E2 reset ; etat : D6 ADC, D5 = 1 si eteint. RES = 1 reinitialise. RAM aleatoire a la mise sous tension, affichage eteint." },
         };
 
         // One-line behaviour description of a builtin primitive (by its chip name), or null.

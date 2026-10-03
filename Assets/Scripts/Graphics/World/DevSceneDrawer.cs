@@ -565,6 +565,10 @@ namespace DLS.Graphics
 			{
 				bounds = DrawDisplay_Dot(posWorld, scaleWorld, sim);
 			}
+			else if (display.DisplayType == ChipType.LcdDem122032)
+			{
+				bounds = DrawDisplay_Lcd(posWorld, scaleWorld, sim);
+			}
 			else if (display.DisplayType == ChipType.DisplayLED)
 			{
 				bool simActive = sim != null;
@@ -627,6 +631,31 @@ namespace DLS.Graphics
 			{
 				return (raw & 0b1111) / 15f;
 			}
+		}
+
+		// DEM122032A: 122 x 32, dark pixels on a yellow-green STN background; scale = the width
+		public static Bounds2D DrawDisplay_Lcd(Vector2 centre, float scale, SimChip simSource)
+		{
+			const int w = LcdDem122032.Width, h = LcdDem122032.Height;
+			Vector2 outer = new(scale, scale * h / w + scale * 0.06f);
+			Draw.Quad(centre, outer, new Color(0.05f, 0.05f, 0.05f));
+			Vector2 glass = new(scale * 0.97f, scale * 0.97f * h / w);
+			Draw.Quad(centre, glass, new Color(0.62f, 0.69f, 0.42f));
+			float px = glass.x / w;
+			Vector2 topLeft = centre + new Vector2(-glass.x / 2, glass.y / 2);
+			Vector2 dot = Vector2.one * (px * 0.9f);
+			Color on = new(0.08f, 0.1f, 0.06f);
+			Color off = new(0.58f, 0.65f, 0.4f);
+			uint[] state = simSource?.InternalState;
+			bool useSim = state != null && state.Length >= LcdDem122032.StateSize;
+			for (int y = 0; y < h; y++)
+				for (int x = 0; x < w; x++)
+				{
+					bool lit = useSim && LcdDem122032.Pixel(state, x, y);
+					if (!lit && !useSim) continue;
+					Draw.Quad(topLeft + new Vector2(px * (x + 0.5f), -px * (y + 0.5f)), dot, lit ? on : off);
+				}
+			return Bounds2D.CreateFromCentreAndSize(centre, outer);
 		}
 
 		public static Bounds2D DrawDisplay_Dot(Vector2 centre, float scale, SimChip simSource)

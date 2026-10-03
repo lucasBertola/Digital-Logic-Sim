@@ -44,6 +44,7 @@ namespace DLS.Game
 				CreateDisplay7Seg(),
 				CreateDisplayRGB(),
 				CreateDisplayDot(),
+				CreateLcdDem122032(),
 				CreateDisplayLED(),
 				// ---- Bus ----
 				CreateBus(PinBitCount.Bit1),
@@ -312,6 +313,43 @@ namespace DLS.Game
 			};
 
 			return CreateBuiltinChipDescription(ChipType.DisplayDot, size, col, inputPins, outputPins, displays, NameDisplayLocation.Hidden);
+		}
+
+		// DEM122032A graphic LCD: the real module's pins (the bidirectional DB0-7 is an input DB + a 3-state output DB OUT,
+		// driven only while a read is enabled). The display is drawn 122 x 32 (Scale = its width).
+		static ChipDescription CreateLcdDem122032()
+		{
+			PinDescription[] inputPins =
+			{
+				CreatePinDescription("DB", 0, PinBitCount.Bit8),
+				CreatePinDescription("A0", 1),
+				CreatePinDescription("R/W", 2),
+				CreatePinDescription("E1", 3),
+				CreatePinDescription("E2", 4),
+				CreatePinDescription("RES", 5)
+			};
+			PinDescription[] outputPins =
+			{
+				CreatePinDescription("DB OUT", 6, PinBitCount.Bit8)
+			};
+
+			float displayWidth = GridSize * 40;
+			float displayHeight = displayWidth * 32f / 122f;
+			float height = Mathf.Max(SubChipInstance.MinChipHeightForPins(inputPins, null), displayHeight + GridSize * 3);
+			Vector2 size = new(CalculateGridSnappedWidth(displayWidth + GridSize * 3), height);
+			Color col = new(0.12f, 0.14f, 0.12f);
+
+			DisplayDescription[] displays =
+			{
+				new()
+				{
+					Position = Vector2.zero,
+					Scale = displayWidth,
+					SubChipID = -1
+				}
+			};
+
+			return CreateBuiltinChipDescription(ChipType.LcdDem122032, size, col, inputPins, outputPins, displays, NameDisplayLocation.Hidden);
 		}
 
 		// (Not a chip, but convenient to treat it as one)

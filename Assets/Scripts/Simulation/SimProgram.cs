@@ -1150,6 +1150,14 @@ namespace DLS.Simulation
 					break;
 				}
 
+				case (byte)ChipType.LcdDem122032:
+				{
+					uint db = In(st, ins[i], k), a0 = In(st, ins[i + 1], k), rw = In(st, ins[i + 2], k), e1 = In(st, ins[i + 3], k), e2 = In(st, ins[i + 4], k), res = In(st, ins[i + 5], k);
+					uint o = LcdDem122032.Run(internalState[g], db & 0xFF, PinState.FirstBitHigh(a0), PinState.FirstBitHigh(rw), PinState.FirstBitHigh(e1), PinState.FirstBitHigh(e2), PinState.FirstBitHigh(res));
+					Write(states, sOut0[k], o);
+					break;
+				}
+
 				case (byte)ChipType.dev_Ram_8Bit:
 				{
 					uint[] mem = internalState[g];
