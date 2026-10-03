@@ -569,6 +569,10 @@ namespace DLS.Graphics
 			{
 				bounds = DrawDisplay_Lcd(posWorld, scaleWorld, sim);
 			}
+			else if (display.DisplayType == ChipType.LcdSt7920)
+			{
+				bounds = DrawDisplay_St7920(posWorld, scaleWorld, sim);
+			}
 			else if (display.DisplayType == ChipType.DisplayLED)
 			{
 				bool simActive = sim != null;
@@ -655,6 +659,28 @@ namespace DLS.Graphics
 					if (!lit && !useSim) continue;
 					Draw.Quad(topLeft + new Vector2(px * (x + 0.5f), -px * (y + 0.5f)), dot, lit ? on : off);
 				}
+			return Bounds2D.CreateFromCentreAndSize(centre, outer);
+		}
+
+		// ST7920 128 x 64: white pixels on the blue backlight of the user's module; scale = the width. The cursor blink
+		// runs on real time (about 2 Hz), like the chip's own oscillator; the rest is the simulated state.
+		public static Bounds2D DrawDisplay_St7920(Vector2 centre, float scale, SimChip simSource)
+		{
+			const int w = LcdSt7920.Width, h = LcdSt7920.Height;
+			Vector2 outer = new(scale, scale * h / w + scale * 0.06f);
+			Draw.Quad(centre, outer, new Color(0.05f, 0.05f, 0.08f));
+			Vector2 glass = new(scale * 0.97f, scale * 0.97f * h / w);
+			Draw.Quad(centre, glass, new Color(0.1f, 0.25f, 0.85f));
+			uint[] state = simSource?.InternalState;
+			if (state == null || state.Length < LcdSt7920.StateSize) return Bounds2D.CreateFromCentreAndSize(centre, outer);
+			float px = glass.x / w;
+			Vector2 topLeft = centre + new Vector2(-glass.x / 2, glass.y / 2);
+			Vector2 dot = Vector2.one * (px * 0.9f);
+			Color on = new(0.93f, 0.96f, 1f);
+			bool blink = (int)(Time.time * 2) % 2 == 0;
+			for (int y = 0; y < h; y++)
+				for (int x = 0; x < w; x++)
+					if (LcdSt7920.Pixel(state, x, y, blink)) Draw.Quad(topLeft + new Vector2(px * (x + 0.5f), -px * (y + 0.5f)), dot, on);
 			return Bounds2D.CreateFromCentreAndSize(centre, outer);
 		}
 

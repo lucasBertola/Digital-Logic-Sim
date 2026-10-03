@@ -60,7 +60,7 @@ namespace DLS.Game
 		static readonly HashSet<ChipType> LifeOfItsOwn = new()
 		{
 			ChipType.Clock, ChipType.Key, ChipType.Pulse, ChipType.Buzzer, ChipType.Rom_256x16, ChipType.dev_Ram_8Bit,
-			ChipType.SevenSegmentDisplay, ChipType.DisplayRGB, ChipType.DisplayDot, ChipType.DisplayLED, ChipType.LcdDem122032
+			ChipType.SevenSegmentDisplay, ChipType.DisplayRGB, ChipType.DisplayDot, ChipType.DisplayLED, ChipType.LcdDem122032, ChipType.LcdSt7920
 		};
 
 		public static bool Modellable(ChipDescription d, ChipLibrary lib, HashSet<string> visiting = null)

@@ -14,7 +14,7 @@ namespace DLS.SaveSystem
     {
         static readonly HashSet<ChipType> StatefulBuiltins = new()
         {
-            ChipType.Clock, ChipType.Pulse, ChipType.dev_Ram_8Bit, ChipType.DisplayRGB, ChipType.DisplayDot, ChipType.LcdDem122032
+            ChipType.Clock, ChipType.Pulse, ChipType.dev_Ram_8Bit, ChipType.DisplayRGB, ChipType.DisplayDot, ChipType.LcdDem122032, ChipType.LcdSt7920
         };
 
         // Behaviour of the ATOMIC builtin primitives (the only ones that can't be rebuilt from NAND).
@@ -41,6 +41,7 @@ namespace DLS.SaveSystem
             { "7-SEGMENT", "afficheur 7 segments." },
             { "RGB DISPLAY", "afficheur RGB." },
             { "DOT DISPLAY", "afficheur matriciel (points)." },
+            { "LCD ST7920 128x64", "Module LCD 128x64 ST7920 (texte + graphique). Broches : DB(8), RS (0 instruction/etat, 1 donnee), R/W (1 lecture), E, PSB (1 parallele, 0 serie ; non branchee = parallele, tirage interne), RST (actif a 0 ; non branchee = fonctionne) ; sortie DB OUT (pilotee seulement pendant une lecture parallele, flotte sinon). Parallele : ecriture prise au FRONT DESCENDANT de E ; lecture : DB OUT pilote tant que E est haut, la 1re lecture de donnee apres une adresse rend l'ancien latch (lecture fantome) ; mode 4 bits (function set 20h) : 2 transferts sur DB7-4, quartet haut d'abord. Serie (PSB=0) : RS=CS, R/W=SID, E=SCLK, SID lu au front MONTANT de SCLK : octet de depart 11111 RW RS 0 puis chaque octet en 2 octets (D7-D4 0000, D3-D0 0000), ecriture seulement. Instructions de base (RE=0) : 01 efface le texte (PAS le graphique), 02 origine, 04-07 mode d'entree, 08-0F affichage D/curseur C/clignotement B, 10-1F decalage curseur/affichage, 30 = 8 bits base, 20 = 4 bits, 34/36 = mode etendu (36 : graphique allume), 40+a adresse CGRAM, 80+a adresse texte (ligne 1 = 80-87, ligne 2 = 90-97, ligne 3 = 88-8F, ligne 4 = 98-9F ; un mot = 2 caracteres 8x16 ASCII ou 1 caractere chinois GB2312 16x16 ; 0000/0002/0004/0006 = caracteres utilisateur). Etendues (RE=1) : 01 veille, 02/03 choix defilement/IRAM, 04-07 inverse une ligne, 08/0C sommeil/reveil, 40+a adresse de defilement, adresse graphique = 80+y (0-31) puis 80+x (0-15 ; x 0-7 = lignes 0-31, x 8-15 = lignes 32-63), puis 2 octets par mot de 16 pixels (haut d'abord, bit 15 a gauche), x avance seul. Etat : BF (toujours 0) + AC. Affichage = texte XOR graphique. RAM aleatoires a la mise sous tension, affichage eteint : effacer texte ET graphique." },
             { "LCD DEM122032A", "LCD graphique 122x32 noir et blanc, 2 controleurs SED1520 (E1 = colonnes 0-60, E2 = 61-121), bus 68 : DB(8) + A0 (0 commande/etat, 1 donnee) + R/W (1 lecture) ; ecriture prise au FRONT DESCENDANT de E1/E2 ; lecture : DB OUT pilote tant que E est haut (flotte sinon), la 1re lecture de donnee apres une adresse rend l'ancien latch (lecture fantome). Commandes : AF/AE affichage on/off, B8+p page (0-3, 8 lignes, bit 0 en haut), 00-4F colonne (la colonne avance seule apres chaque octet), C0+l ligne de depart, A0/A1 ADC, A4/A5 tout allume, E0/EE read-modify-write, E2 reset ; etat : D6 ADC, D5 = 1 si eteint. RES = 1 reinitialise. RAM aleatoire a la mise sous tension, affichage eteint." },
         };
 

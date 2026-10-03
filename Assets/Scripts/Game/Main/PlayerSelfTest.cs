@@ -376,6 +376,28 @@ namespace DLS.Game
 				string grid = CircuitTester.ReadLcdGrid(t);
 				return grid.Split('\n').Length == 16 ? null : "the text rendering for Claude is not 16 lines";
 			});
+			Check("LCD ST7920 128x64: in the DISPLAY collection of an existing project, text and graphics through its pins, ROM fonts present", () =>
+			{
+				if (!loadedProject.description.ChipCollections.Any(col => col.Chips.Any(ch => ch == "LCD ST7920 128x64"))) return "not added to the collections of an existing project";
+				ChipDescription lcd = lib.GetChipDescription("LCD ST7920 128x64");
+				SimChip r = CircuitTester.BuildIsolatedSim(lcd, lib);
+				SimChip t = CircuitTester.TargetOf(r);
+				void Set(int pin, uint v) => r.InputPins[pin].State = PinState.Make((ushort)v, 0);
+				void Send(int rs, uint v) { Set(2, 0); Set(1, (uint)rs); Set(0, v); Step(r, 2); Set(3, 1); Step(r, 2); Set(3, 0); Step(r, 2); }
+				for (int i = 0; i < 6; i++) Set(i, 0);
+				Set(4, 1); Set(5, 1); // parallel, not in reset
+				Step(r, 2);
+				foreach (uint cmd in new uint[] { 0x30, 0x0C, 0x01, 0x80 }) Send(0, cmd);
+				Send(1, 'A'); Send(1, 'B'); Send(1, 0xD6); Send(1, 0xD0); // "AB" then GB2312 D6D0
+				for (int y = 0; y < 16; y++)
+					for (int x = 0; x < 8; x++)
+						if (LcdSt7920.Pixel(t.InternalState, x, y) != (((St7920Font.Half['A' * 16 + y] >> (7 - x)) & 1) != 0)) return $"'A' drawn wrong at ({x}, {y})";
+				int lit = 0;
+				for (int y = 0; y < 16; y++) for (int x = 16; x < 32; x++) if (LcdSt7920.Pixel(t.InternalState, x, y)) lit++;
+				if (lit < 20) return "the GB2312 16x16 ROM is missing in the build";
+				string grid = CircuitTester.ReadSt7920Grid(t);
+				return grid.Split('\n').Length == 33 && grid.Contains("\"AB") ? null : "the text rendering for Claude is wrong";
+			});
 			Check("RUN FAST: the CPU's fast tree gives the gates' outputs, cycle after cycle; the cache survives its file", () =>
 			{
 				lib.TryGetChipDescription("CPU", out ChipDescription c);

@@ -89,6 +89,7 @@ namespace DLS.Simulation
 		int noiseAccumulator;
 		// slots nobody ever drives (unconnected pins): floating, but read as a quiet 0, never as noise
 		bool[] quiet = Array.Empty<bool>();
+		bool[] unconnected = Array.Empty<bool>(); // slots of pins wired to nothing at all (a module's pull-up applies)
 		int noiseCount;
 
 		int[] rootInputSlots = Array.Empty<int>();
@@ -391,6 +392,7 @@ namespace DLS.Simulation
 			prog.BuildConsumerLists();
 			prog.quiet = new bool[nextSlot];
 			for (int i = 0; i < n; i++) if (isConstant[i]) prog.quiet[slotOf[i]] = true;
+			prog.unconnected = (bool[])prog.quiet.Clone(); // before the quiet propagation below: only true no-wire pins
 			// (root inputs are NOT quiet: they are driven by the player; a floating output computed from them — a buffer
 			// with its enable at 0 — must read as noise. The bench drives every input like the app does.)
 			// a stateless gate fed only by never-driven lines produces a constant too (a SPLIT of an unconnected
@@ -1290,6 +1292,18 @@ namespace DLS.Simulation
 					m.Run();
 					for (int j = 0; j < mo.Length; j++) Write(states, outs[os + j], mo[j]);
 					if (m.RerunNextStep) { m.RerunNextStep = false; SetDirty(k); }
+					break;
+				}
+
+				case (byte)ChipType.LcdSt7920:
+				{
+					uint db = In(st, ins[i], k), rs = In(st, ins[i + 1], k), rw = In(st, ins[i + 2], k), e = In(st, ins[i + 3], k);
+					int psbSlot = ins[i + 4], rstSlot = ins[i + 5];
+					// the module pulls PSB and RST up: unconnected = parallel, not in reset
+					bool psb = unconnected[psbSlot] || PinState.FirstBitHigh(In(st, psbSlot, k));
+					bool rstHigh = unconnected[rstSlot] || PinState.FirstBitHigh(In(st, rstSlot, k));
+					uint o = LcdSt7920.Run(internalState[g], db & 0xFF, PinState.FirstBitHigh(rs), PinState.FirstBitHigh(rw), PinState.FirstBitHigh(e), psb, !rstHigh);
+					Write(states, sOut0[k], o);
 					break;
 				}
 

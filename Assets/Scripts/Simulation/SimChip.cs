@@ -90,6 +90,14 @@ namespace DLS.Simulation
 					for (int a = 0; a < LcdDem122032.Ram; a++) { Simulator.NextBytes(randomByte); InternalState[c * LcdDem122032.Block + a] = randomByte[0]; }
 				LcdDem122032.PowerOn(InternalState);
 			}
+			else if (ChipType is ChipType.LcdSt7920)
+			{
+				InternalState = new uint[LcdSt7920.StateSize];
+				// DDRAM / CGRAM / GDRAM / IRAM: garbage at power on, as on the real module (seeded: tests are reproducible)
+				Span<byte> randomBytes = stackalloc byte[2];
+				for (int a = 0; a < LcdSt7920.RamWords; a++) { Simulator.NextBytes(randomBytes); InternalState[a] = (uint)(randomBytes[0] << 8 | randomBytes[1]); }
+				LcdSt7920.PowerOn(InternalState);
+			}
 			else if (ChipType is ChipType.dev_Ram_8Bit)
 			{
 				InternalState = new uint[addressSize_8Bit + 1]; // +1 for clock state (to allow edge-trigger behaviour)

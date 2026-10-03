@@ -45,6 +45,7 @@ namespace DLS.Game
 				CreateDisplayRGB(),
 				CreateDisplayDot(),
 				CreateLcdDem122032(),
+				CreateLcdSt7920(),
 				CreateDisplayLED(),
 				// ---- Bus ----
 				CreateBus(PinBitCount.Bit1),
@@ -350,6 +351,43 @@ namespace DLS.Game
 			};
 
 			return CreateBuiltinChipDescription(ChipType.LcdDem122032, size, col, inputPins, outputPins, displays, NameDisplayLocation.Hidden);
+		}
+
+		// ST7920 128 x 64 module: the real module's logic pins (the bidirectional DB0-7 is an input DB + a 3-state output
+		// DB OUT, driven only while a parallel read is enabled; PSB and RST are pulled up on the module). Drawn 128 x 64.
+		static ChipDescription CreateLcdSt7920()
+		{
+			PinDescription[] inputPins =
+			{
+				CreatePinDescription("DB", 0, PinBitCount.Bit8),
+				CreatePinDescription("RS", 1),
+				CreatePinDescription("R/W", 2),
+				CreatePinDescription("E", 3),
+				CreatePinDescription("PSB", 4),
+				CreatePinDescription("RST", 5)
+			};
+			PinDescription[] outputPins =
+			{
+				CreatePinDescription("DB OUT", 6, PinBitCount.Bit8)
+			};
+
+			float displayWidth = GridSize * 32;
+			float displayHeight = displayWidth * 64f / 128f;
+			float height = Mathf.Max(SubChipInstance.MinChipHeightForPins(inputPins, null), displayHeight + GridSize * 3);
+			Vector2 size = new(CalculateGridSnappedWidth(displayWidth + GridSize * 3), height);
+			Color col = new(0.1f, 0.3f, 0.12f); // the module's green PCB
+
+			DisplayDescription[] displays =
+			{
+				new()
+				{
+					Position = Vector2.zero,
+					Scale = displayWidth,
+					SubChipID = -1
+				}
+			};
+
+			return CreateBuiltinChipDescription(ChipType.LcdSt7920, size, col, inputPins, outputPins, displays, NameDisplayLocation.Hidden);
 		}
 
 		// (Not a chip, but convenient to treat it as one)

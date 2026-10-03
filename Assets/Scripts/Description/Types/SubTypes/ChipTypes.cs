@@ -58,7 +58,10 @@ namespace DLS.Description
 		LcdDem122032, // DEM122032A, 122 x 32 black and white, 2 x SED1520 (Simulation/LcdDem122032.cs)
 
 		// ---- Internal: never saved, never placed ----
-		FastModel // a module simulated by its behaviour in RUN FAST (Simulation/FastModel.cs)
+		FastModel, // a module simulated by its behaviour in RUN FAST (Simulation/FastModel.cs)
+
+		// ---- Graphic LCD (continued) ----
+		LcdSt7920 // ST7920 128 x 64 module, parallel 8 / 4 bit or serial, text + graphics (Simulation/LcdSt7920.cs)
 
 	}
 }

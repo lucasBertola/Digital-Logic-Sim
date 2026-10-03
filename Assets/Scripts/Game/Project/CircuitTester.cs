@@ -325,7 +325,7 @@ namespace DLS.Game
                         }
                         else
                         {
-                            string grid = dr.type == ChipType.DisplayRGB ? ReadRgbGrid(dsim) : dr.type == ChipType.LcdDem122032 ? ReadLcdGrid(dsim) : ReadDotGrid(dsim);
+                            string grid = dr.type == ChipType.DisplayRGB ? ReadRgbGrid(dsim) : dr.type == ChipType.LcdDem122032 ? ReadLcdGrid(dsim) : dr.type == ChipType.LcdSt7920 ? ReadSt7920Grid(dsim) : ReadDotGrid(dsim);
                             if (grid != prevGrids[d])
                             {
                                 prevGrids[d] = grid;
@@ -345,7 +345,7 @@ namespace DLS.Game
                     foreach (string g in gridBlocks) sb.AppendLine(g);
                 }
 
-                if (displays.Any(d => d.type is ChipType.DisplayRGB or ChipType.DisplayDot or ChipType.LcdDem122032))
+                if (displays.Any(d => d.type is ChipType.DisplayRGB or ChipType.DisplayDot or ChipType.LcdDem122032 or ChipType.LcdSt7920))
                     sb.AppendLine("(Les grilles d'ecran ne sont reaffichees que lorsqu'elles changent.)");
             }
             catch (Exception e)
@@ -438,7 +438,7 @@ namespace DLS.Game
                     return;
                 }
 
-                if (d.DisplayType is not (ChipType.SevenSegmentDisplay or ChipType.DisplayLED or ChipType.DisplayRGB or ChipType.DisplayDot or ChipType.LcdDem122032)) return;
+                if (d.DisplayType is not (ChipType.SevenSegmentDisplay or ChipType.DisplayLED or ChipType.DisplayRGB or ChipType.DisplayDot or ChipType.LcdDem122032 or ChipType.LcdSt7920)) return;
 
                 string label = path.Count == 1 ? baseLabel : baseLabel + ">" + ShortName(d.DisplayType);
                 string unique = label;
@@ -455,6 +455,7 @@ namespace DLS.Game
             ChipType.DisplayRGB => "RGB",
             ChipType.DisplayDot => "DOT",
             ChipType.LcdDem122032 => "LCD",
+            ChipType.LcdSt7920 => "ST7920",
             _ => t.ToString()
         };
 
@@ -581,6 +582,27 @@ namespace DLS.Game
                     sb.Append(top ? (bottom ? '\u2588' : '\u2580') : (bottom ? '\u2584' : '.'));
                 }
                 if (y < LcdDem122032.Height - 2) sb.Append('\n');
+            }
+            return sb.ToString();
+        }
+
+        // 128 x 64 in 32 text lines (2 pixels stacked per character), preceded by what the text layer holds
+        public static string ReadSt7920Grid(SimChip sim)
+        {
+            uint[] s = sim.InternalState;
+            var sb = new StringBuilder();
+            string[] text = LcdSt7920.TextLines(s);
+            sb.Append("  texte (couche DDRAM, ").Append(s[LcdSt7920.D] != 0 ? "affichage ON" : "affichage OFF").Append(s[LcdSt7920.G] != 0 ? ", graphique ON" : ", graphique off").Append(") : ");
+            sb.Append(string.Join(" | ", text.Select(t => "\"" + t + "\""))).Append('\n');
+            for (int y = 0; y < LcdSt7920.Height; y += 2)
+            {
+                sb.Append("  ");
+                for (int x = 0; x < LcdSt7920.Width; x++)
+                {
+                    bool top = LcdSt7920.Pixel(s, x, y), bottom = LcdSt7920.Pixel(s, x, y + 1);
+                    sb.Append(top ? (bottom ? '\u2588' : '\u2580') : (bottom ? '\u2584' : '.'));
+                }
+                if (y < LcdSt7920.Height - 2) sb.Append('\n');
             }
             return sb.ToString();
         }

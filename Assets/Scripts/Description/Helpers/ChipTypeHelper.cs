@@ -29,6 +29,7 @@ namespace DLS.Description
 			{ ChipType.DisplayRGB, "RGB DISPLAY" },
 			{ ChipType.DisplayDot, "DOT DISPLAY" },
 			{ ChipType.LcdDem122032, "LCD DEM122032A" },
+			{ ChipType.LcdSt7920, "LCD ST7920 128x64" },
 			{ ChipType.SevenSegmentDisplay, "7-SEGMENT" },
 			{ ChipType.DisplayLED, "LED" },
 
