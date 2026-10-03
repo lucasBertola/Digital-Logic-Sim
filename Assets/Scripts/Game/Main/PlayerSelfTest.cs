@@ -36,6 +36,33 @@ namespace DLS.Game
 		static string lastJson;
 		static float started;
 
+		// steps/s of the fixture CPU (saved inputs, builtin clock, 70 steps per transition), batched like the sim
+		// thread, managed loop vs Burst kernel, alternated 3 times for 0.7 s each
+		static string BurstCpuRate()
+		{
+			lib.TryGetChipDescription("CPU", out ChipDescription c);
+			var best = new double[2];
+			Simulator.stepsPerClockTransition = 70;
+			for (int round = 0; round < 6; round++)
+			{
+				int mode = round & 1;
+				SimProgram.UseBurst = mode == 1;
+				try
+				{
+					SimChip root = Simulator.BuildSimChip(c, lib);
+					for (int i = 0; i < root.InputPins.Length; i++) root.InputPins[i].State = PinState.Make((ushort)c.InputPins[i].InputState, 0);
+					var audio = new SimAudio();
+					Simulator.RunSimulationSteps(root, Array.Empty<DevPinInstance>(), audio, 20000);
+					var sw = System.Diagnostics.Stopwatch.StartNew();
+					long steps = 0;
+					while (sw.ElapsedMilliseconds < 700) steps += Simulator.RunSimulationSteps(root, Array.Empty<DevPinInstance>(), audio, 256);
+					best[mode] = Math.Max(best[mode], steps / sw.Elapsed.TotalSeconds);
+				}
+				finally { SimProgram.UseBurst = true; }
+			}
+			return $"managed {best[0]:0} steps/s, Burst {best[1]:0} steps/s (x{best[1] / best[0]:0.00}){(Unity.Burst.BurstCompiler.IsEnabled ? "" : " [Burst disabled]")}";
+		}
+
 		public static void CheckArgs()
 		{
 			string[] args = Environment.GetCommandLineArgs();
@@ -363,6 +390,33 @@ namespace DLS.Game
 				return inst.Count > 0 && back.Entries.Count() == cache.Entries.Count() ? null : $"cache round trip: {back.Entries.Count()} of {cache.Entries.Count()} entries, {inst.Count} models";
 			});
 			report.AppendLine("      burst experiment: " + BurstBench.Run());
+			Check("burst stepper = managed stepper in the built player (CPU, every slot, 1500 steps)", () =>
+			{
+				lib.TryGetChipDescription("CPU", out ChipDescription c);
+				var traces = new List<uint[]>[2];
+				for (int pass = 0; pass < 2; pass++)
+				{
+					SimProgram.UseBurst = pass == 1;
+					try
+					{
+						SimChip root = Simulator.BuildSimChip(c, lib);
+						Simulator.ResetForTests(77);
+						var rnd = new System.Random(5);
+						traces[pass] = new List<uint[]>();
+						for (int s = 0; s < 1500; s++)
+						{
+							if (s % 6 == 0) foreach (SimPin p in root.InputPins) if (rnd.Next(2) == 0) p.State = PinState.Make((ushort)rnd.Next(256), 0);
+							Simulator.forcedClockState = (s / 9) & 1;
+							Simulator.RunSimulationStep(root, Array.Empty<DevPinInstance>(), new SimAudio());
+							traces[pass].Add((uint[])root.Program.states.Clone());
+						}
+					}
+					finally { SimProgram.UseBurst = true; Simulator.forcedClockState = -1; Simulator.ClearTestSeed(); }
+				}
+				for (int s = 0; s < 1500; s++) if (!traces[0][s].SequenceEqual(traces[1][s])) return "states differ at step " + s;
+				return null;
+			});
+			report.AppendLine("      burst on the CPU, batched like the sim thread: " + BurstCpuRate());
 			Check("memory editor: cache JSON round trip", () =>
 			{
 				var c = new Dictionary<string, MemoryLayout.CacheEntry> { ["CPU"] = new MemoryLayout.CacheEntry { hash = "h", rules = rules, polarity = pol } };

@@ -17,6 +17,7 @@ public static class LiveRate
         try
         {
             string chip = Arg("-rateChip") ?? "CPU_2";
+            DLS.Simulation.SimProgram.BurstEnabled = Arg("-noBurst") == null;
             string dir = SavePaths.GetProjectPath(Arg("-rateProject") ?? "PC");
             ChipLibrary lib = BenchProject.LoadLibrary(dir, out _);
             ProjectDescription pd = Serializer.DeserializeProjectDescription(File.ReadAllText(Path.Combine(dir, "ProjectDescription.json")));
