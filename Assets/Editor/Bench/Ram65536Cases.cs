@@ -18,6 +18,7 @@ namespace DLS.Bench
                 ("RAM65536: written while Cs and We are 1 (a level), D_out = the addressed byte with Cs and Oe, floating otherwise; 16-bit address, bytes of one state word independent", Basic),
                 ("RAM65536: the memory is saved with the chip (packed, 16384 state words) and restored", Saved),
                 ("RAM65536: EDIT MEMORY sees it, inside a chip and placed directly (65536 words of 8 bits); an edited word is read by the circuit", MemoryEditor),
+                ("RAM65536 x 4 on the same address (the user's prog_ram): ONE memory of 65536 x 32 bits, Ram0 = low byte, listed first; a RAM on another address stays separate", Parallel),
             };
             if (chips.Any(c => c.Name == "RAM256"))
                 list.Add(("[PC] RAM65536 behaves like the user's RAM256 (latches) on the same random writes and reads", () => LikeRam256(fixtures)));
@@ -107,6 +108,39 @@ namespace DLS.Bench
             SimChip direct = c.target.SubChips.First(x => x.ChipType == ChipType.Ram65536);
             MemoryBank own = MemoryLayout.BuiltinBank(direct, "RAM65536");
             return own != null && own.WordCount == 65536 && own.Read(0x4243) == 0x66 ? null : "placed directly: not seen as a memory";
+        }
+
+        static string Parallel()
+        {
+            // RAMs created in a shuffled order, each driving output Ram<n>; a 5th RAM on another address
+            int[] byteOf = { 2, 0, 3, 1 };
+            var c = UnitCases.Build("t_prog", new[] { "H:8", "L:8", "X:8" }, new[] { "Ram3:8", "Ram2:8", "Ram1:8", "Ram0:8", "Other:8" }, b =>
+            {
+                int vcc = b.Add(ChipType.Vcc);
+                for (int i = 0; i < 4; i++)
+                {
+                    int r = b.Add(ChipType.Ram65536);
+                    b.Wire(b.Input("H"), b.In(r, 1)); b.Wire(b.Input("L"), b.In(r, 2));
+                    b.Wire(b.Out(vcc, 0), b.In(r, 4)); b.Wire(b.Out(vcc, 0), b.In(r, 5));
+                    b.Wire(b.Out(r, 0), b.Output("Ram" + byteOf[i]));
+                }
+                int o = b.Add(ChipType.Ram65536);
+                b.Wire(b.Input("X"), b.In(o, 1)); b.Wire(b.Input("L"), b.In(o, 2));
+                b.Wire(b.Out(vcc, 0), b.In(o, 4)); b.Wire(b.Out(vcc, 0), b.In(o, 5));
+                b.Wire(b.Out(o, 0), b.Output("Other"));
+            });
+            c.Set("H", 0x12); c.Set("L", 0x34); c.Set("X", 0); c.Step(2);
+            List<MemoryBank> banks = MemoryLayout.BuiltinBanks(c.target, c.desc, c.lib);
+            if (banks.Count != 2) return $"{banks.Count} memories: {string.Join(", ", banks.Select(x => x.Name + " " + x.WordCount + "x" + x.Bits))} (expected the 4 merged + the separate one)";
+            MemoryBank big = banks.FirstOrDefault(x => x.Bits == 32);
+            if (big == null || big.WordCount != 65536) return "no 65536 x 32-bit memory";
+            if (banks[0] != big) return "the merged memory is not listed first";
+            big.Write(0x1234, 0x44332211, c.target.Program);
+            c.Step(2);
+            string got = $"{c.OutValue("Ram3"):X2}{c.OutValue("Ram2"):X2}{c.OutValue("Ram1"):X2}{c.OutValue("Ram0"):X2}";
+            if (got != "44332211") return $"word 44332211 written at 1234 reads Ram3..Ram0 = {got}: the byte order does not follow Ram0 = low byte";
+            if (big.Read(0x1234) != 0x44332211) return $"the merged memory reads {big.Read(0x1234):X8}";
+            return null;
         }
 
         // the same sequence on the user's RAM256 (address = Adresses, high byte 0) and on RAM65536

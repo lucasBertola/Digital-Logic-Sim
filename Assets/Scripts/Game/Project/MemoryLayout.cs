@@ -199,6 +199,7 @@ namespace DLS.Game
 			var banks = new List<MemoryBank>();
 			if (chip == null || desc == null) return banks;
 			Dictionary<int, string> names = CircuitExporter.BuildComponentNames(desc);
+			var here = new List<(MemoryBank bank, SubChipDescription sd)>();
 			foreach (SubChipDescription sd in desc.SubChips.OrderBy(s => s.ID))
 			{
 				(bool ok, SimChip c) = chip.TryGetSubChipFromID(sd.ID);
@@ -207,11 +208,52 @@ namespace DLS.Game
 				string path = prefix.Length == 0 ? label : prefix + " / " + label;
 				if (c.IsBuiltin)
 				{
-					if (BuiltinBank(c, path) is MemoryBank bb) banks.Add(bb);
+					if (BuiltinBank(c, path) is MemoryBank bb) here.Add((bb, sd));
 				}
 				else if (lib.GetChipDescriptionForSim(sd.Name) is { } cd) banks.AddRange(BuiltinBanks(c, cd, lib, path));
 			}
+			banks.InsertRange(0, MergeParallelRams(here, desc, prefix.Length == 0 ? desc.Name : prefix));
 			return banks;
+		}
+
+		// RAM65536s side by side on the SAME address (their Adr_high / Adr_low pins fed by the same sources, e.g. the user's
+		// prog_ram: 4 RAMs = 32-bit instructions) are ONE memory of 65 536 words (same rule as MergeParallel for latch
+		// RAMs). Byte order: by the number at the end of the parent output each RAM drives (Ram0 = low byte), else by name.
+		static List<MemoryBank> MergeParallelRams(List<(MemoryBank bank, SubChipDescription sd)> here, ChipDescription desc, string name)
+		{
+			const int AdrHigh = 1, AdrLow = 2, DOut = 6; // RAM65536 pin IDs (BuiltinChipCreator.CreateRam65536)
+			string Source(int owner, int pin)
+			{
+				var srcs = desc.Wires.Where(w => w.TargetPinAddress.PinOwnerID == owner && w.TargetPinAddress.PinID == pin)
+					.Select(w => $"{w.SourcePinAddress.PinOwnerID}.{w.SourcePinAddress.PinID}").OrderBy(x => x, StringComparer.Ordinal);
+				return string.Join("+", srcs);
+			}
+			string OutputKey(MemoryBank b, int owner)
+			{
+				foreach (WireDescription w in desc.Wires)
+				{
+					if (w.SourcePinAddress.PinOwnerID != owner || w.SourcePinAddress.PinID != DOut) continue;
+					PinDescription? o = desc.OutputPins.FirstOrDefault(p => p.ID == w.TargetPinAddress.PinOwnerID);
+					if (o.HasValue && o.Value.Name != null)
+					{
+						string digits = new string(o.Value.Name.Reverse().TakeWhile(char.IsDigit).Reverse().ToArray());
+						if (digits.Length > 0) return "0" + digits.PadLeft(6, '0');
+					}
+				}
+				return "1" + NaturalKey(b.Name);
+			}
+			var result = new List<MemoryBank>();
+			var groups = here.GroupBy(h => h.bank.BuiltinPacked ? Source(h.sd.ID, AdrHigh) + "|" + Source(h.sd.ID, AdrLow) : "#" + h.sd.ID);
+			foreach (var g in groups)
+			{
+				var members = g.ToList();
+				bool merge = members.Count >= 2 && members[0].bank.BuiltinPacked && !g.Key.StartsWith("|") && members.Count * 8 <= 32
+					&& !string.IsNullOrEmpty(Source(members[0].sd.ID, AdrHigh)) && !string.IsNullOrEmpty(Source(members[0].sd.ID, AdrLow));
+				if (!merge) { result.AddRange(members.Select(m => m.bank)); continue; }
+				var parts = members.OrderBy(m => OutputKey(m.bank, m.sd.ID), StringComparer.Ordinal).Select(m => m.bank).ToList();
+				result.Add(new MemoryBank { Name = $"{name} ({parts.Count} x RAM65536, {parts.Count * 8} bits)", Bits = parts.Count * 8, Parts = parts });
+			}
+			return result;
 		}
 
 		// ---------------------------------------------------------------- resolution
@@ -344,7 +386,7 @@ namespace DLS.Game
 				}
 				banks = MergeParallel(banks, where, rules, desc);
 			}
-			banks.AddRange(BuiltinBanks(chip, desc, lib));
+			banks.InsertRange(0, BuiltinBanks(chip, desc, lib)); // the memories (RAM / ROM) first: the editor opens on them
 			return banks;
 		}
 
