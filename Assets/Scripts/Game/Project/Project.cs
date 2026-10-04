@@ -44,6 +44,14 @@ namespace DLS.Game
 
 		SimChip ViewedSimChip => fastActive ? fastRoot : ViewedChip.SimChip;
 
+		// The simulation a chip's displays are drawn from: in RUN FAST the gates are not stepped, the fast tree is (its
+		// builtins keep their sub-chip IDs). Drawing from the gates froze the LCD on the image of the moment RUN FAST started.
+		public SimChip DisplaySimChip(DevChipInstance dc)
+		{
+			SimChip f = fastRoot;
+			return fastActive && f != null && dc == fastChip ? f : dc.SimChip;
+		}
+
 		// The chip currently in view. This chip may be in view-only mode.
 		public DevChipInstance ViewedChip => chipViewStack.Peek();
 		public bool CanEditViewedChip => chipViewStack.Count == 1;
@@ -314,6 +322,7 @@ namespace DLS.Game
 
 			// The user saved: persist the Ask Claude conversation alongside the project so it can be resumed.
 			AskClaude.SaveForProject(description.ProjectName);
+			dirtyIndicator.Clear(); // the red * goes at once, not up to DirtyIndicatorPeriod later
 		}
 
 		public bool ActiveChipHasUnsavedChanges()
@@ -468,9 +477,11 @@ namespace DLS.Game
 		ChipDescription LiveDescForSim(string name) =>
 			openChips.TryGetValue(name, out DevChipInstance dc) ? DescriptionCreator.CreateChipDescription(dc) : null;
 
+		public int DirtyChecksRun; // diagnostic (bench): full serializing comparisons made
 		public bool IsDirty(DevChipInstance dc)
 		{
 			if (dc == null) return false;
+			DirtyChecksRun++;
 			if (dc.LastSavedDescription == null) return dc.Elements.Count > 0;
 			if (dc.MemoryEdited) return true;
 			return Saver.HasUnsavedChanges(dc.LastSavedDescription, DescriptionCreator.CreateChipDescription(dc));
@@ -478,6 +489,21 @@ namespace DLS.Game
 
 		// A named chip is "dirty" if it is open in memory with unsaved changes (used for the * indicator).
 		public bool IsChipDirty(string chipName) => openChips.TryGetValue(chipName, out DevChipInstance dc) && IsDirty(dc);
+
+		// The bottom bar's red * is drawn every frame for every starred chip, and IsDirty serializes both descriptions:
+		// on the user's CPU_2 (RAM65536 memory state included) that was ~19 MB of garbage per frame, ~60 garbage
+		// collections per second, each one stopping the sim thread too (RUN FAST lost a third of its speed). The
+		// indicator is recomputed at most every DirtyIndicatorPeriod per chip; IsDirty itself (quit guard, save) stays exact.
+		public const float DirtyIndicatorPeriod = 0.5f;
+		readonly Dictionary<string, (bool dirty, float at)> dirtyIndicator = new(ChipDescription.NameComparer);
+		public bool IsChipDirtyForDisplay(string chipName, float now)
+		{
+			if (!openChips.ContainsKey(chipName)) return false;
+			if (dirtyIndicator.TryGetValue(chipName, out var c) && now - c.at < DirtyIndicatorPeriod && now >= c.at) return c.dirty;
+			bool d = IsChipDirty(chipName);
+			dirtyIndicator[chipName] = (d, now);
+			return d;
+		}
 
 		// Any unsaved work anywhere (used for the quit / exit-project warning).
 		public bool AnyUnsavedChanges()
@@ -909,6 +935,14 @@ namespace DLS.Game
 
 		public volatile int simThreadExceptions; // caught in the sim thread (logged); 0 when all is well
 
+		// Steps per batch of the unpaced sim thread. At Max speed the batch grows while it takes under 0.1 ms and shrinks
+		// above 0.4 ms: each batch costs ~2 us of its own around the steps (inputs, audio, the loop), which at 256 steps was
+		// half the time of the user's CPU_2 in RUN FAST (413 kHz with 256, 725-813 kHz with 4096). The time bound keeps
+		// inputs, edits and pause requests within a fraction of a millisecond on any circuit. Limited speed keeps 256.
+		public const int MinBatchSteps = 256, MaxBatchSteps = 1 << 16;
+		public static int FixedBatchSteps; // probe override (LiveRate -rateBatch), 0 = adaptive
+		public int CurrentBatchSteps { get; private set; } = MinBatchSteps;
+
 		void SimThread()
 		{
 			const int performanceTimeWindowMs = (int)(SimulationPerformanceTimeWindowSec * 1000);
@@ -917,6 +951,8 @@ namespace DLS.Game
 
 			Stopwatch stopwatch = new();
 			Stopwatch stopwatchTotal = Stopwatch.StartNew();
+			Stopwatch paceClock = Stopwatch.StartNew();
+			double paceDeadline = 0;
 
 			while (simThreadActive)
 			{
@@ -971,7 +1007,6 @@ namespace DLS.Game
 					}
 					else simPausedSingleStepCounter = 0;
 
-					double targetTickDurationMs = 1000.0 / targetTicksPerSecond;
 					stopwatch.Restart();
 					if (!stopwatchTotal.IsRunning) stopwatchTotal.Start();
 
@@ -986,21 +1021,27 @@ namespace DLS.Game
 					else
 					{
 						long tr0 = Simulator.Profile ? Stopwatch.GetTimestamp() : 0;
-						stepsDone = Simulator.RunSimulationSteps(simChip, inputPins, audioState.simAudio, 256);
+						bool max = targetTicksPerSecond == int.MaxValue;
+						int batch = FixedBatchSteps > 0 ? FixedBatchSteps : max ? CurrentBatchSteps : MinBatchSteps;
+						stepsDone = Simulator.RunSimulationSteps(simChip, inputPins, audioState.simAudio, batch);
+						if (max && FixedBatchSteps == 0)
+						{
+							long t = stopwatch.ElapsedTicks; // restarted just before the batch
+							if (t < Stopwatch.Frequency / 10000 && CurrentBatchSteps < MaxBatchSteps) CurrentBatchSteps *= 2;
+							else if (t > Stopwatch.Frequency / 2500 && CurrentBatchSteps > MinBatchSteps) CurrentBatchSteps /= 2;
+						}
 						if (Simulator.Profile && tr0 != 0) { Simulator.ProfInBatch += Stopwatch.GetTimestamp() - tr0; Simulator.ProfLoopSteps += stepsDone; }
 					}
 
 					// ---- Wait some amount of time (if needed) to try to hit the target ticks per second ----
-					while (true)
-					{
-						double elapsedMs = stopwatch.ElapsedTicks * (1000.0 / Stopwatch.Frequency);
-						double waitMs = targetTickDurationMs - elapsedMs;
-
-						if (waitMs <= 0) break;
-
-						// Wait some cycles before checking timer again (todo: better approach?)
-						Thread.SpinWait(10);
-					}
+					// A running deadline: each iteration adds the time its steps take at the target rate (a batch of 256
+					// steps used to wait one step's time, so a Limited target of 100 000 steps/s or more was no limit at all:
+					// 28 M asked, 58 M run; a per-iteration wait then ran 15 % slow, missing the loop's own time). More
+					// than 10 ms behind (a pause, a circuit slower than the target) it is not caught up.
+					paceDeadline += stepsDone * (double)Stopwatch.Frequency / targetTicksPerSecond;
+					long paceNow = paceClock.ElapsedTicks;
+					if (paceDeadline < paceNow - Stopwatch.Frequency / 100) paceDeadline = paceNow;
+					while (paceClock.ElapsedTicks < paceDeadline) Thread.SpinWait(10);
 
 					// ---- Update perf counter (average steps per second over the last window) ----
 					perfStepsInWindow += stepsDone;

@@ -83,7 +83,7 @@ namespace DLS.Game
 		// Guard closing the program (window X / Alt+F4) when the edited chip has unsaved changes.
 		bool OnWantsToQuit()
 		{
-			if (forceQuit) return true;
+			if (forceQuit || PlayerRateTest.Active) return true; // the rate test quits by itself on a project copy
 
 			Project p = Project.ActiveProject;
 			if (p == null) return true;

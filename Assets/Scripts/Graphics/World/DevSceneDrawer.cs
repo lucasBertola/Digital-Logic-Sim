@@ -236,7 +236,7 @@ namespace DLS.Graphics
 					if (element is SubChipInstance subchip)
 					{
 						// Get sim representation of this subchip (note: if the subchip has not yet been placed, this will be null)
-						SimChip sim = chip.SimChip.TryGetSubChipFromID(subchip.ID).chip;
+						SimChip sim = Project.ActiveProject.DisplaySimChip(chip).TryGetSubChipFromID(subchip.ID).chip; // the fast tree in RUN FAST
 						DrawSubchipDisplays(subchip, sim);
 					}
 

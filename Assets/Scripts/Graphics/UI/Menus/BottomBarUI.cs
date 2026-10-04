@@ -309,7 +309,7 @@ namespace DLS.Graphics
 					Bounds2D chipBtnBounds = UI.PrevBounds;
 
 					// Red * on chips that have unsaved changes.
-					if (!starred.IsCollection && project.IsChipDirty(starred.Name))
+					if (!starred.IsCollection && project.IsChipDirtyForDisplay(starred.Name, Time.realtimeSinceStartup)) // throttled: see IsChipDirtyForDisplay
 					{
 						UI.DrawText("*", theme.FontBold, theme.FontSizeRegular * 1.35f, chipBtnBounds.TopRight + new Vector2(-0.12f, 0.05f), Anchor.TopRight, new Color(1f, 0.4f, 0.4f));
 					}

@@ -20,12 +20,14 @@ public static class LiveRate
         {
             string chip = Arg("-rateChip") ?? "CPU_2";
             DLS.Simulation.SimProgram.BurstEnabled = Arg("-noBurst") == null;
+            if (Arg("-rateBatch") != null) Project.FixedBatchSteps = int.Parse(Arg("-rateBatch"));
             string dir = SavePaths.GetProjectPath(Arg("-rateProject") ?? "PC");
             ChipLibrary lib = BenchProject.LoadLibrary(dir, out _);
             ProjectDescription pd = Serializer.DeserializeProjectDescription(File.ReadAllText(Path.Combine(dir, "ProjectDescription.json")));
             pd.ProjectName = "_LiveRate_readonly"; // nothing is saved anyway; never the user's project
             pd.Prefs_SimPaused = false;
             if (Arg("-rateMax") != null) pd.Prefs_SimMaxSpeed = true;
+            if (Arg("-rateTarget") != null) { pd.Prefs_SimMaxSpeed = false; pd.Prefs_SimTargetStepsPerSecond = int.Parse(Arg("-rateTarget")); }
             var p = new Project(pd, lib) { audioState = new AudioState() };
             p.LoadDevChipOrCreateNewIfDoesntExist(chip);
             p.StartSimulation();
@@ -45,7 +47,7 @@ public static class LiveRate
                 profReport = $" | per half-period: wall {wall / halfs:0} ns, inside RunSimulationSteps {ns(Simulator.ProfInBatch):0} ns (Step {ns(Simulator.ProfStep):0}, IdleSteps {ns(Simulator.ProfIdle):0}, first full steps {ns(Simulator.ProfFirst):0} x{Simulator.ProfBatches / halfs:0.00}), real steps {Simulator.ProfSteps / halfs:0.00}, gates run {Simulator.ProfGates / halfs:0.0} (kernel {Simulator.ProfKernelGates / halfs:0.0}), kernel calls {Simulator.ProfKernelCalls / halfs:0.00} taking {ns(Simulator.ProfKernel):0} ns, noise list {Simulator.ProfNoise / (double)Math.Max(1, Simulator.ProfSteps):0.0}, handed back: " + string.Join(", ", Enumerable.Range(0, 256).Where(x => Simulator.ProfBailTypes[x] > 0).Select(x => (x == 255 ? "Merge" : ((DLS.Description.ChipType)x).ToString()) + " " + (Simulator.ProfBailTypes[x] / halfs).ToString("0.00")));
             }
             p.NotifyExit();
-            report = $"{chip}: {best:0} steps/s in the app's sim thread (target {(pd.Prefs_SimMaxSpeed ? "MAX" : pd.Prefs_SimTargetStepsPerSecond.ToString())}{(Arg("-rateFast") != null ? ", FAST MODE" : "")}, {pd.Prefs_SimStepsPerClockTick} steps per tick) = {best / (2.0 * pd.Prefs_SimStepsPerClockTick) / 1000:0} kHz shown" + profReport;
+            report = $"{chip}: {best:0} steps/s in the app's sim thread (target {(pd.Prefs_SimMaxSpeed ? "MAX" : pd.Prefs_SimTargetStepsPerSecond.ToString())}{(Arg("-rateFast") != null ? ", FAST MODE" : "")}, {pd.Prefs_SimStepsPerClockTick} steps per tick, batches of {(Project.FixedBatchSteps > 0 ? Project.FixedBatchSteps.ToString() : "adaptive, last " + p.CurrentBatchSteps)}) = {best / (2.0 * pd.Prefs_SimStepsPerClockTick) / 1000:0} kHz shown" + profReport;
         }
         catch (Exception e) { report = "EXCEPTION " + e; }
         File.AppendAllText(Path.Combine(BenchProject.RepoRoot, "Builds", "liverate.txt"), report + "\n");

@@ -493,6 +493,37 @@ namespace DLS.Game
 				return SimKernel.CompiledByBurst() == 1 ? null : "the kernel is not compiled by Burst in the player";
 			});
 			report.AppendLine("      burst on the CPU, batched like the sim thread: " + BurstCpuRate());
+			// 2026-10-04: the whole batched loop runs in the Burst kernel (SimKernel.RunBatch), compiled ahead of time here
+			foreach (bool fastTree in new[] { false, true })
+			Check(fastTree ? "batched loop in the Burst kernel = reference loop in the built player (CPU RUN FAST tree, builtin clock, every slot after every batch)" : "batched loop in the Burst kernel = reference loop in the built player (CPU, builtin clock, every slot after every batch)", () =>
+			{
+				lib.TryGetChipDescription("CPU", out ChipDescription c);
+				var traces = new List<uint[]>[2];
+				for (int pass = 0; pass < 2; pass++)
+				{
+					try
+					{
+						SimChip root = fastTree ? FastBuilder.Build(c, lib, new FastCache(), new List<FastBuilder.Instance>()) : Simulator.BuildSimChip(c, lib);
+						Simulator.ResetForTests(31);
+						Simulator.stepsPerClockTransition = 70;
+						var rndK = new System.Random(8);
+						var audioK = new SimAudio();
+						traces[pass] = new List<uint[]>();
+						for (int bt = 0; bt < 300; bt++)
+						{
+							if (bt % 5 == 0) foreach (SimPin p in root.InputPins) if (rndK.Next(2) == 0) p.State = PinState.Make((ushort)rndK.Next(256), 0);
+							int nSteps = 2 + rndK.Next(300);
+							int doneK = 0;
+							while (doneK < nSteps) doneK += pass == 0 ? Simulator.RunSimulationStepsReference(root, Array.Empty<DevPinInstance>(), audioK, nSteps - doneK) : Simulator.RunSimulationSteps(root, Array.Empty<DevPinInstance>(), audioK, nSteps - doneK);
+							traces[pass].Add((uint[])root.Program.states.Clone());
+						}
+						if (pass == 1 && !root.Program.CanRunBatchKernel) return "the batch kernel was not used";
+					}
+					finally { Simulator.ClearTestSeed(); }
+				}
+				for (int bt = 0; bt < traces[0].Count; bt++) if (!traces[0][bt].SequenceEqual(traces[1][bt])) return "states differ after batch " + bt;
+				return null;
+			});
 			Check("memory editor: cache JSON round trip", () =>
 			{
 				var c = new Dictionary<string, MemoryLayout.CacheEntry> { ["CPU"] = new MemoryLayout.CacheEntry { hash = "h", rules = rules, polarity = pol } };

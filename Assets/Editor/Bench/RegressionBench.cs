@@ -108,6 +108,8 @@ namespace DLS.Bench
                         cases.AddRange(MemoryMergeCases.All(lib, chips));
                         serial.AddRange(ProjectCases.All(dir));
                         serial.Add(SpeedPrefsCases.Live(dir));
+                        serial.Add(SpeedPrefsCases.LiveBatches(dir));
+                        serial.Add(SpeedPrefsCases.LiveLimitedHigh(dir));
                         if (dir.EndsWith("PC")) serial.Add(MemoryMergeCases.Serial(lib, chips)); serial.Add(Ram65536Cases.Serial());
                         if (dir.EndsWith("PC")) serial.Add(("[PC] memory editor: base change shows the value in the new base; a new chip never shows the previous chip's fields", () => MemoryLayoutCases.MenuFieldsCase(lib, chips)));
                     }

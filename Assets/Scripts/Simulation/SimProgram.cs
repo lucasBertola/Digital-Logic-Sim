@@ -462,6 +462,10 @@ namespace DLS.Simulation
 		// The Burst kernel's context: every array it touches pinned for the program's life (they are only ever
 		// reallocated during Compile, before this runs), in unmanaged memory so the step hands over one pointer.
 		IntPtr kernelCtx;
+		ulong[] istatePtrs = Array.Empty<ulong>(); int[] istateLens = Array.Empty<int>();
+		// merge winners (display colouring): per canonical merge gate, the index of the source it last took its value
+		// from; the kernel queues the ones that changed, ApplyMergeWinners copies them to the SimPins
+		int[] mergeWinner = Array.Empty<int>(), winnerChanged = Array.Empty<int>(); byte[] winnerQueued = Array.Empty<byte>();
 		System.Runtime.InteropServices.GCHandle[] ctxHandles = Array.Empty<System.Runtime.InteropServices.GCHandle>();
 
 		unsafe void BuildKernelCtx()
@@ -489,6 +493,23 @@ namespace DLS.Simulation
 			if (c->hasModels != 0) { c->modelOff = (int*)Pin(modelOff); c->modelData = (int*)Pin(modelData); c->modelPtrs = (ulong*)Pin(modelPtrs); }
 			c->noiseList = (int*)Pin(noiseList); c->noisePos = (int*)Pin(noisePos);
 			c->pcg = &c->pcgV; c->noiseCount = &c->noiseCountV;
+			// other builtins in the kernel: input counts, internal states of clocks and RAM65536s, merge winners
+			c->inCount = (int*)Pin(cInCount);
+			istatePtrs = new ulong[gateCount]; istateLens = new int[gateCount];
+			for (int g = 0; g < gateCount; g++)
+			{
+				if (cType[g] != (byte)ChipType.Clock && cType[g] != (byte)ChipType.Ram65536) continue;
+				uint[] a = internalState[g];
+				if (a == null || a.Length == 0) continue;
+				istatePtrs[g] = (ulong)Pin(a).ToInt64(); istateLens[g] = a.Length;
+			}
+			c->istate = (ulong*)Pin(istatePtrs); c->istateLen = (int*)Pin(istateLens);
+			mergeWinner = new int[gateCount]; for (int g = 0; g < gateCount; g++) mergeWinner[g] = -1;
+			winnerChanged = new int[gateCount]; winnerQueued = new byte[gateCount];
+			c->mergeWinner = (int*)Pin(mergeWinner); c->winnerChanged = (int*)Pin(winnerChanged); c->winnerQueued = (byte*)Pin(winnerQueued);
+			int[] clocks = clockGates.Length > 0 ? clockGates : new int[1];
+			c->clockGates = (int*)Pin(clocks); c->clockGateCount = clockGates.Length;
+			c->posOfCanon = (int*)Pin(posOfCanon);
 			ctxHandles = handles.ToArray();
 		}
 
@@ -901,6 +922,7 @@ namespace DLS.Simulation
 				StepCtx* ctx = (StepCtx*)kernelCtx;
 				ctx->pcgV = Simulator.PcgState;
 				ctx->noiseCountV = noiseCount;
+				ctx->clockHigh = clockLevel; ctx->forced = forcedClock;
 				int kernelRan = 0, after = -1;
 				while (true)
 				{
@@ -927,6 +949,7 @@ namespace DLS.Simulation
 				KernelRunsLastStep = kernelRan;
 				if (Simulator.Profile) { Simulator.ProfGates += ran; Simulator.ProfKernelGates += kernelRan; Simulator.ProfNoise += noiseCount; }
 				Simulator.PcgState = ctx->pcgV; noiseCount = ctx->noiseCountV;
+				if (ctx->winnerChangedCount > 0) ApplyMergeWinners(ctx);
 				GatesRunLastStep = ran;
 				return;
 			}
@@ -968,6 +991,80 @@ namespace DLS.Simulation
 			}
 			GatesRunLastStep = ran;
 		}
+
+		unsafe void ApplyMergeWinners(StepCtx* c)
+		{
+			for (int i = 0; i < c->winnerChangedCount; i++)
+			{
+				int g = winnerChanged[i];
+				winnerQueued[g] = 0;
+				SimPin w = mergeSources[g][mergeWinner[g]], t = mergeTarget[g];
+				t.latestSourceID = w.ID;
+				t.latestSourceParentChipID = w.parentChip.ID;
+			}
+			c->winnerChangedCount = 0;
+		}
+
+		// The whole batched loop in the kernel (SimKernel.RunBatch): one call per batch instead of a kernel call and the
+		// managed step bookkeeping per real step, and per gate handed back. In RUN FAST (2.5 real steps and ~24 gate runs per
+		// clock half-period) that bookkeeping cost more than the gates. Same steps, same random draws, same marks as
+		// Simulator.RunSimulationSteps' managed loop (bench "batched loop = reference loop", "burst stepper = managed stepper").
+		public bool CanRunBatchKernel => UseBurst && !CollectStats && !TraceGates && kernelCtx != IntPtr.Zero && !HasBuzzer;
+
+		public unsafe int RunBatchKernel(SimAudio audio, ref int frame, int period, int forcedClock, int maxSteps, bool stepFirst, ref long realSteps)
+		{
+			// what the head of Step checks for changes made from outside: once per batch (nothing outside changes during it)
+			foreach (int g in romGates)
+			{
+				SimChip ch = chipOfGate[g];
+				if (ch.InternalStateEdited) { ch.InternalStateEdited = false; SetDirty(posOfCanon[g]); }
+			}
+			for (int i = 0; i < rootInputSlots.Length; i++)
+			{
+				int sl = rootInputSlots[i];
+				uint v = states[sl];
+				if (v != rootShadow[i]) { rootShadow[i] = v; MarkConsumers(sl); }
+			}
+			int keyVersion = SimKeyboardHelper.Version;
+			if (keyVersion != lastKeyVersion) { lastKeyVersion = keyVersion; foreach (int g in keyGates) SetDirty(posOfCanon[g]); }
+
+			StepCtx* c = (StepCtx*)kernelCtx;
+			c->pcgV = Simulator.PcgState; c->noiseCountV = noiseCount;
+			c->frame = frame; c->period = period; c->forced = forcedClock; c->maxSteps = maxSteps;
+			c->done = 0; c->phase = 0; c->stepFirst = stepFirst ? 1 : 0; c->after = -1;
+			c->hasCuts = hasCuts && cutChips.Count > 0 ? 1 : 0;
+			c->noiseAcc = noiseAccumulator; c->lastClockLevel = lastClockLevel;
+			c->stepsRun = 0; c->realSteps = 0; c->gatesRun = 0;
+			c->seedState = Simulator.StepSeedState;
+			while (true)
+			{
+				int r = SimKernel.RunBatch(c);
+				if (r == SimKernel.BatchDone) break;
+				Simulator.PcgState = c->pcgV; noiseCount = c->noiseCountV;
+				if (r == SimKernel.BatchReschedule)
+				{
+					Simulator.simulationFrame = c->frame;
+					Reschedule();
+				}
+				else
+				{
+					RunOne(c->handback, c->st, c->type, c->in0, c->in1, c->out0, c->clockHigh != 0, audio);
+					c->gatesRun++;
+					kernelBails++;
+				}
+				c->pcgV = Simulator.PcgState; c->noiseCountV = noiseCount;
+			}
+			Simulator.PcgState = c->pcgV; noiseCount = c->noiseCountV;
+			noiseAccumulator = c->noiseAcc; lastClockLevel = c->lastClockLevel;
+			Simulator.StepSeedState = c->seedState;
+			StepsRun += c->stepsRun;
+			frame = c->frame;
+			realSteps += c->realSteps;
+			BatchGatesRun += c->gatesRun;
+			if (c->winnerChangedCount > 0) ApplyMergeWinners(c);
+			return c->done;
+		}
+		public long BatchGatesRun; // diagnostic: gates run by RunBatchKernel (kernel + handed back)
 
 		// Burst experiment: the step's NAND gates run by SimKernel (false = the managed loop only, for comparison)
 		public int KernelRunsLastStep; // gates of the last step run by the Burst kernel
@@ -1380,6 +1477,7 @@ namespace DLS.Simulation
 			if (drivenAny != 0)
 			{
 				SimPin winner = null;
+				int winnerIndex = -1;
 				SimPin[] srcs = mergeSources[g];
 				for (int j = 0; j < count; j++)
 				{
@@ -1388,13 +1486,14 @@ namespace DLS.Simulation
 					uint tri = s >> 16;
 					uint take = tri & drivenAny;
 					if (take != 0) Write(st, slot, ((s & 0xFFFF & ~take) | (resBits & take)) | (tri << 16));
-					else if (winner == null && (~tri & 0xFFFF) != 0) winner = srcs[j];
+					else if (winner == null && (~tri & 0xFFFF) != 0) { winner = srcs[j]; winnerIndex = j; }
 				}
 				if (winner != null)
 				{
 					SimPin t = mergeTarget[g];
 					t.latestSourceID = winner.ID;
 					t.latestSourceParentChipID = winner.parentChip.ID;
+					if (mergeWinner.Length == gateCount) mergeWinner[g] = winnerIndex; // what the kernel compares with
 				}
 			}
 		}

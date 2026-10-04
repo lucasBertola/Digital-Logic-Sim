@@ -32,6 +32,33 @@ namespace DLS.Simulation
 		// of the shared time-seeded Random, so a run is reproducible (and threads don't share a Random).
 		[ThreadStatic] static Random testRng;
 
+		// The PCG stream of a step is reseeded at every real step from this per-thread seed stream (lowbias32 of a Weyl
+		// sequence), itself seeded once from the test seed (or the shared Random). It used to be System.Random.Next() per
+		// step, which the Burst batch loop (SimKernel.RunBatch) cannot call: both loops now draw from this stream, so a
+		// seeded run is still exactly reproducible and the batched loop still equals the reference loop.
+		[ThreadStatic] static uint stepSeedState;
+		[ThreadStatic] static bool stepSeedSet;
+		public static uint StepSeedState
+		{
+			get { EnsureStepSeed(); return stepSeedState; }
+			set { stepSeedState = value; stepSeedSet = true; }
+		}
+		static void EnsureStepSeed()
+		{
+			if (stepSeedSet) return;
+			if (testRng != null) stepSeedState = (uint)testRng.Next();
+			else lock (rng) stepSeedState = (uint)rng.Next();
+			stepSeedSet = true;
+		}
+		// SimKernel.NextStepSeed (keep the two in step)
+		static uint NextStepSeed()
+		{
+			EnsureStepSeed();
+			uint x = stepSeedState += 0x9E3779B9u;
+			x ^= x >> 16; x *= 0x7feb352d; x ^= x >> 15; x *= 0x846ca68b; x ^= x >> 16;
+			return x;
+		}
+
 		// Set whenever the structure of the simulated tree changed (or a different tree is stepped): the
 		// compiled program is rebuilt at the top of the next step.
 		[ThreadStatic] public static bool needsOrderPass;
@@ -49,9 +76,10 @@ namespace DLS.Simulation
 			needsOrderPass = true;
 			prevRootSimChip = null;
 			testRng = new Random(seed);
+			stepSeedSet = false;
 		}
 
-		public static void ClearTestSeed() => testRng = null;
+		public static void ClearTestSeed() { testRng = null; stepSeedSet = false; }
 		static double elapsedSecondsOld;
 		static double deltaTime;
 		static SimAudio audioState;
@@ -79,7 +107,7 @@ namespace DLS.Simulation
 				prevRootSimChip = rootSimChip;
 			}
 
-			pcg_rngState = (uint)(testRng ?? rng).Next();
+			pcg_rngState = NextStepSeed();
 			canDynamicReorderThisFrame = simulationFrame % 100 == 0; // re-draw the random picks of some feedback loops
 			simulationFrame++;
 			WrapFrame();
@@ -158,7 +186,19 @@ namespace DLS.Simulation
 			if (prog.HasBuzzer || maxSteps <= 1) return done + (maxSteps > done ? RunSimulationStepsReference(rootSimChip, inputPins, audioState, maxSteps - done) : 0);
 			bool stepFirst = done == 0; // the plain loop always begins with a real step
 
-			Random r = testRng ?? rng;
+			// the whole batch in the Burst kernel (the managed loop below is kept for profiling and as the reference shape)
+			if (!Profile && prog.CanRunBatchKernel)
+			{
+				CopyPlayerInputs(rootSimChip, inputPins);
+				int frameK = simulationFrame;
+				long realK = 0;
+				done += prog.RunBatchKernel(audioState, ref frameK, stepsPerClockTransition, forcedClockState, maxSteps - done, stepFirst, ref realK);
+				simulationFrame = frameK;
+				RealSteps += realK;
+				UpdateAudioState();
+				return done;
+			}
+
 			int frame = simulationFrame, period = stepsPerClockTransition, forced = forcedClockState;
 			long real = 0;
 			// the player's inputs are read once per batch (a change is seen within maxSteps steps, i.e. microseconds):
@@ -183,7 +223,7 @@ namespace DLS.Simulation
 
 				// a real step (RunSimulationStep without what cannot change inside a batch: the root, the program)
 				real++;
-				pcg_rngState = (uint)r.Next();
+				pcg_rngState = NextStepSeed();
 				bool reorder = frame % 100 == 0;
 				frame = WrapFrame(frame + 1, period);
 				if (reorder) { simulationFrame = frame; prog.Reschedule(); }

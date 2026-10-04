@@ -50,24 +50,30 @@ namespace DLS.Game
 			SaveAndApplyAppSettings(Loader.LoadAppSettings());
 			Main.audioState = audioState;
 			PlayerSelfTest.CheckArgs();
+			PlayerRateTest.CheckArgs();
 		}
 
 		public static void Update()
 		{
 			if (PlayerSelfTest.Active) { PlayerSelfTest.Update(); return; }
+			long a0 = PlayerRateTest.Active ? UnityEngine.Profiling.Profiler.GetMonoUsedSizeLong() : 0, a1 = a0, a2 = a0;
 			if (UIDrawer.ActiveMenu != UIDrawer.MenuType.MainMenu)
 			{
 				ActiveProject.HandleNavigationInput(); // chip switch first, so the camera below already targets the new chip
 				CameraController.Update();
 				ActiveProject.Update();
+				if (PlayerRateTest.Active) a1 = UnityEngine.Profiling.Profiler.GetMonoUsedSizeLong();
 
 				InteractionState.ClearFrame();
 				WorldDrawer.DrawWorld(ActiveProject);
+				if (PlayerRateTest.Active) a2 = UnityEngine.Profiling.Profiler.GetMonoUsedSizeLong();
 			}
 
 			UIDrawer.Draw();
 
 			HandleGlobalInput();
+			if (PlayerRateTest.Active) PlayerRateTest.NoteAllocations(a1 - a0, a2 - a1, UnityEngine.Profiling.Profiler.GetMonoUsedSizeLong() - a2);
+			PlayerRateTest.Update();
 		}
 
 

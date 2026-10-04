@@ -26,6 +26,7 @@ namespace DLS.Bench
             ("live project: RUN FAST takes the state over, runs, leaves on an edit or a chip switch, and gives the state back to the gates", () => LiveRunFast(projectDir)),
             ("live project: a wire from an input pin follows the input (open CPU, go into Registre8, toggle each input: the state the wire is drawn from follows)", () => LiveInputWires(projectDir)),
             ("live project: CREATE CHIP through the popup (selection cleared by the click, as in the app), then Ctrl+Z", () => LiveCreateChip(projectDir)),
+            ("live project: the bottom bar's unsaved * does not serialize the chip every frame (it made ~60 GC/s on CPU_2, stopping the sim), shows an edit within its period, goes at once on save", () => LiveDirtyIndicator(projectDir)),
         };
 
         static Project Open(string projectDir, string chip, string projectNameOverride = null)
@@ -337,11 +338,16 @@ namespace DLS.Bench
                 if (!Pump(p, () => Model("Registre B").State[0] == 0x3C, 8000)) return $"Registre B never loaded 3C in fast mode (holds {Model("Registre B").State[0]:X})";
                 In("Load_B").Pin.PlayerInputState = 0; In("OE_entree").Pin.PlayerInputState = 0;
                 Pump(p, () => false, 300);
+                // the displays (LCD...) are drawn from the tree that runs: from the gates, the LCD froze in RUN FAST (user, 2026-10-04)
+                if (p.DisplaySimChip(p.ViewedChip) != p.rootSimChip) return "in fast mode the displays are drawn from the gates, which are not stepped (frozen screen)";
+                string drawer = File.ReadAllText(Path.Combine(BenchProject.RepoRoot, "Assets", "Scripts", "Graphics", "World", "DevSceneDrawer.cs"));
+                if (drawer.Contains("chip.SimChip.TryGetSubChipFromID") || !drawer.Contains("DisplaySimChip(chip)")) return "DevSceneDrawer draws the displays from chip.SimChip, not from DisplaySimChip (frozen in RUN FAST)";
 
                 // an edit of the chip leaves fast mode, and the gates get the state back
                 var extra = new DevPinInstance(new PinDescription("EXTRA", IDGenerator.GenerateNewElementID(p.ViewedChip), new UnityEngine.Vector2(-20, -20), PinBitCount.Bit1, PinColour.Red, PinValueDisplayMode.Off), true);
                 p.ViewedChip.AddNewDevPin(extra, false);
                 if (p.FastModeActive) return "an edit of the chip did not leave fast mode";
+                if (p.DisplaySimChip(p.ViewedChip) != p.ViewedChip.SimChip) return "out of fast mode the displays are not drawn from the gates";
                 Pump(p, () => false, 200);
                 if (Read("Registre B", 0) != 0x3C) return $"after leaving fast mode the gates' Registre B = {Read("Registre B", 0):X}, it was 3C in fast mode";
                 if (Read("RAM", 9) != ram9 || Read("Registre A", 0) != regA) return "the state taken over at RUN FAST was lost on the way back";
@@ -352,6 +358,38 @@ namespace DLS.Bench
                 if (!p.FastModeActive) return "fast mode did not start the second time";
                 p.LoadDevChipOrCreateNewIfDoesntExist("Add4");
                 return p.FastModeActive ? "switching chip did not leave fast mode" : null;
+            }
+            finally
+            {
+                Close(p);
+                if (Directory.Exists(tmpDir)) Directory.Delete(tmpDir, true);
+            }
+        }
+
+        // User, 2026-10-04: RUN FAST at 200 kHz in the app instead of ~300: the * of every starred chip serialized both
+        // descriptions of the chip every frame (~19 MB of garbage per frame on CPU_2), and each of the ~60 collections per
+        // second stopped the sim thread.
+        static string LiveDirtyIndicator(string projectDir)
+        {
+            const string tmpName = "_BenchDirtyStar";
+            string tmpDir = SavePaths.GetProjectPath(tmpName);
+            if (Directory.Exists(tmpDir)) Directory.Delete(tmpDir, true);
+            CopyDir(projectDir, tmpDir);
+            Project p = Open(tmpDir, "Add4", tmpName);
+            try
+            {
+                int c0 = p.DirtyChecksRun;
+                for (int i = 0; i < 200; i++) if (p.IsChipDirtyForDisplay("Add4", 10f + i * 0.001f)) return "a freshly opened chip shows the unsaved *";
+                if (p.DirtyChecksRun - c0 > 1) return $"200 frames within the period made {p.DirtyChecksRun - c0} full comparisons (serializing the chip each time)";
+                var extra = new DevPinInstance(new PinDescription("EXTRA", IDGenerator.GenerateNewElementID(p.ViewedChip), new UnityEngine.Vector2(-20, -20), PinBitCount.Bit1, PinColour.Red, PinValueDisplayMode.Off), true);
+                p.ViewedChip.AddNewDevPin(extra, false);
+                if (!p.IsChipDirtyForDisplay("Add4", 10f + Project.DirtyIndicatorPeriod + 0.01f)) return "an edit does not show the * once the period has passed";
+                if (!p.IsDirty(p.ViewedChip)) return "IsDirty (quit guard) is not exact";
+                p.SaveFromDescription(DescriptionCreator.CreateChipDescription(p.ViewedChip));
+                if (p.IsChipDirtyForDisplay("Add4", 10f + Project.DirtyIndicatorPeriod + 0.02f)) return "the * stays after a save";
+                string bar = File.ReadAllText(Path.Combine(BenchProject.RepoRoot, "Assets", "Scripts", "Graphics", "UI", "Menus", "BottomBarUI.cs"));
+                if (bar.Contains("project.IsChipDirty(") || !bar.Contains("IsChipDirtyForDisplay(")) return "BottomBarUI calls the exact (serializing) IsChipDirty every frame";
+                return null;
             }
             finally
             {
