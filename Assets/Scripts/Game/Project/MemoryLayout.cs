@@ -89,6 +89,7 @@ namespace DLS.Game
 		public List<List<List<MemCell>>> Words; // word -> bit -> cells (latch banks)
 		public SimChip Builtin;                 // builtin ROM / RAM bank
 		public int BuiltinWords;
+		public bool BuiltinPacked;              // 4 bytes per state word (RAM65536)
 		// Several memories on the SAME address (parallel chips, e.g. 3 RAM256 holding the 3 bytes of a 24-bit
 		// instruction) are ONE memory (user, 2026-10-02: "a memory is N addresses of words, full stop"): its word is
 		// the parts side by side, the first part in the low bits.
@@ -105,6 +106,7 @@ namespace DLS.Game
 				foreach (MemoryBank part in Parts) { whole |= part.Read(w) << shift; shift += part.Bits; }
 				return whole;
 			}
+			if (Builtin != null && BuiltinPacked) return Ram65536.Read(Builtin.InternalState, w);
 			if (Builtin != null) return Builtin.InternalState[w] & (uint)((1L << Bits) - 1);
 			uint v = 0;
 			List<List<MemCell>> word = Words[w];
@@ -122,7 +124,8 @@ namespace DLS.Game
 			}
 			if (Builtin != null)
 			{
-				Builtin.InternalState[w] = value & (uint)((1L << Bits) - 1);
+				if (BuiltinPacked) Ram65536.WriteByte(Builtin.InternalState, w, value);
+				else Builtin.InternalState[w] = value & (uint)((1L << Bits) - 1);
 				Builtin.InternalStateEdited = true; // the gate re-runs (ROM), the RAM output follows at its next run
 				return;
 			}
@@ -179,7 +182,16 @@ namespace DLS.Game
 			return false;
 		}
 
-		static bool IsBuiltinBank(ChipType t) => t is ChipType.Rom_256x16 or ChipType.dev_Ram_8Bit;
+		static bool IsBuiltinBank(ChipType t) => t is ChipType.Rom_256x16 or ChipType.dev_Ram_8Bit or ChipType.Ram65536;
+
+		// a builtin ROM / RAM is a memory by itself (null for any other chip)
+		public static MemoryBank BuiltinBank(SimChip c, string name) => c.ChipType switch
+		{
+			ChipType.Rom_256x16 => new MemoryBank { Name = name, Bits = 16, Builtin = c, BuiltinWords = 256 },
+			ChipType.dev_Ram_8Bit => new MemoryBank { Name = name, Bits = 8, Builtin = c, BuiltinWords = 256 },
+			ChipType.Ram65536 => new MemoryBank { Name = name, Bits = 8, Builtin = c, BuiltinWords = Ram65536.Size, BuiltinPacked = true },
+			_ => null
+		};
 
 		// Builtin ROM / RAM anywhere under the chip (component-name paths for display)
 		public static List<MemoryBank> BuiltinBanks(SimChip chip, ChipDescription desc, ChipLibrary lib, string prefix = "")
@@ -195,8 +207,7 @@ namespace DLS.Game
 				string path = prefix.Length == 0 ? label : prefix + " / " + label;
 				if (c.IsBuiltin)
 				{
-					if (c.ChipType == ChipType.Rom_256x16) banks.Add(new MemoryBank { Name = path, Bits = 16, Builtin = c, BuiltinWords = 256 });
-					else if (c.ChipType == ChipType.dev_Ram_8Bit) banks.Add(new MemoryBank { Name = path, Bits = 8, Builtin = c, BuiltinWords = 256 });
+					if (BuiltinBank(c, path) is MemoryBank bb) banks.Add(bb);
 				}
 				else if (lib.GetChipDescriptionForSim(sd.Name) is { } cd) banks.AddRange(BuiltinBanks(c, cd, lib, path));
 			}

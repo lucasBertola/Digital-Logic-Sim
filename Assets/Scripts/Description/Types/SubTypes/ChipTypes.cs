@@ -61,7 +61,10 @@ namespace DLS.Description
 		FastModel, // a module simulated by its behaviour in RUN FAST (Simulation/FastModel.cs)
 
 		// ---- Graphic LCD (continued) ----
-		LcdSt7920 // ST7920 128 x 64 module, parallel 8 / 4 bit or serial, text + graphics (Simulation/LcdSt7920.cs)
+		LcdSt7920, // ST7920 128 x 64 module, parallel 8 / 4 bit or serial, text + graphics (Simulation/LcdSt7920.cs)
+
+		// ---- Memory (continued) ----
+		Ram65536 // native 64 KB static RAM with the user's RAM interface (D_in, address, We, Oe, Cs -> D_out)
 
 	}
 }

@@ -17,6 +17,7 @@ namespace DLS.Description
 			// ---- Memory ----
 			{ ChipType.dev_Ram_8Bit, "dev.RAM-8" },
 			{ ChipType.Rom_256x16, $"ROM 256{mulSymbol}16" },
+			{ ChipType.Ram65536, "RAM65536" },
 			// ---- Split / Merge ----
 			{ ChipType.Split_4To1Bit, "4-1BIT" },
 			{ ChipType.Split_8To1Bit, "8-1BIT" },

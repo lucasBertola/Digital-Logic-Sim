@@ -26,7 +26,7 @@ namespace DLS.SaveSystem
 
         static readonly HashSet<ChipType> StatefulBuiltins = new()
         {
-            ChipType.Clock, ChipType.Pulse, ChipType.dev_Ram_8Bit, ChipType.DisplayRGB, ChipType.DisplayDot, ChipType.LcdDem122032, ChipType.LcdSt7920
+            ChipType.Clock, ChipType.Pulse, ChipType.dev_Ram_8Bit, ChipType.DisplayRGB, ChipType.DisplayDot, ChipType.LcdDem122032, ChipType.LcdSt7920, ChipType.Ram65536
         };
 
         // Behaviour of the ATOMIC builtin primitives (the only ones that can't be rebuilt from NAND).
@@ -38,6 +38,7 @@ namespace DLS.SaveSystem
             { "CLOCK", "horloge : sortie qui alterne 0/1 automatiquement dans le temps." },
             { "PULSE", "genere une breve impulsion sur front montant de l'entree." },
             { "dev.RAM-8", "RAM 8 bits adressable (lecture/ecriture)." },
+            { "RAM65536", "RAM statique native de 65536 octets (rapide : un seul composant). Entrees : D_in (8), Adr_high (8, poids fort de l'adresse), Adr_low (8, poids faible), We, Oe, Cs ; sortie D_out (8). Comme les RAM faites en bascules : tant que Cs = 1 et We = 1, l'octet D_in est ecrit a l'adresse (ecriture par niveau, pas sur un front) ; D_out donne l'octet de l'adresse quand Cs = 1 et Oe = 1, sinon flotte (3 etats, peut aller sur un bus). Contenu aleatoire a la mise sous tension." },
             { "ROM 256×16", "memoire morte : 256 mots de 16 bits (lecture seule)." },
             { "1-4BIT", "MERGE : combine 4 fils 1-bit en un bus 4 bits." },
             { "1-8BIT", "MERGE : combine 8 fils 1-bit en un bus 8 bits." },

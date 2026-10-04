@@ -259,7 +259,7 @@ namespace DLS.Simulation
 				if (ChipTypeHelper.IsBusType(b.ChipType)) continue; // origin = wire, terminus = nothing
 				if (b.OutputPins.Length == 0 && b.ChipType != ChipType.Buzzer) continue; // pure displays: their input pins already carry the values
 				gateOfChip[b.compileIndex] = types.Count;
-				if (b.ChipType is ChipType.Rom_256x16 or ChipType.dev_Ram_8Bit or ChipType.Clock) roms.Add(types.Count); // edited from outside: re-run (a clock: stopped / manual level)
+				if (b.ChipType is ChipType.Rom_256x16 or ChipType.dev_Ram_8Bit or ChipType.Clock or ChipType.Ram65536) roms.Add(types.Count); // edited from outside: re-run (a clock: stopped / manual level)
 				if (b.ChipType == ChipType.Clock) clocks.Add(types.Count);
 				if (b.ChipType == ChipType.Key) keys.Add(types.Count);
 				if (b.ChipType == ChipType.Buzzer) prog.HasBuzzer = true;
@@ -1311,6 +1311,13 @@ namespace DLS.Simulation
 				{
 					uint db = In(st, ins[i], k), a0 = In(st, ins[i + 1], k), rw = In(st, ins[i + 2], k), e1 = In(st, ins[i + 3], k), e2 = In(st, ins[i + 4], k), res = In(st, ins[i + 5], k);
 					uint o = LcdDem122032.Run(internalState[g], db & 0xFF, PinState.FirstBitHigh(a0), PinState.FirstBitHigh(rw), PinState.FirstBitHigh(e1), PinState.FirstBitHigh(e2), PinState.FirstBitHigh(res));
+					Write(states, sOut0[k], o);
+					break;
+				}
+
+				case (byte)ChipType.Ram65536:
+				{
+					uint o = Ram65536.Run(internalState[g], In(st, ins[i], k), In(st, ins[i + 1], k), In(st, ins[i + 2], k), In(st, ins[i + 3], k), In(st, ins[i + 4], k), In(st, ins[i + 5], k));
 					Write(states, sOut0[k], o);
 					break;
 				}

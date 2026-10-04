@@ -63,6 +63,38 @@ namespace DLS.Game
 			return $"managed {best[0]:0} steps/s, Burst {best[1]:0} steps/s (x{best[1] / best[0]:0.00}){(Unity.Burst.BurstCompiler.IsEnabled ? "" : " [Burst disabled]")}";
 		}
 
+		// write + read cycles per second (one step per pin change), the native RAM65536 vs the fixture's RAM256
+		static string RamSpeed()
+		{
+			double Rate(string chip, int addrPins)
+			{
+				if (!lib.TryGetChipDescription(chip, out ChipDescription d)) return 0;
+				SimChip r = CircuitTester.BuildIsolatedSim(d, lib);
+				var names = d.InputPins.Select(p => p.Name).ToList();
+				int Pin(string n) => names.FindIndex(x => x.Equals(n, StringComparison.OrdinalIgnoreCase));
+				int din = Pin("D_in"), we = Pin("We"), oe = Pin(chip == "RAM65536" ? "Oe" : "Oe"), cs = Pin("Cs");
+				int adr = chip == "RAM65536" ? Pin("Adr_low") : Pin("Adresses");
+				if (din < 0 || we < 0 || oe < 0 || cs < 0 || adr < 0) return 0;
+				void Set(int pin, uint v) => r.InputPins[pin].State = PinState.Make((ushort)v, 0);
+				var audio = new SimAudio(); // one for the whole run (the Step helper makes one per step, which costs more than the RAM)
+				void St(int n) { for (int i = 0; i < n; i++) Simulator.RunSimulationStep(r, Array.Empty<DevPinInstance>(), audio); }
+				for (int i = 0; i < d.InputPins.Length; i++) Set(i, 0);
+				Set(cs, 1);
+				St(10);
+				var sw = System.Diagnostics.Stopwatch.StartNew();
+				int cycles = 0;
+				while (sw.ElapsedMilliseconds < 600)
+				{
+					uint a = (uint)(cycles * 7) & 0xFF;
+					Set(adr, a); Set(din, a ^ 0x5A); St(4); Set(we, 1); St(4); Set(we, 0); Set(oe, 1); St(4); Set(oe, 0); St(4);
+					cycles++;
+				}
+				return cycles / sw.Elapsed.TotalSeconds;
+			}
+			double native = Rate("RAM65536", 16), latch = Rate("RAM256", 8);
+			return $"{native:0} vs {latch:0} write+read cycles/s (16 steps each){(latch > 0 ? $", x{native / latch:0}" : "")}";
+		}
+
 		public static void CheckArgs()
 		{
 			string[] args = Environment.GetCommandLineArgs();
@@ -398,6 +430,27 @@ namespace DLS.Game
 				string grid = CircuitTester.ReadSt7920Grid(t);
 				return grid.Split('\n').Length == 33 && grid.Contains("\"AB") ? null : "the text rendering for Claude is wrong";
 			});
+			Check("RAM65536: in the MEMORY collection of an existing project, written and read through its pins", () =>
+			{
+				if (!loadedProject.description.ChipCollections.Any(col => col.Chips.Any(ch => ch == "RAM65536"))) return "not added to the collections of an existing project";
+				SimChip r = CircuitTester.BuildIsolatedSim(lib.GetChipDescription("RAM65536"), lib);
+				void Set(int pin, uint v) => r.InputPins[pin].State = PinState.Make((ushort)v, 0);
+				for (int i = 0; i < 6; i++) Set(i, 0);
+				Set(5, 1); // Cs
+				foreach ((uint a, uint v) in new[] { (0x1234u, 0x5Au), (0xFFFFu, 0x77u), (0x0000u, 0x11u) })
+				{
+					Set(1, a >> 8); Set(2, a & 0xFF); Set(0, v); Step(r, 1); Set(3, 1); Step(r, 1); Set(3, 0); Step(r, 1);
+				}
+				Set(4, 1); // Oe
+				foreach ((uint a, uint v) in new[] { (0x1234u, 0x5Au), (0xFFFFu, 0x77u), (0x0000u, 0x11u) })
+				{
+					Set(1, a >> 8); Set(2, a & 0xFF); Step(r, 1);
+					uint got = r.OutputPins[0].State;
+					if ((got & 0xFF) != v || (got >> 16) != 0) return $"read {got:X} at {a:X4}, wrote {v:X2}";
+				}
+				return null;
+			});
+			report.AppendLine("      RAM65536 vs the RAM256 built from latches: " + RamSpeed());
 			Check("RUN FAST: the CPU's fast tree gives the gates' outputs, cycle after cycle; the cache survives its file", () =>
 			{
 				lib.TryGetChipDescription("CPU", out ChipDescription c);

@@ -32,6 +32,7 @@ namespace DLS.Game
 				// ---- Memory ----
 				dev_CreateRAM_8(),
 				CreateROM_8(),
+				CreateRam65536(),
 				// ---- Merge / Split ----
 				CreateBitConversionChip(ChipType.Split_4To1Bit, PinBitCount.Bit4, PinBitCount.Bit1, 1, 4),
 				CreateBitConversionChip(ChipType.Split_8To4Bit, PinBitCount.Bit8, PinBitCount.Bit4, 1, 2),
@@ -102,6 +103,24 @@ namespace DLS.Game
 			Vector2 size = new(GridSize * 10, SubChipInstance.MinChipHeightForPins(inputPins, outputPins));
 
 			return CreateBuiltinChipDescription(ChipType.dev_Ram_8Bit, size, col, inputPins, outputPins);
+		}
+
+		// Native 64 KB RAM: the interface of the user's latch RAMs (RAM256... RAM16384), the 16-bit address on two 8-bit pins
+		static ChipDescription CreateRam65536()
+		{
+			Color col = new(0.85f, 0.45f, 0.3f);
+			PinDescription[] inputPins =
+			{
+				CreatePinDescription("D_in", 0, PinBitCount.Bit8),
+				CreatePinDescription("Adr_high", 1, PinBitCount.Bit8),
+				CreatePinDescription("Adr_low", 2, PinBitCount.Bit8),
+				CreatePinDescription("We", 3),
+				CreatePinDescription("Oe", 4),
+				CreatePinDescription("Cs", 5)
+			};
+			PinDescription[] outputPins = { CreatePinDescription("D_out", 6, PinBitCount.Bit8) };
+			Vector2 size = new(GridSize * 10, SubChipInstance.MinChipHeightForPins(inputPins, outputPins));
+			return CreateBuiltinChipDescription(ChipType.Ram65536, size, col, inputPins, outputPins);
 		}
 
 		static ChipDescription CreateROM_8()

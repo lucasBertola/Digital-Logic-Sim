@@ -57,7 +57,8 @@ namespace DLS.Game
 					ChipType.LcdSt7920
 				),
 				CreateChipCollection("MEMORY",
-					ChipType.Rom_256x16
+					ChipType.Rom_256x16,
+					ChipType.Ram65536
 				)
 			};
 		}
@@ -72,7 +73,8 @@ namespace DLS.Game
 			(ChipType.Vcc, "BASIC"),
 			(ChipType.Gnd, "BASIC"),
 			(ChipType.LcdDem122032, "DISPLAY"),
-			(ChipType.LcdSt7920, "DISPLAY")
+			(ChipType.LcdSt7920, "DISPLAY"),
+			(ChipType.Ram65536, "MEMORY")
 		};
 
 		// ProjectDescription is a struct, but ChipCollections is a reference type: mutating the list (and the

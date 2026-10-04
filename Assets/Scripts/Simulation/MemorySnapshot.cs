@@ -14,7 +14,7 @@ namespace DLS.Simulation
 	{
 		// (the ROM too: its contents can be edited from the memory editor of an enclosing chip, which only writes the
 		// simulation — its own InternalData is the chip's default, the saved state carries the edit)
-		static bool IsStateful(ChipType t) => t is ChipType.dev_Ram_8Bit or ChipType.Rom_256x16 or ChipType.DisplayRGB or ChipType.DisplayDot or ChipType.Pulse or ChipType.LcdDem122032 or ChipType.LcdSt7920;
+		static bool IsStateful(ChipType t) => t is ChipType.dev_Ram_8Bit or ChipType.Rom_256x16 or ChipType.DisplayRGB or ChipType.DisplayDot or ChipType.Pulse or ChipType.LcdDem122032 or ChipType.LcdSt7920 or ChipType.Ram65536;
 
 		static void Walk(SimChip chip, StringBuilder sig, List<SimChip> nands, List<SimChip> stateful)
 		{

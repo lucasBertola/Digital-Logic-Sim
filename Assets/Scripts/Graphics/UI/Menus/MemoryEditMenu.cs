@@ -63,6 +63,16 @@ namespace DLS.Graphics
 			ID_scroll = new UIHandle("MEM_scroll", chip.ID);
 			ID_mode = new UIHandle("MEM_mode", 0);
 
+			// a native RAM placed directly (RAM65536): it is the memory
+			if (liveChip.IsBuiltin)
+			{
+				MemoryBank own = MemoryLayout.BuiltinBank(liveChip, string.IsNullOrEmpty(chip.Label) ? chipDesc.Name : chip.Label);
+				if (own == null) { Fail($"\"{chipDesc.Name}\" holds no memory."); return; }
+				banks = new List<MemoryBank> { own };
+				Ready();
+				return;
+			}
+
 			bool hasCells = MemoryLayout.FindCells(liveChip).Count > 0;
 			if (!hasCells)
 			{

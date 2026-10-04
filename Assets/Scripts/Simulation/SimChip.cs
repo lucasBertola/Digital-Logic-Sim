@@ -98,6 +98,14 @@ namespace DLS.Simulation
 				for (int a = 0; a < LcdSt7920.RamWords; a++) { Simulator.NextBytes(randomBytes); InternalState[a] = (uint)(randomBytes[0] << 8 | randomBytes[1]); }
 				LcdSt7920.PowerOn(InternalState);
 			}
+			else if (ChipType is ChipType.Ram65536)
+			{
+				// 65 536 bytes packed 4 per word (byte a = word a >> 2, bits (a & 3) * 8): garbage at power on like any
+				// static RAM (and like the user's latch RAMs), seeded so tests are reproducible
+				InternalState = new uint[Ram65536.Words];
+				Span<byte> randomBytes = stackalloc byte[4];
+				for (int i = 0; i < InternalState.Length; i++) { Simulator.NextBytes(randomBytes); InternalState[i] = BitConverter.ToUInt32(randomBytes); }
+			}
 			else if (ChipType is ChipType.dev_Ram_8Bit)
 			{
 				InternalState = new uint[addressSize_8Bit + 1]; // +1 for clock state (to allow edge-trigger behaviour)

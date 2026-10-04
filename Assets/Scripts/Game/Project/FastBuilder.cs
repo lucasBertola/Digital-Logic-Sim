@@ -59,7 +59,7 @@ namespace DLS.Game
 
 		static readonly HashSet<ChipType> LifeOfItsOwn = new()
 		{
-			ChipType.Clock, ChipType.Key, ChipType.Pulse, ChipType.Buzzer, ChipType.Rom_256x16, ChipType.dev_Ram_8Bit,
+			ChipType.Clock, ChipType.Key, ChipType.Pulse, ChipType.Buzzer, ChipType.Rom_256x16, ChipType.dev_Ram_8Bit, ChipType.Ram65536,
 			ChipType.SevenSegmentDisplay, ChipType.DisplayRGB, ChipType.DisplayDot, ChipType.DisplayLED, ChipType.LcdDem122032, ChipType.LcdSt7920
 		};
 

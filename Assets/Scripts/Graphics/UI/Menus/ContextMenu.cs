@@ -64,6 +64,15 @@ namespace DLS.Graphics
 			deleteEntry
 		};
 
+		// a native RAM: its memory is edited directly
+		static readonly MenuEntry[] entries_builtinRam =
+		{
+			new(Format("EDIT MEMORY"), () => UIDrawer.SetActiveMenu(UIDrawer.MenuType.MemoryEdit), CanEditCurrentChip),
+			labelChipEntry,
+			displayNameEntry,
+			deleteEntry
+		};
+
 		static readonly MenuEntry[] entries_builtinSubchip =
 		{
 			labelChipEntry,
@@ -269,6 +278,7 @@ namespace DLS.Graphics
 							else if (ChipTypeHelper.IsBusType(subChip.ChipType)) activeContextMenuEntries = entries_builtinBus;
 							else if (subChip.ChipType == ChipType.DisplayLED) activeContextMenuEntries = entries_builtinLED;
 							else if (subChip.ChipType == ChipType.Clock) activeContextMenuEntries = entries_builtinClock;
+							else if (subChip.ChipType == ChipType.Ram65536) activeContextMenuEntries = entries_builtinRam;
 							else activeContextMenuEntries = entries_builtinSubchip;
 						}
 

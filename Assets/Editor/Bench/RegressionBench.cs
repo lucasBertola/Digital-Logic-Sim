@@ -101,7 +101,7 @@ namespace DLS.Bench
                         cases.AddRange(TranscriptCopyCases.All());
                         cases.AddRange(UnconnectedCases.All());
                         cases.AddRange(ChipInterfaceCases.All());
-                        cases.AddRange(LcdCases.All()); cases.AddRange(St7920Cases.All()); cases.AddRange(KeyArrowCases.All());
+                        cases.AddRange(LcdCases.All()); cases.AddRange(St7920Cases.All()); cases.AddRange(KeyArrowCases.All()); cases.AddRange(Ram65536Cases.All(lib, chips));
                         if (dir.EndsWith("PC")) cases.AddRange(FastCases.All(lib, chips));
                         cases.AddRange(BurstCases.All(lib, chips));
                         cases.AddRange(BatchLoopCases.All(lib, chips));
