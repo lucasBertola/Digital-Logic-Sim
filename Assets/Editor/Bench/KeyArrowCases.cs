@@ -18,6 +18,7 @@ namespace DLS.Bench
             ("KEY arrows: the binding survives the chip's save / load and still reacts", Saved),
             ("KEY nested 3 levels deep (a chip using a chip using a chip with KEYs): the top circuit reacts to its keys", Nested),
             ("KEY bindings of a custom chip are listed for its parents: every depth, duplicates merged, letters then arrows then space; none when no KEY", Listed),
+            ("export for Claude: each KEY shows its key ([touche: A], UP / SPACE...), a custom component the keys of the KEYs inside it (any depth); the names round-trip through bind_keys' parser", Exported),
             ("KEY on the space bar: high while space is held (not for a letter), labelled SPACE, named SPACE / ESPACE; the circuit is seen as using it (the Ask Claude bar then leaves Space alone)", SpaceKey),
         };
 
@@ -152,6 +153,24 @@ namespace DLS.Bench
             if (!mid.SequenceEqual(want)) return $"MIDDLE lists [{Show(mid)}]";
             var plain = UnitCases.Build("PLAIN", new[] { "A" }, new[] { "Y" }, b => b.Wire(b.Input("A"), b.Output("Y")));
             return ChipKeyBindings.Collect(plain.desc, n => lib.TryGetChipDescription(n, out ChipDescription d) ? d : null).Count == 0 ? null : "a chip without KEY lists keys";
+        }
+
+        static string Exported()
+        {
+            var (top, lib, middle) = NestedChips();
+            string mid = SaveSystem.CircuitExporter.ExportChip(middle, lib);
+            foreach (string want in new[] { "[touche: A]", "[touche: SPACE]", "[touches clavier internes: A, UP]" })
+                if (!mid.Contains(want)) return $"export of MIDDLE lacks \"{want}\":\n{mid}";
+            string t = SaveSystem.CircuitExporter.ExportChip(top.desc, lib);
+            if (!t.Contains("[touches clavier internes: A, UP, SPACE]")) return "export of TOP lacks the keys of its sub-chip:\n" + t;
+            foreach (char c in new[] { 'A', '7', SimKeyboardHelper.Up, SimKeyboardHelper.Down, SimKeyboardHelper.Left, SimKeyboardHelper.Right, SimKeyboardHelper.Space })
+            {
+                string name = SimKeyboardHelper.KeyName(c);
+                char back = SimKeyboardHelper.SpecialKeyFromName(name);
+                if (back == '\0') back = name.Length == 1 ? name[0] : '\0';
+                if (back != c) return $"KeyName({(int)c:X}) = \"{name}\" does not map back";
+            }
+            return null;
         }
 
         static string Saved()

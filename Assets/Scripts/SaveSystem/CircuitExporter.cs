@@ -12,6 +12,18 @@ namespace DLS.SaveSystem
     // Pure structure (no simulation) -> safe to call on the main thread while the sim runs.
     public static class CircuitExporter
     {
+        // the keyboard key of a KEY, or the keys of every KEY inside a custom component (any depth)
+        static string KeyBindingNote(SubChipDescription sub, ChipLibrary lib)
+        {
+            ChipDescription sd = Live(lib, sub.Name);
+            if (sd == null) return "";
+            if (sd.ChipType == ChipType.Key)
+                return sub.InternalData != null && sub.InternalData.Length > 0 ? $"  [touche: {DLS.Simulation.SimKeyboardHelper.KeyName((char)sub.InternalData[0])}]" : "";
+            if (sd.ChipType != ChipType.Custom) return "";
+            List<char> keys = ChipKeyBindings.Collect(sd, n => Live(lib, n));
+            return keys.Count == 0 ? "" : "  [touches clavier internes: " + string.Join(", ", keys.Select(DLS.Simulation.SimKeyboardHelper.KeyName)) + "]";
+        }
+
         static readonly HashSet<ChipType> StatefulBuiltins = new()
         {
             ChipType.Clock, ChipType.Pulse, ChipType.dev_Ram_8Bit, ChipType.DisplayRGB, ChipType.DisplayDot, ChipType.LcdDem122032, ChipType.LcdSt7920
@@ -162,6 +174,7 @@ namespace DLS.SaveSystem
                         geo += $" {sd.Size.x:0.#}x{sd.Size.y:0.#}";
                     }
                     string extra = string.IsNullOrEmpty(sub.Label) ? "" : $"  (label: \"{sub.Label}\")";
+                    extra += KeyBindingNote(sub, lib);
                     sb.AppendLine($"  {compName[sub.ID]}{io}{geo}{extra}");
                 }
                 sb.AppendLine();

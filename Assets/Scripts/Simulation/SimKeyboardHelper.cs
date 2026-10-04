@@ -28,6 +28,17 @@ namespace DLS.Simulation
 		public const char Space = ' ';
 		public static string KeyLabel(char c) => c == Space ? "SPACE" : c.ToString();
 
+		// a binding as Claude reads it and writes it back to bind_keys: the letter / digit, UP / DOWN / LEFT / RIGHT, SPACE
+		public static string KeyName(char c) => c switch
+		{
+			Left => "LEFT",
+			Up => "UP",
+			Right => "RIGHT",
+			Down => "DOWN",
+			Space => "SPACE",
+			_ => c.ToString()
+		};
+
 		// a key named by Claude / a user: an arrow name, SPACE / ESPACE, else '\0'
 		public static char SpecialKeyFromName(string name)
 		{
