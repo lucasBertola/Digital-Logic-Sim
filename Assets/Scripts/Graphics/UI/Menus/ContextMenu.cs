@@ -186,8 +186,17 @@ namespace DLS.Graphics
 			new(Format("IN/OUT"), OpenInOutPopup, CanEditCurrentChip),
 			new(Format("CLEAN UP"), BottomBarUI.CleanUp, CanEditCurrentChip),
 			new(Format("ASK CLAUDE"), QuickAskBar.Open, CanEditCurrentChip),
-			new(() => Format(Project.ActiveProject != null && Project.ActiveProject.FastModeActive ? "STOP FAST" : "RUN FAST"), ToggleFastMode, () => Project.ActiveProject != null)
+			new(() => Format(Project.ActiveProject != null && Project.ActiveProject.FastModeActive ? "STOP FAST" : "RUN FAST"), ToggleFastMode, () => Project.ActiveProject != null),
+			new(() => Format(Project.ActiveProject != null && Project.ActiveProject.SettleRecording ? "STOP STEPS RECORD" : "RECORD CLOCK STEPS NEEDED"), ToggleSettleRecord, () => Project.ActiveProject != null)
 		};
+
+		// the most steps the circuit needs after a clock edge, shown at the top right while recording (Project.StartSettleRecord)
+		static void ToggleSettleRecord()
+		{
+			Project p = Project.ActiveProject;
+			if (p.SettleRecording) p.StopSettleRecord();
+			else p.StartSettleRecord();
+		}
 
 		// RUN FAST: the viewed chip with its modules run by verified models (Project.StartFastMode)
 		static void ToggleFastMode()

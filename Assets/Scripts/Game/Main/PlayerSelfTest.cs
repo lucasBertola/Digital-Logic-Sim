@@ -493,6 +493,32 @@ namespace DLS.Game
 				return SimKernel.CompiledByBurst() == 1 ? null : "the kernel is not compiled by Burst in the player";
 			});
 			report.AppendLine("      burst on the CPU, batched like the sim thread: " + BurstCpuRate());
+			Check("RECORD CLOCK STEPS NEEDED: the batched Burst loop records what the reference loop records (CPU, builtin clock)", () =>
+			{
+				lib.TryGetChipDescription("CPU", out ChipDescription c);
+				var res = new (int, long, long)[2];
+				for (int pass = 0; pass < 2; pass++)
+				{
+					try
+					{
+						SimChip root = Simulator.BuildSimChip(c, lib);
+						Simulator.ResetForTests(43);
+						Simulator.stepsPerClockTransition = 70;
+						foreach (SimPin pin in root.InputPins) pin.State = 0;
+						var audioS = new SimAudio();
+						Simulator.RunSimulationStep(root, Array.Empty<DevPinInstance>(), audioS);
+						root.Program.ResetSettle(); root.Program.RecordSettle = true;
+						for (int bt = 0; bt < 300; bt++)
+						{
+							int doneS = 0;
+							while (doneS < 300) doneS += pass == 0 ? Simulator.RunSimulationStepsReference(root, Array.Empty<DevPinInstance>(), audioS, 300 - doneS) : Simulator.RunSimulationSteps(root, Array.Empty<DevPinInstance>(), audioS, 300 - doneS);
+						}
+						res[pass] = (root.Program.SettleMax, root.Program.SettleEdges, root.Program.SettleUnsettled);
+					}
+					finally { Simulator.ClearTestSeed(); }
+				}
+				return res[0].Item2 > 0 && res[0] == res[1] ? null : $"reference {res[0]}, batched {res[1]} (max, edges, not settled)";
+			});
 			// 2026-10-04: the whole batched loop runs in the Burst kernel (SimKernel.RunBatch), compiled ahead of time here
 			foreach (bool fastTree in new[] { false, true })
 			Check(fastTree ? "batched loop in the Burst kernel = reference loop in the built player (CPU RUN FAST tree, builtin clock, every slot after every batch)" : "batched loop in the Burst kernel = reference loop in the built player (CPU, builtin clock, every slot after every batch)", () =>

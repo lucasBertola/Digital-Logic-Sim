@@ -17,7 +17,8 @@ namespace DLS.Bench
             string match = Arg("-case") ?? "switching chip";
             int times = int.Parse(Arg("-times") ?? "20");
             var sb = new StringBuilder();
-            var c = ProjectCases.All(BenchProject.FixtureProjectDir("PC")).First(x => x.name.Contains(match));
+            string fixture = BenchProject.FixtureProjectDir("PC");
+            var c = ProjectCases.All(fixture).Append(SettleCases.Live(fixture)).Append(SpeedPrefsCases.LiveBatches(fixture)).Append(SpeedPrefsCases.LiveLimitedHigh(fixture)).First(x => x.name.Contains(match));
             int fails = 0;
             for (int i = 0; i < times; i++)
             {

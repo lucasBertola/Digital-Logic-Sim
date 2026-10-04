@@ -939,6 +939,37 @@ namespace DLS.Game
 		// above 0.4 ms: each batch costs ~2 us of its own around the steps (inputs, audio, the loop), which at 256 steps was
 		// half the time of the user's CPU_2 in RUN FAST (413 kHz with 256, 725-813 kHz with 4096). The time bound keeps
 		// inputs, edits and pause requests within a fraction of a millisecond on any circuit. Limited speed keeps 256.
+		// ---- RECORD CLOCK STEPS NEEDED (user, 2026-10-04): right-click on empty space; while it records, the top right
+		// shows the most steps the circuit needed to settle after a clock edge (SimProgram.SettleAfterStep), i.e. how far
+		// "steps per clock tick" could go down. Counted by the program the sim thread steps (gates or RUN FAST), gathered
+		// here by the sim thread (SyncSettle) across recompiles; zero cost while off.
+		volatile bool settleRecordOn;
+		SimProgram settleProg;
+		long settleProgEdges, settleProgUnsettled;
+		public bool SettleRecording => settleRecordOn;
+		public int SettleMaxRecorded { get; private set; }
+		public long SettleEdgesRecorded { get; private set; }
+		public long SettleUnsettledRecorded { get; private set; }
+		// the totals are reset with the sim thread parked: a new record starts from zero at once (the sim thread would
+		// otherwise apply a reset request after its current batch, while counting millions of edges a second)
+		public void StartSettleRecord() => RunWithSimulationPaused(() =>
+		{
+			SettleMaxRecorded = 0; SettleEdgesRecorded = 0; SettleUnsettledRecorded = 0;
+			settleProg = null;
+			settleRecordOn = true;
+		});
+		public void StopSettleRecord() => settleRecordOn = false;
+
+		void SyncSettle(SimProgram pr)
+		{
+			if (pr.RecordSettle != settleRecordOn) pr.RecordSettle = settleRecordOn;
+			if (!settleRecordOn) return;
+			if (pr != settleProg) { settleProg = pr; pr.ResetSettle(); settleProgEdges = 0; settleProgUnsettled = 0; } // a recompile, RUN FAST on / off
+			if (pr.SettleMax > SettleMaxRecorded) SettleMaxRecorded = pr.SettleMax;
+			SettleEdgesRecorded += pr.SettleEdges - settleProgEdges; settleProgEdges = pr.SettleEdges;
+			SettleUnsettledRecorded += pr.SettleUnsettled - settleProgUnsettled; settleProgUnsettled = pr.SettleUnsettled;
+		}
+
 		public const int MinBatchSteps = 256, MaxBatchSteps = 1 << 16;
 		public static int FixedBatchSteps; // probe override (LiveRate -rateBatch), 0 = adaptive
 		public int CurrentBatchSteps { get; private set; } = MinBatchSteps;
@@ -1044,6 +1075,7 @@ namespace DLS.Game
 					while (paceClock.ElapsedTicks < paceDeadline) Thread.SpinWait(10);
 
 					// ---- Update perf counter (average steps per second over the last window) ----
+					if (simChip.Program != null) SyncSettle(simChip.Program);
 					perfStepsInWindow += stepsDone;
 					long elapsedMsTotal = stopwatchTotal.ElapsedMilliseconds;
 					long windowMs = elapsedMsTotal - perfWindowStartMs;

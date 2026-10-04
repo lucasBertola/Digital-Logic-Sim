@@ -951,6 +951,7 @@ namespace DLS.Simulation
 				Simulator.PcgState = ctx->pcgV; noiseCount = ctx->noiseCountV;
 				if (ctx->winnerChangedCount > 0) ApplyMergeWinners(ctx);
 				GatesRunLastStep = ran;
+				if (RecordSettle) SettleAfterStep(frame, period, forcedClock);
 				return;
 			}
 			fixed (uint* st = states)
@@ -990,7 +991,37 @@ namespace DLS.Simulation
 				}
 			}
 			GatesRunLastStep = ran;
+			if (RecordSettle) SettleAfterStep(frame, period, forcedClock);
 		}
+
+		// ---- RECORD CLOCK STEPS NEEDED (user, 2026-10-04) ----
+		// After each clock edge (the real step whose frame is a multiple of the period), the steps until nothing is
+		// pending any more: the circuit has settled and stays as it is until the next event. The largest count is the
+		// fewest steps per clock tick the circuit needs (a gate that runs and changes nothing still counts: on the safe
+		// side). Still active on the last step before the next edge: it did not settle (SettleUnsettled), counted as a
+		// full period. Activity started later (an input moved, a key, noise) is not attached to an edge and not counted.
+		// Off: not a cycle spent (the sim thread sets RecordSettle; SimKernel.SettleAfterStep is the same in the batch loop).
+		public volatile bool RecordSettle;
+		public int SettleMax;
+		public long SettleEdges, SettleUnsettled;
+		bool settling;
+
+		void SettleAfterStep(int frame, int period, int forcedClock)
+		{
+			if (period <= 0 || forcedClock >= 0) { settling = false; return; }
+			int off = frame % period;
+			if (off == 0)
+			{
+				if (!AnyClockRunning()) { settling = false; return; }
+				settling = true;
+				SettleEdges++;
+			}
+			if (!settling) return;
+			if (NothingPending) { settling = false; if (off + 1 > SettleMax) SettleMax = off + 1; }
+			else if (off == period - 1) { settling = false; SettleMax = period; SettleUnsettled++; }
+		}
+
+		public void ResetSettle() { SettleMax = 0; SettleEdges = 0; SettleUnsettled = 0; settling = false; }
 
 		unsafe void ApplyMergeWinners(StepCtx* c)
 		{
@@ -1036,6 +1067,8 @@ namespace DLS.Simulation
 			c->noiseAcc = noiseAccumulator; c->lastClockLevel = lastClockLevel;
 			c->stepsRun = 0; c->realSteps = 0; c->gatesRun = 0;
 			c->seedState = Simulator.StepSeedState;
+			c->recordSettle = RecordSettle ? 1 : 0; c->settling = settling ? 1 : 0; c->settleMax = SettleMax;
+			c->settleEdges = SettleEdges; c->settleUnsettled = SettleUnsettled;
 			while (true)
 			{
 				int r = SimKernel.RunBatch(c);
@@ -1057,6 +1090,7 @@ namespace DLS.Simulation
 			Simulator.PcgState = c->pcgV; noiseCount = c->noiseCountV;
 			noiseAccumulator = c->noiseAcc; lastClockLevel = c->lastClockLevel;
 			Simulator.StepSeedState = c->seedState;
+			if (c->recordSettle != 0) { settling = c->settling != 0; SettleMax = c->settleMax; SettleEdges = c->settleEdges; SettleUnsettled = c->settleUnsettled; }
 			StepsRun += c->stepsRun;
 			frame = c->frame;
 			realSteps += c->realSteps;

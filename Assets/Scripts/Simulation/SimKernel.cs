@@ -35,11 +35,14 @@ namespace DLS.Simulation
 		public uint seedState;
 		public int* clockGates; public int clockGateCount;
 		public int* posOfCanon;
+		// RECORD CLOCK STEPS NEEDED (SimProgram.SettleAfterStep, keep the two in step)
+		public int recordSettle, settling, settleMax;
+		public long settleEdges, settleUnsettled;
 	}
 
 	// The hot part of a step compiled by Burst: it runs the pending NAND / NAND+inverter / no-op gates and the RUN FAST
-	// models (tables, register / counter / RAM templates) in schedule order exactly like the managed loop — floating
-	// inputs read as noise with the same random draws, the noise list kept the same way — and stops at the first gate
+	// models (tables, register / counter / RAM templates) in schedule order exactly like the managed loop â€” floating
+	// inputs read as noise with the same random draws, the noise list kept the same way â€” and stops at the first gate
 	// it cannot run (any other builtin) with that gate's dirty bit still set; SimProgram runs it, then calls again from
 	// the position after it. Same order, same marks, same values: the managed loop and this one are interchangeable
 	// (bench "burst stepper = managed stepper").
@@ -408,7 +411,35 @@ namespace DLS.Simulation
 				}
 				c->phase = 0;
 				c->done++;
+				if (c->recordSettle != 0) SettleAfterStep(c);
 			}
+		}
+
+		// SimProgram.SettleAfterStep (keep the two in step): steps from a clock edge until nothing is pending
+		static void SettleAfterStep(StepCtx* c)
+		{
+			if (c->period <= 0 || c->forced >= 0) { c->settling = 0; return; }
+			int off = c->frame % c->period;
+			if (off == 0)
+			{
+				if (!AnyClockRunning(c)) { c->settling = 0; return; }
+				c->settling = 1;
+				c->settleEdges++;
+			}
+			if (c->settling == 0) return;
+			if (!AnyPending(c)) { c->settling = 0; if (off + 1 > c->settleMax) c->settleMax = off + 1; }
+			else if (off == c->period - 1) { c->settling = 0; c->settleMax = c->period; c->settleUnsettled++; }
+		}
+
+		static bool AnyPending(StepCtx* c)
+		{
+			for (int t = 0; t < c->topWords; t++)
+				if (c->top[t] != 0)
+				{
+					int end = math.min(c->words, (t + 1) << 6);
+					for (int w = t << 6; w < end; w++) if (c->dirty[w] != 0) return true;
+				}
+			return false;
 		}
 
 		static void SetDirty(StepCtx* c, int pos)

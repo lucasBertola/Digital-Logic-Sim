@@ -52,6 +52,7 @@ public static class SnakeProbe
             var sw = Stopwatch.StartNew();
             long steps = 0, lastSteps = 0, lastReal = Simulator.RealSteps; double lastT = 0;
             root.Program.CollectStats = Arg("-probeStats") != null;
+            root.Program.RecordSettle = true; // RECORD CLOCK STEPS NEEDED
             while (sw.Elapsed.TotalSeconds < secs)
             {
                 steps += Simulator.RunSimulationSteps(root, Array.Empty<DevPinInstance>(), audio, 4096);
@@ -67,7 +68,7 @@ public static class SnakeProbe
                         runs = " runs/half: " + string.Join(", ", Enumerable.Range(0, 256).Where(k => rt[k] > 0).OrderByDescending(k => rt[k]).Take(8).Select(k => (k == 254 ? "NandNot" : k == 253 ? "Nop" : k == 255 ? "Merge" : ((ChipType)k).ToString()) + " " + (rt[k] / halfs).ToString("0.0")));
                         Array.Clear(rt, 0, 256);
                     }
-                    sb.Append($"t={t:0.0}s {(steps - lastSteps) / (t - lastT) / 2.0 / period / 1000:0.0} kHz, real steps/half {(Simulator.RealSteps - lastReal) / halfs:0.00}, PC {pc()}, LCD {Lcd(root)}{runs}\n");
+                    sb.Append($"t={t:0.0}s {(steps - lastSteps) / (t - lastT) / 2.0 / period / 1000:0.0} kHz, real steps/half {(Simulator.RealSteps - lastReal) / halfs:0.00}, PC {pc()}, LCD {Lcd(root)}, clock steps needed {root.Program.SettleMax} max over {root.Program.SettleEdges} edges ({root.Program.SettleUnsettled} not settled){runs}\n");
                     lastT = t; lastSteps = steps; lastReal = Simulator.RealSteps;
                 }
             }

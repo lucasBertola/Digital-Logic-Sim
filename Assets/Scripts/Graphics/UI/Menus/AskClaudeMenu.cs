@@ -20,6 +20,7 @@ namespace DLS.Graphics
         static bool open;
         static bool focusNextFrame;
         static float panelWidth = 47f;
+        public static float PanelWidth => panelWidth;
         static bool resizing;
         static float appliedViewportF; // fraction of screen width the panel currently reserves (for camera compensation)
         static float copiedFlashUntil;

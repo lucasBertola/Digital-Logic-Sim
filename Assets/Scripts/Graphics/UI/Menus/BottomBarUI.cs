@@ -119,6 +119,7 @@ namespace DLS.Graphics
 			if (AskClaude.ConsumeQuickTurnFinished(out string quickSummary)) ShowToast(quickSummary);
 			DrawClaudeBusyIndicator();
 			DrawFastModeIndicator();
+			DrawSettleRecord();
 			DrawToast();
 
 			if (UIDrawer.ActiveMenu == UIDrawer.MenuType.BottomBarMenuPopup)
@@ -661,6 +662,43 @@ namespace DLS.Graphics
 			Vector2 centre = new(UI.Width / 2f, UI.Height - 0.5f - h / 2f - (AskClaude.Waiting && !AskClaudeMenu.IsOpen ? h + 0.4f : 0));
 			UI.DrawPanel(centre, new Vector2(w, h), new Color(0.35f, 0.18f, 0.02f, 0.92f));
 			UI.DrawText(label, theme.FontRegular, theme.FontSizeRegular, centre, Anchor.TextCentre, new Color(1f, 0.85f, 0.4f));
+		}
+
+		// RECORD CLOCK STEPS NEEDED: the most steps any clock edge needed before the circuit settled, against the steps per
+		// tick in use (top right, left of the Ask Claude panel when it is open)
+		static void DrawSettleRecord()
+		{
+			Project p = Project.ActiveProject;
+			if (p == null || !p.SettleRecording) return;
+			DrawSettings.UIThemeDLS theme = DrawSettings.ActiveUITheme;
+			int perTick = p.stepsPerClockTransition;
+			string line1, line2;
+			Color col;
+			if (p.SettleEdgesRecorded == 0)
+			{
+				line1 = "CLOCK STEPS NEEDED: waiting for a clock edge...";
+				line2 = "(needs a running CLOCK; right-click > STOP STEPS RECORD)";
+				col = new Color(0.85f, 0.85f, 0.85f);
+			}
+			else if (p.SettleUnsettledRecorded > 0)
+			{
+				line1 = $"CLOCK STEPS NEEDED: MORE than {perTick} (not settled after {p.SettleUnsettledRecorded} of {p.SettleEdgesRecorded} edges)";
+				line2 = "still changing when the next edge came: raise steps per tick";
+				col = new Color(1f, 0.45f, 0.4f);
+			}
+			else
+			{
+				line1 = $"CLOCK STEPS NEEDED: {p.SettleMaxRecorded} max  (you use {perTick} per tick)";
+				line2 = $"{PreferencesMenu.FormatCount(p.SettleEdgesRecorded)} edges recorded; right-click > STOP STEPS RECORD";
+				col = new Color(0.55f, 1f, 0.6f);
+			}
+			float w = Mathf.Max(Draw.CalculateTextBoundsSize(line1, theme.FontSizeRegular, theme.FontRegular).x, Draw.CalculateTextBoundsSize(line2, theme.FontSizeRegular, theme.FontRegular).x) + 2f;
+			const float h = 4f;
+			float right = UI.Width - 0.5f - (AskClaudeMenu.IsOpen ? AskClaudeMenu.PanelWidth : 0);
+			Vector2 centre = new(right - w / 2f, UI.Height - 0.5f - h / 2f);
+			UI.DrawPanel(centre, new Vector2(w, h), new Color(0.05f, 0.12f, 0.08f, 0.92f));
+			UI.DrawText(line1, theme.FontRegular, theme.FontSizeRegular, centre + new Vector2(0, 0.9f), Anchor.TextCentre, col);
+			UI.DrawText(line2, theme.FontRegular, theme.FontSizeRegular, centre - new Vector2(0, 0.9f), Anchor.TextCentre, new Color(0.8f, 0.8f, 0.8f));
 		}
 
 		static void DrawToast()
