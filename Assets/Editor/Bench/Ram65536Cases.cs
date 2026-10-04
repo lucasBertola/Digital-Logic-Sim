@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using DLS.Description;
 using DLS.Game;
+using DLS.Graphics;
 using DLS.Simulation;
 
 namespace DLS.Bench
@@ -18,6 +19,7 @@ namespace DLS.Bench
                 ("RAM65536: written while Cs and We are 1 (a level), D_out = the addressed byte with Cs and Oe, floating otherwise; 16-bit address, bytes of one state word independent", Basic),
                 ("RAM65536: the memory is saved with the chip (packed, 16384 state words) and restored", Saved),
                 ("RAM65536: EDIT MEMORY sees it, inside a chip and placed directly (65536 words of 8 bits); an edited word is read by the circuit", MemoryEditor),
+                ("EDIT MEMORY paste / file parsing: 24-bit binary lines grouped by bytes go into a 32-bit memory shown in hex; short hex values stay hex", Parsing),
                 ("EDIT MEMORY: the address is shown in the base of the values, on the memory's full address width (65536 words = 16 bits: 00010010 00110100 / 1234 / 04660)", AddressLabels),
                 ("RAM65536 x 4 on the same address (the user's prog_ram): ONE memory of 65536 x 32 bits, Ram0 = low byte, listed first; a RAM on another address stays separate", Parallel),
             };
@@ -109,6 +111,57 @@ namespace DLS.Bench
             SimChip direct = c.target.SubChips.First(x => x.ChipType == ChipType.Ram65536);
             MemoryBank own = MemoryLayout.BuiltinBank(direct, "RAM65536");
             return own != null && own.WordCount == 65536 && own.Read(0x4243) == 0x66 ? null : "placed directly: not seen as a memory";
+        }
+
+        // the user's program format (C:\Users\...\compilateur\programme.txt): 24-bit instructions in binary, // comments
+        const string ProgramSample =
+            "01000010 00000000 10000000 //   0: RAM <- #128              | leds[0] = 128\r\n" +
+            "01000100 00000000 00000001 //   1: MAR <- #1                | MAR = &leds[1]\r\n" +
+            "\r\n" +
+            "// a comment-only line\r\n" +
+            "01000000 00000001 00011110 // 186: JUMP _boucle1(@30)       | aller a _boucle1\r\n";
+
+        static string Parsing()
+        {
+            List<uint> v = DLS.Graphics.MemoryEditMenu.ParsePasted(ProgramSample, 32, 0, out string err);
+            if (err != null) return "the program sample did not parse: " + err;
+            if (!v.SequenceEqual(new uint[] { 0x420080, 0x440001, 0x40011E })) return "parsed " + string.Join(",", v.Select(x => x.ToString("X")));
+            List<uint> hex = DLS.Graphics.MemoryEditMenu.ParsePasted("10\n10101010\nFF00", 32, 0, out err);
+            return err == null && hex.SequenceEqual(new uint[] { 0x10, 0x10101010, 0xFF00 }) ? null : "hex values were read as binary: " + string.Join(",", hex.Select(x => x.ToString("X"))) + " " + err;
+        }
+
+        public static (string name, Func<string> run) Serial() =>
+            ("memory editor: LOAD FROM FILE fills the memory from address 0 with the file's values (the user's program format, into 4 x RAM65536 = 32 bits)", LoadFromFile);
+
+        static string LoadFromFile()
+        {
+            var c = UnitCases.Build("t_prog_file", new[] { "H:8", "L:8" }, new[] { "Ram3:8", "Ram2:8", "Ram1:8", "Ram0:8" }, b =>
+            {
+                int vcc = b.Add(ChipType.Vcc);
+                for (int i = 0; i < 4; i++)
+                {
+                    int r = b.Add(ChipType.Ram65536);
+                    b.Wire(b.Input("H"), b.In(r, 1)); b.Wire(b.Input("L"), b.In(r, 2));
+                    b.Wire(b.Out(vcc, 0), b.In(r, 4)); b.Wire(b.Out(vcc, 0), b.In(r, 5));
+                    b.Wire(b.Out(r, 0), b.Output("Ram" + i));
+                }
+            });
+            c.Step(2);
+            MemoryBank big = MemoryLayout.BuiltinBanks(c.target, c.desc, c.lib).First(x => x.Bits == 32);
+            string path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "dls_programme_test.txt");
+            System.IO.File.WriteAllText(path, ProgramSample);
+            try
+            {
+                MemoryEditMenu.OpenForTests(new List<MemoryBank> { big });
+                MemoryEditMenu.SetModeForTests(0);
+                MemoryEditMenu.FocusForTests(5); // a selected row elsewhere: the file still starts at address 0
+                MemoryEditMenu.LoadFile(path);
+                string got = $"{MemoryEditMenu.FieldText(0)} {MemoryEditMenu.FieldText(1)} {MemoryEditMenu.FieldText(2)}";
+                if (got != "00420080 00440001 0040011E") return "fields after loading: " + got;
+                string status = MemoryEditMenu.StatusForTests ?? "";
+                return status.Contains("dls_programme_test.txt") && status.Contains("3 words loaded") ? null : "status: " + status;
+            }
+            finally { MemoryEditMenu.Reset(); System.IO.File.Delete(path); }
         }
 
         static string AddressLabels()

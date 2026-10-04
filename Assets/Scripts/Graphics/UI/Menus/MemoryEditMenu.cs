@@ -302,11 +302,18 @@ namespace DLS.Graphics
 				pos = UI.PrevBounds.BottomLeft + Vector2.down * spacing;
 				int copyPaste = MenuHelper.DrawButtonPair("COPY ALL", "PASTE", pos, sideSize.x, false);
 				pos = UI.PrevBounds.BottomLeft + Vector2.down * spacing;
+				bool loadFile = UI.Button("LOAD FROM FILE", MenuHelper.Theme.ButtonTheme, pos, new Vector2(sideSize.x, 0), true, false, true, Anchor.TopLeft);
+				pos = UI.PrevBounds.BottomLeft + Vector2.down * spacing;
 				bool clear = UI.Button("CLEAR ALL", MenuHelper.Theme.ButtonTheme, pos, new Vector2(sideSize.x, 0), true, false, true, Anchor.TopLeft);
 				if (pasteStatus != null && Time.time < pasteStatusUntil)
 				{
 					pos = UI.PrevBounds.BottomLeft + Vector2.down * spacing;
-					UI.DrawText(pasteStatus, MenuHelper.Theme.FontRegular, MenuHelper.Theme.FontSizeRegular * 0.8f, pos, Anchor.TopLeft, new Color(0.6f, 0.9f, 0.6f));
+					UI.DrawText(Wrap(pasteStatus, 34), MenuHelper.Theme.FontRegular, MenuHelper.Theme.FontSizeRegular * 0.8f, pos, Anchor.TopLeft, new Color(0.6f, 0.9f, 0.6f));
+				}
+				if (loadFile)
+				{
+					string path = NativeFileDialog.OpenFile("Load memory from file");
+					if (path != null) LoadFile(path);
 				}
 				pos = UI.PrevBounds.BottomLeft + Vector2.down * (spacing * 2);
 				MenuHelper.CancelConfirmResult result = MenuHelper.DrawCancelConfirmButtons(pos, sideSize.x, false, false);
@@ -558,7 +565,22 @@ namespace DLS.Graphics
 			if (s.StartsWith("0b", StringComparison.OrdinalIgnoreCase)) return FitsWord(s.Substring(2), bits, 2) && TryParse(s.Substring(2), bits, 2, out v);
 			if (FitsWord(s, bits, m) && TryParse(s, bits, m, out v)) return true;
 			if (s.Length == bits && s.All(c => c is '0' or '1')) return TryParse(s, bits, 2, out v);
+			// 0s and 1s grouped by bytes, narrower than the word (a 24-bit instruction in a 32-bit memory shown in hex)
+			bool grouped = l.Trim().Contains(' ') || s.Length % 8 == 0;
+			if (grouped && s.Length <= bits && s.Length >= 8 && s.All(c => c is '0' or '1')) return TryParse(s, bits, 2, out v);
 			return false;
+		}
+
+		// LOAD FROM FILE: the file's lines fill the memory from address 0, read like a paste (one value per line, comments
+		// //, # and ; ignored, 0x / 0b prefixes, binary lines grouped by 8); SAVE writes them into the circuit
+		public static void LoadFile(string path)
+		{
+			string text;
+			try { text = System.IO.File.ReadAllText(path); }
+			catch (Exception e) { pasteStatus = $"cannot read {System.IO.Path.GetFileName(path)}: {e.Message}"; pasteStatusUntil = Time.time + 8f; return; }
+			PasteFrom(0, text);
+			pasteStatus = System.IO.Path.GetFileName(path) + ": " + pasteStatus.Replace("pasted", "loaded") + " - SAVE to write them into the circuit";
+			pasteStatusUntil = Time.time + 8f;
 		}
 
 		// Ctrl+V of several lines in a word, or PASTE: the lines fill that word and the following ones
@@ -583,6 +605,7 @@ namespace DLS.Graphics
 		public static void FocusForTests(int row) { lastFocusedRow = row; }
 		// (the text is handed over directly: the OS clipboard is shared with every other program and made the bench flaky)
 		public static void PasteForTests(string clipboard) => PasteFrom(lastFocusedRow, clipboard);
+		public static string StatusForTests => pasteStatus;
 
 		static void Save()
 		{
