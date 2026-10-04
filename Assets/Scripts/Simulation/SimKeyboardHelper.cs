@@ -17,6 +17,40 @@ namespace DLS.Simulation
 			KeyCode.Alpha5, KeyCode.Alpha6, KeyCode.Alpha7, KeyCode.Alpha8, KeyCode.Alpha9
 		};
 
+		// Arrow keys (user, 2026-10-04): a KEY bound to an arrow stores the arrow's Unicode character (saved as its code
+		// in InternalData[0], like a letter); polled by KeyCode, the arrows do not depend on the keyboard layout.
+		public const char Left = '\u2190', Up = '\u2191', Right = '\u2192', Down = '\u2193';
+		static readonly (KeyCode key, char c)[] ArrowKeys = { (KeyCode.LeftArrow, Left), (KeyCode.UpArrow, Up), (KeyCode.RightArrow, Right), (KeyCode.DownArrow, Down) };
+
+		public static bool IsArrow(char c) => c >= Left && c <= Down;
+
+		// the arrow pressed this frame, or '\0'
+		public static char ArrowDownThisFrame()
+		{
+			foreach ((KeyCode key, char c) in ArrowKeys) if (InputHelper.IsKeyDownThisFrame(key)) return c;
+			return '\0';
+		}
+
+		// "UP" / "HAUT" / "\u2191"... -> the arrow character, else '\0'
+		public static char ArrowFromName(string name) => name.Trim().ToUpperInvariant() switch
+		{
+			"LEFT" or "GAUCHE" or "\u2190" => Left,
+			"UP" or "HAUT" or "\u2191" => Up,
+			"RIGHT" or "DROITE" or "\u2192" => Right,
+			"DOWN" or "BAS" or "\u2193" => Down,
+			_ => '\0'
+		};
+
+		// direction of an arrow character (x right, y up), zero for anything else
+		public static Vector2 ArrowDirection(char c) => c switch
+		{
+			Left => Vector2.left,
+			Up => Vector2.up,
+			Right => Vector2.right,
+			Down => Vector2.down,
+			_ => Vector2.zero
+		};
+
 		static readonly HashSet<char> KeyLookup = new();
 		static bool HasAnyInput;
 
@@ -59,6 +93,8 @@ namespace DLS.Simulation
 						HasAnyInput = true;
 					}
 				}
+				foreach ((KeyCode key, char c) in ArrowKeys)
+					if (InputHelper.IsKeyHeld(key)) { KeyLookup.Add(c); HasAnyInput = true; }
 			}
 		}
 

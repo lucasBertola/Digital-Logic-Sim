@@ -1,4 +1,5 @@
 using DLS.Game;
+using DLS.Simulation;
 using Seb.Helpers;
 using Seb.Vis;
 using Seb.Vis.UI;
@@ -30,11 +31,16 @@ namespace DLS.Graphics
 						chosenKey = activeChar.ToString();
 					}
 				}
+				char arrow = SimKeyboardHelper.ArrowDownThisFrame(); // arrows type no character: polled by key
+				if (arrow != '\0') chosenKey = arrow.ToString();
 
-				UI.DrawText("Press a key to rebind\n (alphanumeric only)", theme.FontBold, theme.FontSizeRegular, pos, Anchor.TextCentre, Color.white * 0.8f);
+				UI.DrawText("Press a key to rebind\n (letter, digit or arrow)", theme.FontBold, theme.FontSizeRegular, pos, Anchor.TextCentre, Color.white * 0.8f);
 
 				UI.DrawPanel(UI.PrevBounds.CentreBottom + Vector2.down, Vector2.one * 3.5f, new Color(0.1f, 0.1f, 0.1f), Anchor.CentreTop);
-				UI.DrawText(chosenKey, theme.FontBold, theme.FontSizeRegular * 1.5f, UI.PrevBounds.Centre, Anchor.TextCentre, Color.white);
+				if (!string.IsNullOrEmpty(chosenKey) && SimKeyboardHelper.IsArrow(chosenKey[0]))
+					DevSceneDrawer.DrawKeyArrow(UI.PrevBounds.Centre, chosenKey[0], 1.6f, 0.28f, Color.white);
+				else
+					UI.DrawText(chosenKey, theme.FontBold, theme.FontSizeRegular * 1.5f, UI.PrevBounds.Centre, Anchor.TextCentre, Color.white);
 
 				MenuHelper.CancelConfirmResult result = MenuHelper.DrawCancelConfirmButtons(UI.GetCurrentBoundsScope().BottomLeft, UI.GetCurrentBoundsScope().Width, true);
 				MenuHelper.DrawReservedMenuPanel(panelID, UI.GetCurrentBoundsScope());

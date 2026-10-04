@@ -402,6 +402,14 @@ namespace DLS.Graphics
 					displayName = subchip.Description.Name;
 				}
 
+				if (isKeyChip && !string.IsNullOrEmpty(subchip.activationKeyString) && SimKeyboardHelper.IsArrow(subchip.activationKeyString[0]))
+				{
+					// an arrow key: drawn as an arrow (the fonts have no arrow glyphs)
+					float len = Mathf.Min(subchip.Size.x, subchip.Size.y) * 0.55f;
+					DrawKeyArrow(pos, subchip.activationKeyString[0], len, len * 0.16f, nameTextCol);
+					displayName = "";
+				}
+
 				bool nameCentre = desc.NameLocation == NameDisplayLocation.Centre || isKeyChip;
 				Anchor textAnchor = nameCentre ? Anchor.TextCentre : Anchor.CentreTop;
 				Vector2 textPos = nameCentre ? pos : pos + Vector2.up * (subchip.Size.y / 2 - GridSize / 2);
@@ -660,6 +668,14 @@ namespace DLS.Graphics
 					Draw.Quad(topLeft + new Vector2(px * (x + 0.5f), -px * (y + 0.5f)), dot, lit ? on : off);
 				}
 			return Bounds2D.CreateFromCentreAndSize(centre, outer);
+		}
+
+		// the arrow of a KEY bound to an arrow key, centred, `length` long
+		public static void DrawKeyArrow(Vector2 centre, char arrow, float length, float thickness, Color col)
+		{
+			Vector2 dir = SimKeyboardHelper.ArrowDirection(arrow);
+			if (dir == Vector2.zero) return;
+			Draw.Arrow(centre - dir * (length / 2), centre + dir * (length / 2), thickness, length * 0.45f, 40, col);
 		}
 
 		// ST7920 128 x 64: white pixels on the blue backlight of the user's module; scale = the width. The cursor blink

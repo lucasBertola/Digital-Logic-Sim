@@ -65,14 +65,14 @@ namespace DLS.Game
                     new JObject { ["module"] = Str("Module cible."), ["elements"] = StrArray("Labels des composants et/ou noms des entrees/sorties a supprimer.") }, "module", "elements"),
                 Tool("delete_module", "Supprime COMPLETEMENT un module (son onglet et son fichier) du projet. Ses instances sont retirees des autres modules. Irreversible : uniquement pour un module que tu as cree en trop, ou si l'utilisateur le demande.",
                     new JObject { ["name"] = Str("Nom du module a supprimer.") }, "name"),
-                Tool("bind_keys", "Assigne la touche clavier de composants KEY (une lettre A-Z ou un chiffre 0-9). Un KEY sort 1 tant que sa touche est pressee.",
+                Tool("bind_keys", "Assigne la touche clavier de composants KEY (une lettre A-Z, un chiffre 0-9, ou une fleche : UP, DOWN, LEFT, RIGHT). Un KEY sort 1 tant que sa touche est pressee.",
                     new JObject
                     {
                         ["module"] = Str("Module cible."),
                         ["binds"] = new JObject
                         {
                             ["type"] = "array", ["description"] = "Liste {component, key}.",
-                            ["items"] = new JObject { ["type"] = "object", ["properties"] = new JObject { ["component"] = Str("Label du composant KEY (ex \"KEY#2\")."), ["key"] = Str("Touche : une seule lettre A-Z ou chiffre 0-9.") }, ["required"] = new JArray { "component", "key" } }
+                            ["items"] = new JObject { ["type"] = "object", ["properties"] = new JObject { ["component"] = Str("Label du composant KEY (ex \"KEY#2\")."), ["key"] = Str("Touche : une lettre A-Z, un chiffre 0-9, ou UP / DOWN / LEFT / RIGHT pour les fleches.") }, ["required"] = new JArray { "component", "key" } }
                         }
                     }, "module", "binds"),
                 Tool("set_layout",
@@ -399,8 +399,10 @@ namespace DLS.Game
 
         static string BindOneKey(Project p, Dictionary<string, IMoveable> map, string comp, string key)
         {
-            if (key.Length != 1 || !((key[0] >= 'A' && key[0] <= 'Z') || (key[0] >= '0' && key[0] <= '9')))
-                return "touche invalide (une seule lettre A-Z ou chiffre 0-9).";
+            char arrow = SimKeyboardHelper.ArrowFromName(key);
+            if (arrow != '\0') key = arrow.ToString();
+            else if (key.Length != 1 || !((key[0] >= 'A' && key[0] <= 'Z') || (key[0] >= '0' && key[0] <= '9')))
+                return "touche invalide (une lettre A-Z, un chiffre 0-9, ou une fleche UP / DOWN / LEFT / RIGHT).";
             if (!map.TryGetValue(comp, out IMoveable el)) return $"composant \"{comp}\" introuvable.";
             if (el is not SubChipInstance sc || sc.ChipType != ChipType.Key) return $"\"{comp}\" n'est pas un composant KEY.";
             if (sc.InternalData == null || sc.InternalData.Length == 0) return "composant KEY sans donnee interne.";
