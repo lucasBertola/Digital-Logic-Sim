@@ -389,16 +389,19 @@ namespace DLS.Graphics
 			}
 
 			// the keys of the KEYs inside a custom chip (any depth), as small key caps along its bottom edge, lit while held
+			// The name then lives above them, never touching (user, 2026-10-04): nameBottom = the lowest it may reach.
+			float chipBottom = pos.y - desc.Size.y / 2, chipTop = pos.y + desc.Size.y / 2;
+			float nameBottom = chipBottom;
 			if (desc.ChipType == ChipType.Custom && Project.ActiveProject != null)
 			{
 				var keys = ChipKeyBindings.ForDrawing(desc.Name, Project.ActiveProject.chipLibrary, Time.frameCount);
-				if (keys.Count > 0) DrawKeyCaps(subchip, keys);
+				if (keys.Count > 0) nameBottom = DrawKeyCaps(subchip, keys) + KeyCapNameGap;
 			}
 
 			// Draw name (or the label, when DISPLAY NAME is on: wrapped and shrunk to fit inside the chip)
 			if (!isKeyChip && subchip.ShowLabelOnChip && !string.IsNullOrWhiteSpace(subchip.Label))
 			{
-				DrawFittedLabel(subchip, nameTextCol);
+				DrawFittedLabel(subchip, nameTextCol, nameBottom);
 			}
 			else if (isKeyChip || desc.NameLocation != NameDisplayLocation.Hidden)
 			{
@@ -420,13 +423,30 @@ namespace DLS.Graphics
 				bool nameCentre = desc.NameLocation == NameDisplayLocation.Centre || isKeyChip;
 				Anchor textAnchor = nameCentre ? Anchor.TextCentre : Anchor.CentreTop;
 				Vector2 textPos = nameCentre ? pos : pos + Vector2.up * (subchip.Size.y / 2 - GridSize / 2);
+				float fontSize = FontSizeChipName;
+				if (nameBottom > chipBottom)
+				{
+					// key caps below: centre the name in the room above them, shrink it if it does not fit there
+					float textH = Draw.CalculateTextBoundsSize(displayName, fontSize, FontBold).y;
+					if (nameCentre)
+					{
+						float room = chipTop - nameBottom - KeyCapNameGap;
+						if (textH > room && textH > 0) fontSize *= Mathf.Max(0.3f, room / textH);
+						textPos = new Vector2(pos.x, (nameBottom + chipTop) / 2);
+					}
+					else
+					{
+						float room = textPos.y - nameBottom;
+						if (textH > room && textH > 0) fontSize *= Mathf.Max(0.3f, room / textH);
+					}
+				}
 
 				// Draw background band behind text if placed at top (so it doesn't look out of place..)
 				if (desc.NameLocation == NameDisplayLocation.Top)
 				{
 					Color bgBandCol = GetChipDisplayBorderCol(chipCol);
 					Vector2 topLeft = pos + new Vector2(-desc.Size.x / 2, desc.Size.y / 2);
-					TextRenderer.BoundingBox textBounds = Draw.CalculateTextBounds(displayName, FontBold, FontSizeChipName, textPos, textAnchor);
+					TextRenderer.BoundingBox textBounds = Draw.CalculateTextBounds(displayName, FontBold, fontSize, textPos, textAnchor);
 					float h = (topLeft.y - textBounds.Centre.y) * 2;
 
 					Vector2 s = new(desc.Size.x, h);
@@ -434,7 +454,6 @@ namespace DLS.Graphics
 					Draw.Quad(c, s, bgBandCol);
 				}
 
-				float fontSize = FontSizeChipName;
 				if (isKeyChip && displayName.Length > 1)
 				{
 					// a word ("SPACE"): shrunk to the key's width
@@ -448,11 +467,12 @@ namespace DLS.Graphics
 
 		// The label centred on the chip body: word-wrapped to the chip's width, font shrunk (down to a floor)
 		// until the block fits both the width and the height, so it never spills out of the chip.
-		static void DrawFittedLabel(SubChipInstance subchip, Color textCol)
+		static void DrawFittedLabel(SubChipInstance subchip, Color textCol, float bottom)
 		{
 			string label = subchip.Label.Trim();
+			float top = subchip.Position.y + subchip.Size.y / 2;
 			float maxW = subchip.Size.x - PinRadius * 2.5f;
-			float maxH = subchip.Size.y - 0.12f;
+			float maxH = top - bottom - 0.12f; // the whole chip, or the room above the key caps
 			float size = FontSizeChipName;
 			string text = label;
 
@@ -469,7 +489,7 @@ namespace DLS.Graphics
 			string[] lines = text.Split('\n');
 			float totalH = Draw.CalculateTextBoundsSize(text, size, FontBold).y;
 			float lineH = totalH / lines.Length;
-			float y = subchip.Position.y + totalH / 2f - lineH / 2f;
+			float y = (top + bottom) / 2f + totalH / 2f - lineH / 2f;
 			foreach (string line in lines)
 			{
 				Draw.Text(FontBold, line, size, new Vector2(subchip.Position.x, y), Anchor.TextCentre, textCol);
@@ -685,8 +705,10 @@ namespace DLS.Graphics
 			return Bounds2D.CreateFromCentreAndSize(centre, outer);
 		}
 
-		// a row of key caps at the bottom of a chip (shrunk so the row fits its width)
-		static void DrawKeyCaps(SubChipInstance subchip, List<char> keys)
+		const float KeyCapNameGap = GridSize * 0.25f; // between the key caps and the chip's name
+
+		// a row of key caps at the bottom of a chip (shrunk so the row fits its width); returns the row's top
+		static float DrawKeyCaps(SubChipInstance subchip, List<char> keys)
 		{
 			Vector2 size = subchip.Size;
 			float gap = GridSize * 0.15f;
@@ -720,6 +742,7 @@ namespace DLS.Graphics
 				}
 				x += w + gap;
 			}
+			return y + h / 2 + h * 0.06f; // (the cap's border included)
 		}
 
 		// the arrow of a KEY bound to an arrow key, centred, `length` long
