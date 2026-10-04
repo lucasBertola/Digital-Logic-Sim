@@ -18,6 +18,7 @@ namespace DLS.Bench
                 ("RAM65536: written while Cs and We are 1 (a level), D_out = the addressed byte with Cs and Oe, floating otherwise; 16-bit address, bytes of one state word independent", Basic),
                 ("RAM65536: the memory is saved with the chip (packed, 16384 state words) and restored", Saved),
                 ("RAM65536: EDIT MEMORY sees it, inside a chip and placed directly (65536 words of 8 bits); an edited word is read by the circuit", MemoryEditor),
+                ("EDIT MEMORY: the address is shown in the base of the values, on the memory's full address width (65536 words = 16 bits: 00010010 00110100 / 1234 / 04660)", AddressLabels),
                 ("RAM65536 x 4 on the same address (the user's prog_ram): ONE memory of 65536 x 32 bits, Ram0 = low byte, listed first; a RAM on another address stays separate", Parallel),
             };
             if (chips.Any(c => c.Name == "RAM256"))
@@ -108,6 +109,22 @@ namespace DLS.Bench
             SimChip direct = c.target.SubChips.First(x => x.ChipType == ChipType.Ram65536);
             MemoryBank own = MemoryLayout.BuiltinBank(direct, "RAM65536");
             return own != null && own.WordCount == 65536 && own.Read(0x4243) == 0x66 ? null : "placed directly: not seen as a memory";
+        }
+
+        static string AddressLabels()
+        {
+            var cases = new (int index, int words, int mode, string want)[]
+            {
+                (0x1234, 65536, 2, "00010010 00110100:"), (0x1234, 65536, 0, "1234:"), (0x1234, 65536, 1, "04660:"),
+                (0, 65536, 2, "00000000 00000000:"), (65535, 65536, 0, "FFFF:"), (65535, 65536, 1, "65535:"),
+                (0x12, 256, 2, "00010010:"), (0x12, 256, 0, "12:"), (7, 256, 1, "007:"), (5, 16, 2, "0101:"), (5, 16, 0, "5:"), (0, 1, 2, "0:"),
+            };
+            foreach (var c in cases)
+            {
+                string got = DLS.Graphics.MemoryEditMenu.AddressLabel(c.index, c.words, c.mode);
+                if (got != c.want) return $"address {c.index} of {c.words} words, mode {c.mode}: \"{got}\", expected \"{c.want}\"";
+            }
+            return null;
         }
 
         static string Parallel()

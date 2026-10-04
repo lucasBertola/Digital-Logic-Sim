@@ -281,7 +281,10 @@ namespace DLS.Graphics
 
 			FollowCircuit();
 			MemoryBank bank = banks[bankIndex];
-			scrollBounds = Bounds2D.CreateFromCentreAndSize(UI.Centre, new Vector2(UI.Width * 0.4f, UI.Height * 0.8f));
+			// wide enough for a 16-bit binary address next to a 32-bit binary word
+			scrollBounds = Bounds2D.CreateFromCentreAndSize(new Vector2(UI.Width * 0.36f, UI.Centre.y), new Vector2(UI.Width * 0.5f, UI.Height * 0.8f));
+			// the address column: as wide as the widest address in the base shown (its own column: the value never runs under it)
+			addressColumnWidth = Draw.CalculateTextBoundsSize(AddressLabel(bank.WordCount - 1, bank.WordCount, mode), theme.FontSizeRegular, theme.FontBold).x;
 			UI.DrawScrollView(ID_scroll, scrollBounds.TopLeft, scrollBounds.Size, 0, Anchor.TopLeft, theme.ScrollTheme, DrawRow, bank.WordCount);
 
 			Vector2 sideSize = new(UI.Width * 0.22f, UI.Height * 0.8f);
@@ -334,7 +337,10 @@ namespace DLS.Graphics
 				float flash = 1 - (Time.time - changedAt[bankIndex][index]) / 0.6f; // the circuit just changed this word
 				if (flash > 0) t.bgCol = Color.Lerp(t.bgCol, new Color(0.55f, 0.47f, 0.15f), flash);
 				t.focusBorderCol = Color.clear;
-				UI.InputField(rowIDs[index], t, topLeft, size, "0", Anchor.TopLeft, 6, Validate);
+				float labelColumn = AddressLabelPad + addressColumnWidth + AddressLabelPad;
+				Vector2 fieldTopLeft = topLeft + Vector2.right * labelColumn, fieldSize = new(width - labelColumn, height);
+				UI.DrawPanel(topLeft, new Vector2(labelColumn, height), t.bgCol, Anchor.TopLeft); // the row's background under the address
+				UI.InputField(rowIDs[index], t, fieldTopLeft, fieldSize, "0", Anchor.TopLeft, 1, Validate);
 				if (state.focused)
 				{
 					if (lastFocusedRow != index) { lastFocusedRow = index; lastRaw = state.text; }
@@ -348,8 +354,7 @@ namespace DLS.Graphics
 					if (grouped != state.text) { state.SetText(grouped, true); state.SetCursorIndex(caret); }
 					lastRaw = state.text;
 				}
-				string label = index.ToString().PadLeft(banks[bankIndex].WordCount.ToString().Length, '0') + ":";
-				UI.DrawText(label, MenuHelper.Theme.FontBold, MenuHelper.Theme.FontSizeRegular, bounds.CentreLeft + Vector2.right * 0.52f, Anchor.TextCentreLeft, ColHelper.MakeCol(0.4f));
+				UI.DrawText(AddressLabel(index, banks[bankIndex].WordCount, mode), MenuHelper.Theme.FontBold, MenuHelper.Theme.FontSizeRegular, bounds.CentreLeft + Vector2.right * AddressLabelPad, Anchor.TextCentreLeft, ColHelper.MakeCol(0.45f));
 				// Enter / Tab: next word, Shift: previous
 				if (state.focused && (KeyboardShortcuts.ConfirmShortcutTriggered || InputHelper.IsKeyDownThisFrame(KeyCode.Tab)))
 				{
@@ -361,6 +366,25 @@ namespace DLS.Graphics
 		}
 
 		static bool Validate(string s) => FitsWord(s, banks[bankIndex].Bits, mode);
+
+		const float AddressLabelPad = 0.52f;
+		static float addressColumnWidth;
+
+		// The address of word `index` in the base shown, on the full width of the memory's addresses (user, 2026-10-04:
+		// a 65 536-word memory has 16-bit addresses, shown "00010010 00110100" in binary, "1234" in hex, "04660" in decimal),
+		// followed by ':'.
+		public static string AddressLabel(int index, int wordCount, int m)
+		{
+			int bits = 1;
+			while ((1L << bits) < wordCount) bits++;
+			string s = m switch
+			{
+				0 => index.ToString("X").PadLeft((bits + 3) / 4, '0'),
+				1 => index.ToString().PadLeft((wordCount - 1).ToString().Length, '0'),
+				_ => Group(Convert.ToString(index, 2).PadLeft(bits, '0'), bits, m)
+			};
+			return s + ":";
+		}
 
 		// What a field of a word of this width accepts while typing: digits of the mode, no more digits than the
 		// widest value, and a value that fits (8-bit word: FF / 255 / 11111111 at most).
