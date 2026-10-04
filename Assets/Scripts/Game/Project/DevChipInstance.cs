@@ -436,7 +436,12 @@ namespace DLS.Game
 
 		// Update the currently viewed chip from the state of the corresponding simChip.
 		// Optionally don't set input pins since player controls these (at least when editing a chip, rather than viewing it)
-		public void UpdateStateFromSim(SimChip simChip, bool updateInputPins)
+		// Every pin's displayed state from the simulation, the chip's own INPUT pins included (user, 2026-10-04: in MAR, the
+		// wire from Reset_all never lit). Upstream skipped them in edit mode because the pin and the sim shared one state
+		// object; since the compiled core states are values, so a skipped input pin kept its initial state and every
+		// wire coloured from it (wires use the sim state, not the player's click) stayed off. Paused: they follow at the
+		// next step, as upstream meant.
+		public void UpdateStateFromSim(SimChip simChip)
 		{
 			try
 			{
@@ -444,8 +449,6 @@ namespace DLS.Game
 				{
 					if (element is DevPinInstance devPin)
 					{
-						if (devPin.IsInputPin && !updateInputPins) continue;
-
 						SimPin simPin = simChip.GetSimPinFromAddress(devPin.Pin.Address);
 						devPin.Pin.State = simPin.DisplayState;
 

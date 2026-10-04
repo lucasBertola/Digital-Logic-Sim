@@ -24,6 +24,7 @@ namespace DLS.Bench
             ("live project: a chip's new interface reaches the chips using it when it is SAVED (removed pin unwired, same-name pin kept, new pin shown, no star)", () => LiveInterfaceChange(projectDir)),
             ("live project: a parent with its own unsaved edits keeps them (and its star) when a chip it uses is saved with a new interface", () => LiveInterfaceDirtyParent(projectDir)),
             ("live project: RUN FAST takes the state over, runs, leaves on an edit or a chip switch, and gives the state back to the gates", () => LiveRunFast(projectDir)),
+            ("live project: a wire from an input pin follows the input (open CPU, go into Registre8, toggle each input: the state the wire is drawn from follows)", () => LiveInputWires(projectDir)),
             ("live project: CREATE CHIP through the popup (selection cleared by the click, as in the app), then Ctrl+Z", () => LiveCreateChip(projectDir)),
         };
 
@@ -266,6 +267,34 @@ namespace DLS.Bench
                 Close(p);
                 if (Directory.Exists(tmpDir)) Directory.Delete(tmpDir, true);
             }
+        }
+
+        // user, 2026-10-04: "in CPU_2, inside MAR, toggling Reset_all: its wire never lights" (every wire from an input pin)
+        static string LiveInputWires(string projectDir)
+        {
+            Project p = Open(projectDir, "CPU");
+            try
+            {
+                if (!Pump(p, () => p.rootSimChip.Program != null && p.rootSimChip.Program.StepsRun > 200)) return "CPU sim never ran";
+                p.LoadDevChipOrCreateNewIfDoesntExist("Registre8");
+                if (!Pump(p, () => p.rootSimChip.Program != null && p.rootSimChip.Program.SettledAfterBuild)) return "Registre8 sim never settled";
+                var inputs = p.ViewedChip.Elements.OfType<DevPinInstance>().Where(d => d.IsInputPin && p.ViewedChip.Wires.Any(w => w.SourcePin == d.Pin)).ToList();
+                if (inputs.Count == 0) return "no wired input pin in Registre8";
+                foreach (DevPinInstance d in inputs) d.Pin.PlayerInputState = 0;
+                Pump(p, () => inputs.All(d => (d.Pin.State & 0xFFFF) == 0), 2000);
+                foreach (DevPinInstance d in inputs)
+                {
+                    foreach (uint v in new uint[] { 1, 0 })
+                    {
+                        d.Pin.PlayerInputState = v;
+                        bool ok = Pump(p, () => (d.Pin.State & 1) == v, 3000);
+                        WireInstance w = p.ViewedChip.Wires.First(x => x.SourcePin == d.Pin);
+                        if (!ok || (w.SourcePin.State & 1) != v) return $"input {d.Name} set to {v}: its displayed state stays {d.Pin.State & 1}, so its wire is drawn {(v == 1 ? "off" : "on")}";
+                    }
+                }
+                return null;
+            }
+            finally { Close(p); }
         }
 
         static string LiveRunFast(string projectDir)

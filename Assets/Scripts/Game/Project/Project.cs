@@ -943,7 +943,7 @@ namespace DLS.Game
 						// (the arriving chip's sim may not exist yet: it is built while this thread runs — reading it unguarded
 						// killed this thread when switching to a never-visited chip)
 						SimChip viewedSim = ViewedSimChip;
-						if (viewedSim != null && ((viewedSim.Program != null && viewedSim.Program.SettledAfterBuild) || simPaused)) ViewedChip.UpdateStateFromSim(viewedSim, !CanEditViewedChip);
+						if (viewedSim != null && ((viewedSim.Program != null && viewedSim.Program.SettledAfterBuild) || simPaused)) ViewedChip.UpdateStateFromSim(viewedSim);
 
 						// Log sim time
 						if (debug_logSimTime)
@@ -1027,7 +1027,7 @@ namespace DLS.Game
 			Simulator.stepsPerClockTransition = stepsPerClockTransition;
 			Simulator.ApplyModifications();
 			Simulator.RunSimulationStep(rootSimChip, inputPins, audioState.simAudio);
-			ViewedChip.UpdateStateFromSim(ViewedSimChip, !CanEditViewedChip);
+			ViewedChip.UpdateStateFromSim(ViewedSimChip);
 		}
 
 		public void UpdateAndSaveProjectDescription()
