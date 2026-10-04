@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using DLS.Description;
+using DLS.Simulation;
 using DLS.Graphics;
 using DLS.SaveSystem;
 using Seb.Helpers;
@@ -136,7 +137,7 @@ namespace DLS.Game
 		public void SetKeyChipActivationChar(char c)
 		{
 			if (ChipType != ChipType.Key) throw new Exception("Expected KeyChip type, but instead got: " + ChipType);
-			activationKeyString = c.ToString();
+			activationKeyString = SimKeyboardHelper.KeyLabel(c); // what the chip shows ("SPACE" for the space bar)
 			InternalData[0] = c;
 		}
 

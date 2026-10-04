@@ -204,6 +204,7 @@ namespace DLS.Game
 			CameraController.Reset();
 			WorldDrawer.Reset();
 			AskClaudeMenu.Reset();
+			ChipKeyBindings.Reset();
 			GatePaletteMenu.Reset();
 			GatePackages.Reset();
 			SimKeyboardHelper.SetVirtualKeys(null); // drop any leftover QA-harness key override

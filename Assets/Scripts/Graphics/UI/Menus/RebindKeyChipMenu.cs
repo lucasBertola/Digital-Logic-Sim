@@ -11,7 +11,7 @@ namespace DLS.Graphics
 	{
 		public const string allowedChars = "1234567890QWERTYUIOPASDFGHJKLZXCVBNM";
 		static SubChipInstance keyChip;
-		static string chosenKey;
+		static char chosenKey; // the binding itself (a letter, a digit, an arrow character, ' ' for the space bar)
 
 		public static void DrawMenu()
 		{
@@ -26,21 +26,19 @@ namespace DLS.Graphics
 				if (InputHelper.AnyKeyOrMouseDownThisFrame && !string.IsNullOrEmpty(InputHelper.InputStringThisFrame))
 				{
 					char activeChar = char.ToUpper(InputHelper.InputStringThisFrame[0]);
-					if (allowedChars.Contains(activeChar))
-					{
-						chosenKey = activeChar.ToString();
-					}
+					if (allowedChars.Contains(activeChar)) chosenKey = activeChar;
 				}
 				char arrow = SimKeyboardHelper.ArrowDownThisFrame(); // arrows type no character: polled by key
-				if (arrow != '\0') chosenKey = arrow.ToString();
+				if (arrow != '\0') chosenKey = arrow;
+				if (InputHelper.IsKeyDownThisFrame(KeyCode.Space)) chosenKey = SimKeyboardHelper.Space;
 
-				UI.DrawText("Press a key to rebind\n (letter, digit or arrow)", theme.FontBold, theme.FontSizeRegular, pos, Anchor.TextCentre, Color.white * 0.8f);
+				UI.DrawText("Press a key to rebind\n (letter, digit, arrow or space)", theme.FontBold, theme.FontSizeRegular, pos, Anchor.TextCentre, Color.white * 0.8f);
 
-				UI.DrawPanel(UI.PrevBounds.CentreBottom + Vector2.down, Vector2.one * 3.5f, new Color(0.1f, 0.1f, 0.1f), Anchor.CentreTop);
-				if (!string.IsNullOrEmpty(chosenKey) && SimKeyboardHelper.IsArrow(chosenKey[0]))
-					DevSceneDrawer.DrawKeyArrow(UI.PrevBounds.Centre, chosenKey[0], 1.6f, 0.28f, Color.white);
-				else
-					UI.DrawText(chosenKey, theme.FontBold, theme.FontSizeRegular * 1.5f, UI.PrevBounds.Centre, Anchor.TextCentre, Color.white);
+				bool word = chosenKey == SimKeyboardHelper.Space;
+				UI.DrawPanel(UI.PrevBounds.CentreBottom + Vector2.down, word ? new Vector2(9f, 3.5f) : Vector2.one * 3.5f, new Color(0.1f, 0.1f, 0.1f), Anchor.CentreTop);
+				Vector2 centre = UI.PrevBounds.Centre;
+				if (SimKeyboardHelper.IsArrow(chosenKey)) DrawArrow(centre, SimKeyboardHelper.ArrowDirection(chosenKey), 1.8f, 0.3f, Color.white);
+				else UI.DrawText(chosenKey == '\0' ? "" : SimKeyboardHelper.KeyLabel(chosenKey), theme.FontBold, theme.FontSizeRegular * (word ? 1.2f : 1.5f), centre, Anchor.TextCentre, Color.white);
 
 				MenuHelper.CancelConfirmResult result = MenuHelper.DrawCancelConfirmButtons(UI.GetCurrentBoundsScope().BottomLeft, UI.GetCurrentBoundsScope().Width, true);
 				MenuHelper.DrawReservedMenuPanel(panelID, UI.GetCurrentBoundsScope());
@@ -51,16 +49,27 @@ namespace DLS.Graphics
 				}
 				else if (result == MenuHelper.CancelConfirmResult.Confirm)
 				{
-					Project.ActiveProject.NotifyKeyChipBindingChanged(keyChip, chosenKey[0]);
+					Project.ActiveProject.NotifyKeyChipBindingChanged(keyChip, chosenKey);
 					UIDrawer.SetActiveMenu(UIDrawer.MenuType.None);
 				}
 			}
 		}
 
+		// an arrow in UI space (the menu draws in UI coordinates, not the circuit's: Draw.Arrow there landed off the panel)
+		static void DrawArrow(Vector2 centre, Vector2 dir, float length, float thickness, Color col)
+		{
+			Vector2 tip = centre + dir * (length / 2), tail = centre - dir * (length / 2);
+			Vector2 side = new(-dir.y, dir.x);
+			float head = length * 0.45f;
+			UI.DrawLine(tail, tip, thickness, col);
+			UI.DrawLine(tip, tip - dir * head + side * head * 0.75f, thickness, col);
+			UI.DrawLine(tip, tip - dir * head - side * head * 0.75f, thickness, col);
+		}
+
 		public static void OnMenuOpened()
 		{
 			keyChip = (SubChipInstance)ContextMenu.interactionContext;
-			chosenKey = keyChip.activationKeyString;
+			chosenKey = keyChip.InternalData != null && keyChip.InternalData.Length > 0 ? (char)keyChip.InternalData[0] : 'A';
 		}
 	}
 }

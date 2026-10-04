@@ -16,6 +16,9 @@ namespace DLS.Bench
             ("KEY bound to an arrow: high while that arrow is held, not for another arrow nor a letter", Reacts),
             ("KEY arrows: UP / DOWN / LEFT / RIGHT (and HAUT / BAS / GAUCHE / DROITE, and the arrow characters) name the arrows; letters are not arrows", Names),
             ("KEY arrows: the binding survives the chip's save / load and still reacts", Saved),
+            ("KEY nested 3 levels deep (a chip using a chip using a chip with KEYs): the top circuit reacts to its keys", Nested),
+            ("KEY bindings of a custom chip are listed for its parents: every depth, duplicates merged, letters then arrows then space; none when no KEY", Listed),
+            ("KEY on the space bar: high while space is held (not for a letter), labelled SPACE, named SPACE / ESPACE; the circuit is seen as using it (the Ask Claude bar then leaves Space alone)", SpaceKey),
         };
 
         static UnitCases.Circuit Keys()
@@ -68,6 +71,87 @@ namespace DLS.Bench
                 if (SimKeyboardHelper.ArrowFromName(name) != want) return $"\"{name}\" mapped to {(int)SimKeyboardHelper.ArrowFromName(name):X}";
             if (SimKeyboardHelper.IsArrow('A') || SimKeyboardHelper.IsArrow('9') || !SimKeyboardHelper.IsArrow(SimKeyboardHelper.Down)) return "IsArrow wrong";
             return SimKeyboardHelper.ArrowDirection(SimKeyboardHelper.Up) == UnityEngine.Vector2.up && SimKeyboardHelper.ArrowDirection('A') == UnityEngine.Vector2.zero ? null : "ArrowDirection wrong";
+        }
+
+        static string SpaceKey()
+        {
+            var c = UnitCases.Build("t_key_space", new string[0], new[] { "S" }, b =>
+            {
+                int k = b.Add(ChipType.Key);
+                b.Data(k)[0] = SimKeyboardHelper.Space;
+                b.Wire(b.Out(k, 0), b.Output("S"));
+            });
+            try
+            {
+                SimKeyboardHelper.SetVirtualKeys(new HashSet<char>()); c.Step(2);
+                if (c.OutBit("S") != 0) return "space KEY high while nothing is held";
+                SimKeyboardHelper.SetVirtualKeys(new HashSet<char> { ' ' }); c.Step(2);
+                if (c.OutBit("S") != 1) return "space KEY low while space is held";
+                SimKeyboardHelper.SetVirtualKeys(new HashSet<char> { 'A', SimKeyboardHelper.Up }); c.Step(2);
+                if (c.OutBit("S") != 0) return "space KEY high for A / up";
+            }
+            finally { SimKeyboardHelper.SetVirtualKeys(null); }
+            if (SimKeyboardHelper.KeyLabel(' ') != "SPACE" || SimKeyboardHelper.KeyLabel('H') != "H") return "labels wrong";
+            if (SimKeyboardHelper.SpecialKeyFromName("space") != ' ' || SimKeyboardHelper.SpecialKeyFromName("ESPACE") != ' ' || SimKeyboardHelper.SpecialKeyFromName("UP") != SimKeyboardHelper.Up || SimKeyboardHelper.SpecialKeyFromName("S") != '\0') return "SpecialKeyFromName wrong";
+            if (!Project.TreeUsesKey(c.root, ' ')) return "a circuit with a space KEY is not seen as using the space bar";
+            return Project.TreeUsesKey(Keys().root, ' ') ? "a circuit without a space KEY is seen as using it" : null;
+        }
+
+        // INNER: KEY A -> Q, KEY UP -> R ; MIDDLE: INNER + its own KEY A (duplicate) and KEY SPACE ; TOP: MIDDLE
+        static (UnitCases.Circuit top, ChipLibrary lib, ChipDescription middle) NestedChips()
+        {
+            var builtins = BuiltinChipCreator.CreateAllBuiltinChipDescriptions();
+            var inner = UnitCases.Build("INNER", new string[0], new[] { "Q", "R" }, b =>
+            {
+                int a = b.Add(ChipType.Key); b.Data(a)[0] = 'A'; b.Wire(b.Out(a, 0), b.Output("Q"));
+                int u = b.Add(ChipType.Key); b.Data(u)[0] = SimKeyboardHelper.Up; b.Wire(b.Out(u, 0), b.Output("R"));
+            });
+            var lib1 = new ChipLibrary(new[] { inner.desc }, builtins);
+            var middle = UnitCases.Build("MIDDLE", new string[0], new[] { "Q", "R", "S" }, b =>
+            {
+                int i = b.AddCustom("INNER"); b.Wire(b.Out(i, 0), b.Output("Q")); b.Wire(b.Out(i, 1), b.Output("R"));
+                int a = b.Add(ChipType.Key); b.Data(a)[0] = 'A';
+                int s = b.Add(ChipType.Key); b.Data(s)[0] = SimKeyboardHelper.Space; b.Wire(b.Out(s, 0), b.Output("S"));
+            }, lib1);
+            var lib2 = new ChipLibrary(new[] { inner.desc, middle.desc }, builtins);
+            var top = UnitCases.Build("TOP", new string[0], new[] { "Q", "R", "S" }, b =>
+            {
+                int m = b.AddCustom("MIDDLE"); b.Wire(b.Out(m, 0), b.Output("Q")); b.Wire(b.Out(m, 1), b.Output("R")); b.Wire(b.Out(m, 2), b.Output("S"));
+            }, lib2);
+            return (top, lib2, middle.desc);
+        }
+
+        static string Nested()
+        {
+            var (c, _, _) = NestedChips();
+            try
+            {
+                foreach ((HashSet<char> held, string want) in new[]
+                {
+                    (new HashSet<char>(), "000"), (new HashSet<char> { 'A' }, "100"), (new HashSet<char> { SimKeyboardHelper.Up }, "010"),
+                    (new HashSet<char> { ' ' }, "001"), (new HashSet<char> { 'A', ' ' }, "101"), (new HashSet<char> { 'B' }, "000"),
+                })
+                {
+                    SimKeyboardHelper.SetVirtualKeys(held); c.Step(2);
+                    string got = $"{c.OutBit("Q")}{c.OutBit("R")}{c.OutBit("S")}";
+                    if (got != want) return $"holding [{string.Join(",", held.Select(h => ((int)h).ToString("X")))}]: Q R S = {got}, expected {want}";
+                }
+                return null;
+            }
+            finally { SimKeyboardHelper.SetVirtualKeys(null); }
+        }
+
+        static string Listed()
+        {
+            var (c, lib, middle) = NestedChips();
+            string Show(List<char> k) => string.Join(",", k.Select(x => ((int)x).ToString("X")));
+            List<char> top = ChipKeyBindings.Collect(c.desc, n => lib.TryGetChipDescription(n, out ChipDescription d) ? d : null);
+            var want = new List<char> { 'A', SimKeyboardHelper.Up, ' ' };
+            if (!top.SequenceEqual(want)) return $"TOP lists [{Show(top)}], expected [{Show(want)}]";
+            List<char> mid = ChipKeyBindings.Collect(middle, n => lib.TryGetChipDescription(n, out ChipDescription d) ? d : null);
+            if (!mid.SequenceEqual(want)) return $"MIDDLE lists [{Show(mid)}]";
+            var plain = UnitCases.Build("PLAIN", new[] { "A" }, new[] { "Y" }, b => b.Wire(b.Input("A"), b.Output("Y")));
+            return ChipKeyBindings.Collect(plain.desc, n => lib.TryGetChipDescription(n, out ChipDescription d) ? d : null).Count == 0 ? null : "a chip without KEY lists keys";
         }
 
         static string Saved()

@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System;
 using DLS.Description;
+using DLS.Simulation;
 using DLS.Game;
 using DLS.SaveSystem;
 using Seb.Helpers;
@@ -684,7 +685,8 @@ namespace DLS.Graphics
 			if (MenuButtonsAndShortcutsEnabled)
 			{
 				// Space = Claude command bar (when the sim is paused, Space keeps stepping the simulation)
-				if (KeyboardShortcuts.QuickAskShortcutTriggered && UIDrawer.ActiveMenu == UIDrawer.MenuType.None && !Project.ActiveProject.simPaused) QuickAskBar.Open();
+				if (KeyboardShortcuts.QuickAskShortcutTriggered && UIDrawer.ActiveMenu == UIDrawer.MenuType.None && !Project.ActiveProject.simPaused
+				    && !Project.ActiveProject.CircuitUsesKey(SimKeyboardHelper.Space)) QuickAskBar.Open(); // a KEY on the space bar wins
 				if (KeyboardShortcuts.CreateNewChipShortcutTriggered) CreateNewChip();
 				if (KeyboardShortcuts.SaveShortcutTriggered) SaveChip();
 				if (KeyboardShortcuts.LibraryShortcutTriggered) OpenLibraryMenu();

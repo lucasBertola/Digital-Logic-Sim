@@ -388,6 +388,13 @@ namespace DLS.Graphics
 				}
 			}
 
+			// the keys of the KEYs inside a custom chip (any depth), as small key caps along its bottom edge, lit while held
+			if (desc.ChipType == ChipType.Custom && Project.ActiveProject != null)
+			{
+				var keys = ChipKeyBindings.ForDrawing(desc.Name, Project.ActiveProject.chipLibrary, Time.frameCount);
+				if (keys.Count > 0) DrawKeyCaps(subchip, keys);
+			}
+
 			// Draw name (or the label, when DISPLAY NAME is on: wrapped and shrunk to fit inside the chip)
 			if (!isKeyChip && subchip.ShowLabelOnChip && !string.IsNullOrWhiteSpace(subchip.Label))
 			{
@@ -427,7 +434,15 @@ namespace DLS.Graphics
 					Draw.Quad(c, s, bgBandCol);
 				}
 
-				Draw.Text(FontBold, displayName, FontSizeChipName, textPos, textAnchor, nameTextCol, ChipNameLineSpacing);
+				float fontSize = FontSizeChipName;
+				if (isKeyChip && displayName.Length > 1)
+				{
+					// a word ("SPACE"): shrunk to the key's width
+					float w = Draw.CalculateTextBoundsSize(displayName, FontSizeChipName, FontBold).x;
+					float room = subchip.Size.x - PinRadius * 2f;
+					if (w > room) fontSize *= room / w;
+				}
+				Draw.Text(FontBold, displayName, fontSize, textPos, textAnchor, nameTextCol, ChipNameLineSpacing);
 			}
 		}
 
@@ -668,6 +683,43 @@ namespace DLS.Graphics
 					Draw.Quad(topLeft + new Vector2(px * (x + 0.5f), -px * (y + 0.5f)), dot, lit ? on : off);
 				}
 			return Bounds2D.CreateFromCentreAndSize(centre, outer);
+		}
+
+		// a row of key caps at the bottom of a chip (shrunk so the row fits its width)
+		static void DrawKeyCaps(SubChipInstance subchip, List<char> keys)
+		{
+			Vector2 size = subchip.Size;
+			float gap = GridSize * 0.15f;
+			float h = Mathf.Min(GridSize * 1.1f, size.y * 0.3f);
+			float[] widths = new float[keys.Count];
+			float total = 0;
+			for (int i = 0; i < keys.Count; i++) { widths[i] = keys[i] == SimKeyboardHelper.Space ? h * 2.6f : h; total += widths[i] + (i > 0 ? gap : 0); }
+			float room = size.x - PinRadius * 3f;
+			float k = total > room ? room / total : 1f;
+			h *= k; gap *= k; total *= k;
+			float x = subchip.Position.x - total / 2;
+			float y = subchip.Position.y - size.y / 2 + h / 2 + GridSize * 0.2f;
+			for (int i = 0; i < keys.Count; i++)
+			{
+				char c = keys[i];
+				float w = widths[i] * k;
+				Vector2 centre = new(x + w / 2, y);
+				bool held = SimKeyboardHelper.KeyIsHeld(c);
+				Color cap = held ? Color.white : new Color(0.08f, 0.08f, 0.08f);
+				Color ink = held ? Color.black : Color.white;
+				Draw.Quad(centre, new Vector2(w, h) + Vector2.one * (h * 0.12f), new Color(0.45f, 0.45f, 0.45f));
+				Draw.Quad(centre, new Vector2(w, h), cap);
+				if (SimKeyboardHelper.IsArrow(c)) DrawKeyArrow(centre, c, h * 0.65f, h * 0.11f, ink);
+				else
+				{
+					string label = SimKeyboardHelper.KeyLabel(c);
+					float fs = FontSizeChipName * (h / GridSize) * 0.8f;
+					float tw = Draw.CalculateTextBoundsSize(label, fs, FontBold).x;
+					if (tw > w * 0.85f) fs *= w * 0.85f / tw;
+					Draw.Text(FontBold, label, fs, centre, Anchor.TextCentre, ink);
+				}
+				x += w + gap;
+			}
 		}
 
 		// the arrow of a KEY bound to an arrow key, centred, `length` long

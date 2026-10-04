@@ -892,6 +892,21 @@ namespace DLS.Game
 			finally { simPauseForExternalRequest = false; }
 		}
 
+		// a KEY bound to this key anywhere in the simulated circuit (sub-chips included): the space bar then belongs to it
+		public bool CircuitUsesKey(char key)
+		{
+			try { return TreeUsesKey(rootSimChip, key); }
+			catch (Exception) { return false; } // the sim tree may be changing on its thread: a missed check costs one bar opening
+		}
+
+		public static bool TreeUsesKey(SimChip c, char key)
+		{
+			if (c == null) return false;
+			if (c.ChipType == ChipType.Key && c.InternalState.Length > 0 && c.InternalState[0] == key) return true;
+			foreach (SimChip s in c.SubChips) if (TreeUsesKey(s, key)) return true;
+			return false;
+		}
+
 		public volatile int simThreadExceptions; // caught in the sim thread (logged); 0 when all is well
 
 		void SimThread()

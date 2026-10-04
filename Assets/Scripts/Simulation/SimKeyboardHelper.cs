@@ -24,6 +24,19 @@ namespace DLS.Simulation
 
 		public static bool IsArrow(char c) => c >= Left && c <= Down;
 
+		// the space bar: bound as ' ', shown "SPACE"
+		public const char Space = ' ';
+		public static string KeyLabel(char c) => c == Space ? "SPACE" : c.ToString();
+
+		// a key named by Claude / a user: an arrow name, SPACE / ESPACE, else '\0'
+		public static char SpecialKeyFromName(string name)
+		{
+			char a = ArrowFromName(name);
+			if (a != '\0') return a;
+			string n = name.Trim().ToUpperInvariant();
+			return n is "SPACE" or "ESPACE" ? Space : '\0';
+		}
+
 		// the arrow pressed this frame, or '\0'
 		public static char ArrowDownThisFrame()
 		{
@@ -95,6 +108,7 @@ namespace DLS.Simulation
 				}
 				foreach ((KeyCode key, char c) in ArrowKeys)
 					if (InputHelper.IsKeyHeld(key)) { KeyLookup.Add(c); HasAnyInput = true; }
+				if (InputHelper.IsKeyHeld(KeyCode.Space)) { KeyLookup.Add(Space); HasAnyInput = true; }
 			}
 		}
 
