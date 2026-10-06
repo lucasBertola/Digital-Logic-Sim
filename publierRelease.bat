@@ -95,7 +95,11 @@ REM --- Le tag est cree AVANT le build, pour que le bandeau de version de l'app 
 set "UNITY=C:\Program Files\Unity\Hub\Editor\6000.0.46f1\Editor\Unity.exe"
 if not exist "%UNITY%" ( echo Editeur Unity introuvable : %UNITY% & pause & exit /b 1 )
 tasklist /FI "IMAGENAME eq DigitalLogicSim.exe" 2>nul | find /I "DigitalLogicSim.exe" >nul && ( echo Fermeture de l'application en cours... & taskkill /IM DigitalLogicSim.exe /F >nul 2>&1 & timeout /t 2 >nul )
+REM Un tag local absent de GitHub = reste d'une publication interrompue (fenetre fermee pendant le build) : on le refait.
 if not defined DRYRUN (
+  git rev-parse -q --verify "refs/tags/!TAG!" >nul 2>&1 && (
+    git ls-remote --exit-code --tags origin "refs/tags/!TAG!" >nul 2>&1 || ( echo Tag !TAG! local d'une publication interrompue : supprime. & git tag -d "!TAG!" >nul )
+  )
   git tag -a "!TAG!" -m "!TAG!"
   if errorlevel 1 ( echo ECHEC de la creation du tag !TAG! ^(existe deja ?^). & pause & exit /b 1 )
 )
