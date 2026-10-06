@@ -30,7 +30,8 @@ namespace DLS.Graphics
 			ExportChoice,
 			DuplicateChip,
 			CreateChip,
-			MemoryEdit
+			MemoryEdit,
+			ApiKey
 		}
 
 		static MenuType activeMenuOld;
@@ -88,6 +89,7 @@ namespace DLS.Graphics
 			else if (menuToDraw == MenuType.CreateChip) CreateChipPopup.DrawMenu();
 			else if (menuToDraw == MenuType.Info) InfoPopup.DrawMenu();
 			else if (menuToDraw == MenuType.GatePalette) GatePaletteMenu.DrawMenu();
+			else if (menuToDraw == MenuType.ApiKey) ApiKeyPopup.DrawMenu();
 			else
 			{
 				if (project.simPaused) SimPausedUI.DrawPausedBanner();
@@ -147,6 +149,7 @@ namespace DLS.Graphics
 			ChipSaveMenu.Reset();
 			RomEditMenu.Reset();
 			MemoryEditMenu.Reset();
+			ApiKeyPopup.Reset();
 			ChipLibraryMenu.Reset();
 			SearchPopup.Reset();
 		}

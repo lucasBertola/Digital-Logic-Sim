@@ -75,7 +75,9 @@ namespace DLS.Game
         public static string StreamingAnswer => streamingHandler != null ? streamingHandler.LiveText() : null;
 
         const string KeyEnvVar = "ANTHROPIC_API_KEY";
-        public static string KeyPath => Path.Combine(SavePaths.AllData, "anthropic_key.txt");
+        public static string KeyPathOverrideForTests; // the bench never touches the user's saved key
+        public static bool IgnoreEnvForTests;          // ...and acts as if ANTHROPIC_API_KEY were not set
+        public static string KeyPath => KeyPathOverrideForTests ?? Path.Combine(SavePaths.AllData, BundledProjects.KeyFileName);
 
         public static string ApiKey => ReadKey();
 
@@ -83,7 +85,7 @@ namespace DLS.Game
         {
             try
             {
-                string env = Environment.GetEnvironmentVariable(KeyEnvVar);
+                string env = IgnoreEnvForTests ? null : Environment.GetEnvironmentVariable(KeyEnvVar);
                 if (!string.IsNullOrWhiteSpace(env)) return env.Trim();
             }
             catch { /* ignore */ }
@@ -100,6 +102,31 @@ namespace DLS.Game
         }
 
         public static bool HasKey() => !string.IsNullOrEmpty(ReadKey());
+
+        // The key typed in the "Anthropic API key" popup (ApiKeyPopup, when ANTHROPIC_API_KEY is not set): saved for
+        // the next times in the app's data folder, read by ReadKey after the environment variable.
+        public static bool SaveKey(string key)
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(KeyPath));
+                File.WriteAllText(KeyPath, key.Trim());
+                return true;
+            }
+            catch (Exception) { return false; }
+        }
+
+        // The API refused the key (HTTP 401): a saved key is forgotten so the popup asks again next time (a mistyped
+        // key would otherwise stay forever). The environment variable is the user's own: never touched.
+        public static void NotifyKeyRejected(long httpCode)
+        {
+            if (httpCode != 401) return;
+            try
+            {
+                if ((IgnoreEnvForTests || string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(KeyEnvVar))) && File.Exists(KeyPath)) File.Delete(KeyPath);
+            }
+            catch { /* ignore */ }
+        }
 
         public static void Clear()
         {
@@ -236,6 +263,8 @@ namespace DLS.Game
         public static void Send(string userText, bool quick)
         {
             if (string.IsNullOrWhiteSpace(userText)) return;
+            // no key: the popup asks for it, and the message goes once it is saved (cancelled: nothing is sent)
+            if (!HasKey()) { DLS.Graphics.ApiKeyPopup.Require(() => Send(userText, quick)); return; }
             if (quick) quickTurn = true;
             string text = quick ? QuickModeNote + userText.Trim() : userText.Trim();
 
@@ -367,6 +396,7 @@ namespace DLS.Game
                 if (req.result != UnityWebRequest.Result.Success || req.responseCode != 200)
                 {
                     string msg = $"Erreur API (HTTP {req.responseCode}, result={req.result}).";
+                    NotifyKeyRejected(req.responseCode);
                     string apiMsg = TryExtractError(rawBody);
                     if (!string.IsNullOrEmpty(apiMsg)) msg += " " + apiMsg;
                     else if (!string.IsNullOrEmpty(req.error)) msg += " " + req.error;

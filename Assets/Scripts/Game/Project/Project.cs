@@ -99,27 +99,31 @@ namespace DLS.Game
 		public int FastModeModules { get; private set; }
 		public string FastModeStatus { get; private set; }
 
-		public void RunFastNowForTests() { StartFastMode(); if (FastModePreparing) BuildFastModeNow(); }
+		public void RunFastNowForTests() { StartFastMode(); if (FastModePreparing) BuildFastModeNow(false); }
 
 		public void StartFastMode()
 		{
+			if (editModeChip != null) autoFastDeclined.Remove(editModeChip.ChipName ?? "");
 			if (fastActive || FastModePreparing || editModeChip == null) return;
 			FastModePreparing = true; // the next Update builds it (one frame to show "preparing")
 		}
 
-		void BuildFastModeNow()
+		// silent: the automatic start (no toast, and not entered when no module is modelled)
+		void BuildFastModeNow(bool silent)
 		{
 			FastModePreparing = false;
 			fastCache ??= FastCacheFile.Load(description.ProjectName);
 			DevChipInstance chip = editModeChip;
 			string error = null;
 			var instances = new List<FastBuilder.Instance>();
+			var sw = Stopwatch.StartNew();
 			RunWithSimulationPaused(() =>
 			{
 				try
 				{
 					ChipDescription desc = DescriptionCreator.CreateChipDescription(chip);
 					SimChip root = FastBuilder.Build(desc, chipLibrary, fastCache, instances);
+					if (silent && instances.Count == 0) return;
 					FastState.CopyIn(chip.SimChip, root, chipLibrary);
 					fastRoot = root;
 					fastChip = chip;
@@ -127,11 +131,106 @@ namespace DLS.Game
 				}
 				catch (Exception e) { error = e.Message; }
 			});
+			Debug.Log($"RUN FAST {(silent ? "(automatic) " : "")}on {chip.ChipName}: {instances.Count} modules, {sw.ElapsedMilliseconds} ms{(error != null ? ", failed: " + error : "")}");
 			if (fastCache.Changed) { FastCacheFile.Save(description.ProjectName, fastCache); fastCache.Changed = false; }
 			FastModeModules = instances.Count;
+			if (silent) return;
 			FastModeStatus = error != null ? "Fast mode failed: " + error
 				: instances.Count == 0 ? "Fast mode: no module could be modelled, the chip runs as usual"
 				: $"Fast mode: {instances.Count} modules run by their models";
+		}
+
+		// ---- Automatic RUN FAST (user, 2026-10-06) ----
+		// When every decision the viewed chip needs is already in the fast cache (no truth table to compute), fast mode
+		// starts by itself: on opening / switching to the chip, and again after an edit made it leave (once the edits
+		// pause). STOP FAST by the user turns it off for that chip until RUN FAST. A save prepares the cache of the
+		// saved chip (that may compute: "Preparing fast mode..."), so a saved chip runs fast from then on.
+		public static bool AutoFastDisabled; // the rate test measuring the gates
+		const float AutoFastAfterSwitch = 0.3f, AutoFastAfterEdit = 1.5f;
+		readonly HashSet<string> autoFastDeclined = new(ChipDescription.NameComparer);
+		bool autoFastDue;
+		float autoFastAt;
+		string fastPrepChip; // saved chip whose fast cache is to be completed
+		bool fastPrepShown;
+
+		static readonly Stopwatch autoClockWatch = Stopwatch.StartNew(); // not UnityEngine.Time: StopFastMode may run off the main thread (bench)
+		static float AutoClock => (float)autoClockWatch.Elapsed.TotalSeconds;
+		bool ignoreMenusForTests;
+
+		// Bench hook: what the next Updates do for the automatic fast mode, without waiting for the delays
+		public void RunAutoFastForTests()
+		{
+			ignoreMenusForTests = true;
+			try { for (int i = 0; i < 3; i++) { autoFastAt = 0; UpdateAutoFast(); } }
+			finally { ignoreMenusForTests = false; }
+		}
+
+		void ScheduleAutoFast(float delay)
+		{
+			autoFastDue = true;
+			autoFastAt = AutoClock + delay;
+		}
+
+		bool AutoFastBlocked => AutoFastDisabled || editModeChip == null || (!ignoreMenusForTests && (UIDrawer.ActiveMenu != UIDrawer.MenuType.None || AskClaude.Waiting));
+
+		void UpdateAutoFast()
+		{
+			if (fastPrepChip != null && !AutoFastBlocked) PrepareFastCacheStep();
+			if (!autoFastDue || fastActive || FastModePreparing || fastPrepChip != null) return;
+			if (AutoClock < autoFastAt) return;
+			if (AutoFastBlocked) { autoFastAt = AutoClock + 0.5f; return; }
+			autoFastDue = false;
+			if (autoFastDeclined.Contains(editModeChip.ChipName ?? "")) return;
+			fastCache ??= FastCacheFile.Load(description.ProjectName);
+			int models;
+			try { models = FastBuilder.CachedModels(DescriptionCreator.CreateChipDescription(editModeChip), chipLibrary, fastCache); }
+			catch (Exception) { return; }
+			if (models > 0) BuildFastModeNow(true);
+		}
+
+		// After a save: complete the fast cache of the saved chip. A frame showing "Preparing fast mode..." first when
+		// something must be computed, then the computation (sim paused), then the automatic start.
+		void PrepareFastCacheStep()
+		{
+			if (!ChipDescription.NameMatch(fastPrepChip, editModeChip.ChipName ?? "") || !chipLibrary.TryGetChipDescription(fastPrepChip, out ChipDescription saved))
+			{
+				fastPrepChip = null;
+				fastPrepShown = false;
+				return;
+			}
+			fastCache ??= FastCacheFile.Load(description.ProjectName);
+			if (!fastPrepShown)
+			{
+				bool complete;
+				try { complete = FastBuilder.CachedModels(saved, chipLibrary, fastCache) >= 0 && FastBuilder.IsDecided(saved, chipLibrary, fastCache); }
+				catch (Exception) { complete = true; }
+				if (complete) { fastPrepChip = null; ScheduleAutoFast(AutoFastAfterSwitch); return; }
+				fastPrepShown = true; // drawn this frame, computed on the next one
+				return;
+			}
+			var sw = Stopwatch.StartNew();
+			RunWithSimulationPaused(() =>
+			{
+				try { FastBuilder.Prepare(saved, chipLibrary, fastCache); }
+				catch (Exception e) { Debug.LogWarning("fast cache: " + e.Message); }
+			});
+			Debug.Log($"fast cache of {fastPrepChip} prepared in {sw.ElapsedMilliseconds} ms");
+			if (fastCache.Changed) { FastCacheFile.Save(description.ProjectName, fastCache); fastCache.Changed = false; }
+			fastPrepChip = null;
+			fastPrepShown = false;
+			ScheduleAutoFast(0);
+		}
+
+		public bool FastCachePreparing => fastPrepChip != null && fastPrepShown;
+
+		// STOP FAST from the menu: also no automatic restart on this chip until RUN FAST
+		public void StopFastModeByUser()
+		{
+			if (editModeChip != null) autoFastDeclined.Add(editModeChip.ChipName ?? "");
+			bool was = fastActive;
+			StopFastMode();
+			autoFastDue = false;
+			if (was) FastModeStatus = "Fast mode off";
 		}
 
 		// Back to the gates, the state going with it (called before anything that edits or leaves the chip)
@@ -139,6 +238,7 @@ namespace DLS.Game
 		{
 			FastModePreparing = false;
 			if (!fastActive) return;
+			ScheduleAutoFast(AutoFastAfterEdit); // it comes back by itself once the edits pause (if all is cached)
 			RunWithSimulationPaused(() =>
 			{
 				try { FastState.CopyOut(fastRoot, fastChip.SimChip, chipLibrary); }
@@ -147,7 +247,6 @@ namespace DLS.Game
 				fastRoot = null;
 			});
 			fastChip = null;
-			FastModeStatus = "Fast mode off";
 		}
 
 		// a dev chip is about to be edited: if it is the one running fast, leave fast mode first
@@ -167,7 +266,8 @@ namespace DLS.Game
 
 		public void Update()
 		{
-			if (FastModePreparing) BuildFastModeNow();
+			if (FastModePreparing) BuildFastModeNow(false);
+			UpdateAutoFast();
 			HandleProjectInput();
 
 			if (UIDrawer.ActiveMenu is UIDrawer.MenuType.None or UIDrawer.MenuType.BottomBarMenuPopup)
@@ -323,6 +423,9 @@ namespace DLS.Game
 			// The user saved: persist the Ask Claude conversation alongside the project so it can be resumed.
 			AskClaude.SaveForProject(description.ProjectName);
 			dirtyIndicator.Clear(); // the red * goes at once, not up to DirtyIndicatorPeriod later
+			// the fast-mode cache is completed for the saved chip (next frames), then it runs fast by itself
+			fastPrepChip = saveChipDescription.Name;
+			fastPrepShown = false;
 		}
 
 		public bool ActiveChipHasUnsavedChanges()
@@ -399,6 +502,7 @@ namespace DLS.Game
 			ClearSelectionFlags(devChip);
 
 			StopFastMode();
+			ScheduleAutoFast(AutoFastAfterSwitch); // runs fast by itself if everything it needs is cached
 			// the chip we leave keeps its running memory (RAM, registers...) for when we come back
 			DevChipInstance leaving = editModeChip;
 			if (leaving != null && leaving != devChip && leaving.SimChip != null)

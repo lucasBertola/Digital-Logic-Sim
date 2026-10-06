@@ -204,6 +204,7 @@ namespace DLS.Game
 			CameraController.Reset();
 			WorldDrawer.Reset();
 			AskClaudeMenu.Reset();
+			Project.AutoFastDisabled = false;
 			ChipKeyBindings.Reset();
 			GatePaletteMenu.Reset();
 			GatePackages.Reset();

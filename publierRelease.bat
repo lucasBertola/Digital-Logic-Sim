@@ -14,6 +14,8 @@ chcp 65001 >nul
 cd /d "%~dp0"
 set "SRC=%~dp0Builds\Windows"
 set "ZIP=%~dp0Builds\DigitalLogicSim-Windows.zip"
+set "ZIPMAC=%~dp0Builds\DigitalLogicSim-Mac.zip"
+set "ZIPLINUX=%~dp0Builds\DigitalLogicSim-Linux.zip"
 set "NOTES=%~dp0Builds\release-notes.md"
 set "COMMITS=%~dp0Builds\release-commits.txt"
 set "VERSIONFILE=%~dp0Builds\release-version.txt"
@@ -97,9 +99,9 @@ if not defined DRYRUN (
   git tag -a "!TAG!" -m "!TAG!"
   if errorlevel 1 ( echo ECHEC de la creation du tag !TAG! ^(existe deja ?^). & pause & exit /b 1 )
 )
-echo Build de la version !TAG! ^(quelques dizaines de secondes^)...
-"%UNITY%" -projectPath "%~dp0." -executeMethod BuildTools.BuildWindows -buildOutput "%~dp0Builds\Windows" -quit -logFile "%~dp0Builds\build.log"
-findstr /C:"BUILD SUCCEEDED" "%~dp0Builds\build.log" >nul 2>&1
+echo Build de la version !TAG! pour Windows, Mac et Linux ^(quelques minutes^)...
+"%UNITY%" -projectPath "%~dp0." -executeMethod BuildTools.BuildRelease -quit -logFile "%~dp0Builds\build.log"
+findstr /C:"RELEASE BUILD SUCCEEDED" "%~dp0Builds\build.log" >nul 2>&1
 if errorlevel 1 goto buildfailed
 REM --- l'app buildee elle-meme doit passer son auto-test (le build retire du code que l'editeur garde) ---
 call "%~dp0runPlayerSelfTest.bat"
@@ -108,7 +110,7 @@ if errorlevel 1 (
   if not defined DRYRUN git tag -d "!TAG!" >nul 2>&1
   pause & exit /b 1
 )
-findstr /C:"BUILD SUCCEEDED" "%~dp0Builds\build.log" >nul 2>&1
+findstr /C:"RELEASE BUILD SUCCEEDED" "%~dp0Builds\build.log" >nul 2>&1
 :buildfailed
 if errorlevel 1 (
   echo ECHEC du build ^(voir Builds\build.log^).
@@ -117,9 +119,20 @@ if errorlevel 1 (
 )
 
 tasklist /FI "IMAGENAME eq DigitalLogicSim.exe" 2>nul | find /I "DigitalLogicSim.exe" >nul && ( echo Fermeture de l'application en cours... & taskkill /IM DigitalLogicSim.exe /F >nul 2>&1 & timeout /t 2 >nul )
+REM L'historique des conversations Claude et la cle Anthropic ne partent JAMAIS dans une release.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$f = Get-ChildItem -LiteralPath '%SRC%','%~dp0Builds\Mac','%~dp0Builds\Linux' -Recurse -File | Where-Object { $_.Name -in 'AskClaudeConversation.json','anthropic_key.txt' }; if ($f) { $f.FullName; exit 1 }"
+if errorlevel 1 (
+  echo REFUS : fichiers prives ^(conversation Claude / cle^) dans le build : rien n'est publie.
+  if not defined DRYRUN git tag -d "!TAG!" >nul 2>&1
+  pause & exit /b 1
+)
 echo Creation du zip...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; if(Test-Path '%ZIP%'){Remove-Item '%ZIP%'}; Compress-Archive -Path '%SRC%\*' -DestinationPath '%ZIP%' -CompressionLevel Optimal"
 if not exist "%ZIP%" ( echo ECHEC de la creation du zip. & pause & exit /b 1 )
+if not exist "%ZIPMAC%" ( echo Zip Mac absent ^(voir Builds\build.log^). & pause & exit /b 1 )
+if not exist "%ZIPLINUX%" ( echo Zip Linux absent ^(voir Builds\build.log^). & pause & exit /b 1 )
+REM --- comment lancer sur Mac / Linux, a la fin des notes ---
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\releaseDownloads.ps1" "%NOTES%"
 
 if defined DRYRUN ( echo [DRYRUN] pas de push ni de publication. Version !TAG!, notes dans %NOTES% & exit /b 0 )
 if not defined GH goto manual
@@ -139,7 +152,7 @@ git push origin "!TAG!"
 if errorlevel 1 ( echo ECHEC du push. & pause & exit /b 1 )
 
 echo Publication de la Release !TAG!...
-"%GH%" release create "!TAG!" "%ZIP%" --repo %REPO% --title "!TAG!" --notes-file "%NOTES%"
+"%GH%" release create "!TAG!" "%ZIP%" "%ZIPMAC%" "%ZIPLINUX%" --repo %REPO% --title "!TAG!" --notes-file "%NOTES%"
 if errorlevel 1 ( echo ECHEC de la publication. & pause & exit /b 1 )
 echo.
 echo Release !TAG! publiee : https://github.com/%REPO%/releases/tag/!TAG!
@@ -149,7 +162,7 @@ exit /b 0
 :manual
 echo.
 echo GitHub CLI ^(gh^) introuvable : creation manuelle.
-echo  1. Le zip est dans le dossier Builds ^(il va s'ouvrir^) : glisser DigitalLogicSim-Windows.zip dans la zone de fichiers.
+echo  1. Le zip est dans le dossier Builds ^(il va s'ouvrir^) : glisser les 3 zips ^(Windows, Mac, Linux^) dans la zone de fichiers.
 echo  2. La page GitHub s'ouvre avec la version et les notes pre-remplies : cliquer "Publish release".
 for /f "usebackq delims=" %%U in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "$b=[IO.File]::ReadAllText('%NOTES%'); if($b.Length -gt 6000){$b=$b.Substring(0,6000)}; Write-Output ([Uri]::EscapeDataString($b))"`) do set "BODY=%%U"
 start "" "https://github.com/%REPO%/releases/new?tag=!TAG!&title=!TAG!&body=!BODY!"

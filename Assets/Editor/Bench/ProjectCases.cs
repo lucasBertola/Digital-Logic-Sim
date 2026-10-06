@@ -24,6 +24,8 @@ namespace DLS.Bench
             ("live project: a chip's new interface reaches the chips using it when it is SAVED (removed pin unwired, same-name pin kept, new pin shown, no star)", () => LiveInterfaceChange(projectDir)),
             ("live project: a parent with its own unsaved edits keeps them (and its star) when a chip it uses is saved with a new interface", () => LiveInterfaceDirtyParent(projectDir)),
             ("live project: RUN FAST takes the state over, runs, leaves on an edit or a chip switch, and gives the state back to the gates", () => LiveRunFast(projectDir)),
+            ("live project: automatic RUN FAST (not with an empty cache; a save completes the cache and it starts; back after an edit; not after the user's STOP FAST; a reopened project runs fast from its cache file)", () => LiveAutoFast(projectDir)),
+            ("Claude without a key: the key popup comes instead of the action (panel, quick bar, a message); CANCEL does nothing; SAVE keeps the key and runs the action; a key the API refuses (401) is forgotten", ApiKeyPrompt),
             ("live project: a wire from an input pin follows the input (open CPU, go into Registre8, toggle each input: the state the wire is drawn from follows)", () => LiveInputWires(projectDir)),
             ("live project: CREATE CHIP through the popup (selection cleared by the click, as in the app), then Ctrl+Z", () => LiveCreateChip(projectDir)),
             ("live project: the bottom bar's unsaved * does not serialize the chip every frame (it made ~60 GC/s on CPU_2, stopping the sim), shows an edit within its period, goes at once on save", () => LiveDirtyIndicator(projectDir)),
@@ -362,6 +364,131 @@ namespace DLS.Bench
             finally
             {
                 Close(p);
+                if (Directory.Exists(tmpDir)) Directory.Delete(tmpDir, true);
+            }
+        }
+
+        // User, 2026-10-06: wherever Claude is used, no ANTHROPIC_API_KEY -> a popup asks for the key instead
+        static string ApiKeyPrompt()
+        {
+            const string Env = "ANTHROPIC_API_KEY";
+            string envBefore = Environment.GetEnvironmentVariable(Env);
+            string tmp = Path.Combine(Path.GetTempPath(), "dls_key_" + Guid.NewGuid().ToString("N") + ".txt");
+            AskClaude.KeyPathOverrideForTests = tmp;
+            Environment.SetEnvironmentVariable(Env, null); // this process only
+            try
+            {
+                if (AskClaude.HasKey()) return "test setup: a key is still found";
+                bool ran = false;
+                DLS.Graphics.ApiKeyPopup.Require(() => ran = true);
+                if (ran) return "without a key the action ran";
+                if (DLS.Graphics.UIDrawer.ActiveMenu != DLS.Graphics.UIDrawer.MenuType.ApiKey) return "without a key the popup did not open";
+                DLS.Graphics.ApiKeyPopup.Cancel();
+                if (ran || File.Exists(tmp) || DLS.Graphics.UIDrawer.ActiveMenu != DLS.Graphics.UIDrawer.MenuType.None) return "CANCEL did something (ran the action, saved a key or left a menu open)";
+
+                // a message to Claude without a key: the popup, nothing sent
+                int before = AskClaude.Messages.Count;
+                AskClaude.Send("hello");
+                if (AskClaude.Waiting || AskClaude.Messages.Count != before) return "a message was sent (or failed) without a key instead of asking for it";
+                if (DLS.Graphics.UIDrawer.ActiveMenu != DLS.Graphics.UIDrawer.MenuType.ApiKey) return "a message without a key did not open the popup";
+                DLS.Graphics.ApiKeyPopup.Cancel();
+
+                DLS.Graphics.ApiKeyPopup.Require(() => ran = true);
+                DLS.Graphics.ApiKeyPopup.Confirm("  sk-ant-test  ");
+                if (!ran) return "SAVE did not run the action the popup was opened for";
+                if (!File.Exists(tmp) || File.ReadAllText(tmp) != "sk-ant-test") return "SAVE did not keep the key for the next times";
+                if (AskClaude.ApiKey != "sk-ant-test") return "the saved key is not the one used";
+                bool second = false;
+                DLS.Graphics.ApiKeyPopup.Require(() => second = true);
+                if (!second || DLS.Graphics.UIDrawer.ActiveMenu == DLS.Graphics.UIDrawer.MenuType.ApiKey) return "with the saved key the popup came again";
+
+                AskClaude.NotifyKeyRejected(500);
+                if (!File.Exists(tmp)) return "a server error forgot the key";
+                AskClaude.NotifyKeyRejected(401);
+                if (File.Exists(tmp)) return "a key refused by the API (401) was kept: it would never be asked again";
+
+                // the environment variable wins and is never deleted
+                Environment.SetEnvironmentVariable(Env, "sk-env");
+                File.WriteAllText(tmp, "sk-file");
+                if (AskClaude.ApiKey != "sk-env") return "the environment variable does not win over the saved key";
+                AskClaude.NotifyKeyRejected(401);
+                return File.Exists(tmp) ? null : "with the environment variable set, a 401 deleted the saved file";
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable(Env, envBefore);
+                AskClaude.KeyPathOverrideForTests = null;
+                DLS.Graphics.UIDrawer.SetActiveMenu(DLS.Graphics.UIDrawer.MenuType.None);
+                try { File.Delete(tmp); } catch { }
+            }
+        }
+
+        // User, 2026-10-06: fast mode starts by itself when everything it needs is cached; the cache is completed at a save
+        // and lives in the project (so a shipped project runs fast at once).
+        static string LiveAutoFast(string projectDir)
+        {
+            const string tmpName = "_BenchAutoFast";
+            string tmpDir = SavePaths.GetProjectPath(tmpName), cacheFile = Path.Combine(tmpDir, BundledProjects.FastCacheFileName);
+            if (Directory.Exists(tmpDir)) Directory.Delete(tmpDir, true);
+            CopyDir(projectDir, tmpDir);
+            if (File.Exists(cacheFile)) File.Delete(cacheFile);
+            Project p = Open(tmpDir, "CPU", tmpName);
+            try
+            {
+                if (!Pump(p, () => p.rootSimChip.Program != null && p.rootSimChip.Program.SettledAfterBuild, 5000)) return "CPU sim never settled";
+                p.RunAutoFastForTests();
+                if (p.FastModeActive) return "fast mode started by itself with an empty cache (it would compute truth tables unasked)";
+                if (File.Exists(cacheFile)) return "the automatic check computed and wrote a cache";
+
+                // a save completes the cache, then fast mode starts by itself
+                p.SaveFromDescription(DescriptionCreator.CreateChipDescription(p.ViewedChip));
+                p.RunAutoFastForTests();
+                if (!File.Exists(cacheFile)) return "saving the chip did not write the fast-mode cache";
+                if (!p.FastModeActive) return "after the save (cache complete) fast mode did not start by itself";
+                if (!string.IsNullOrEmpty(p.FastModeStatus)) return $"the automatic start set a status (a toast): \"{p.FastModeStatus}\"";
+                if (!Pump(p, () => p.rootSimChip.Program != null && p.rootSimChip.Program.StepsRun > 200, 5000)) return "the fast tree never ran";
+
+                // an edit leaves, it comes back once the edits pause
+                var extra = new DevPinInstance(new PinDescription("EXTRA", IDGenerator.GenerateNewElementID(p.ViewedChip), new UnityEngine.Vector2(-20, -20), PinBitCount.Bit1, PinColour.Red, PinValueDisplayMode.Off), true);
+                p.ViewedChip.AddNewDevPin(extra, false);
+                if (p.FastModeActive) return "an edit did not leave fast mode";
+                p.RunAutoFastForTests();
+                if (!p.FastModeActive) return "fast mode did not come back by itself after an edit";
+
+                // STOP FAST by the user: no automatic restart on that chip, until RUN FAST
+                p.StopFastModeByUser();
+                p.RunAutoFastForTests();
+                if (p.FastModeActive) return "fast mode restarted by itself after the user's STOP FAST";
+                p.ViewedChip.DeleteDevPin(extra);
+                p.RunAutoFastForTests();
+                if (p.FastModeActive) return "fast mode restarted by itself after an edit following the user's STOP FAST";
+                p.RunFastNowForTests();
+                if (!p.FastModeActive) return "RUN FAST did not start";
+
+                // a chip switch leaves; coming back, it starts by itself again
+                p.LoadDevChipOrCreateNewIfDoesntExist("Add4");
+                if (p.FastModeActive) return "switching chip did not leave fast mode";
+                p.LoadDevChipOrCreateNewIfDoesntExist("CPU");
+                p.RunAutoFastForTests();
+                if (!p.FastModeActive) return "coming back to CPU, fast mode did not start by itself";
+                p.SaveFromDescription(DescriptionCreator.CreateChipDescription(p.ViewedChip)); // without EXTRA: back to the saved fixture
+            }
+            finally { Close(p); }
+
+            // the project opened again (as a shipped project would be): fast at once, from the cache file alone
+            Project q = Open(tmpDir, "CPU", tmpName);
+            try
+            {
+                Pump(q, () => q.rootSimChip.Program != null && q.rootSimChip.Program.SettledAfterBuild, 5000);
+                DateTime written = File.GetLastWriteTimeUtc(cacheFile);
+                q.RunAutoFastForTests();
+                if (!q.FastModeActive) return "a reopened project with its cache file did not run fast by itself";
+                if (File.GetLastWriteTimeUtc(cacheFile) != written) return "the automatic start rewrote the cache (something was computed)";
+                return null;
+            }
+            finally
+            {
+                Close(q);
                 if (Directory.Exists(tmpDir)) Directory.Delete(tmpDir, true);
             }
         }

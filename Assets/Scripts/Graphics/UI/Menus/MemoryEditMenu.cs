@@ -51,7 +51,8 @@ namespace DLS.Graphics
 			attempts = 0;
 			lastJson = null;
 			message = null;
-			chip = ContextMenu.interactionContext as SubChipInstance;
+			chip = reopenChip ?? ContextMenu.interactionContext as SubChipInstance;
+			reopenChip = null;
 			Project project = Project.ActiveProject;
 			project?.StopFastMode(); // the memory edited is the gates
 			if (chip == null || project == null) { Fail("Nothing to edit."); return; }
@@ -109,10 +110,20 @@ namespace DLS.Graphics
 					}
 				}
 			}
+			// the analysis needs Claude: without a key, the key popup comes first and the editor reopens on this chip
+			// once it is saved (cancelled: nothing opens)
+			if (!AskClaude.HasKey())
+			{
+				SubChipInstance again = chip;
+				ApiKeyPopup.Require(() => { reopenChip = again; UIDrawer.SetActiveMenu(UIDrawer.MenuType.MemoryEdit); });
+				return;
+			}
 			phase = Phase.Analysing;
 			attempts = 1;
 			MemoryLayoutClaude.Start(chipDesc, project.chipLibrary, project.description.ProjectName, null, null);
 		}
+
+		static SubChipInstance reopenChip; // the chip to edit when the editor reopens after the key popup
 
 		static void Fail(string msg) { phase = Phase.Error; message = msg; }
 
@@ -628,6 +639,7 @@ namespace DLS.Graphics
 
 		public static void Reset()
 		{
+			reopenChip = null;
 			banks = new List<MemoryBank>();
 			texts = null;
 			changedAt = null;

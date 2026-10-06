@@ -134,6 +134,7 @@ you name). If a previous attempt was rejected, you are told why: fix exactly tha
 				{
 					State = Status.Failed;
 					Error = $"Claude request failed ({request.responseCode}): {Short(text)}";
+					AskClaude.NotifyKeyRejected(request.responseCode);
 					return;
 				}
 				JObject resp = JObject.Parse(text);

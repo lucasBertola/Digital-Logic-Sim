@@ -182,7 +182,7 @@ namespace DLS.Graphics
 				else if (i == OptionsButtonIndex) OpenPreferencesMenu();
 				else if (i == ExportButtonIndex) ExportForLLM();
 				else if (i == TruthTableButtonIndex) TruthTableView.Toggle();
-				else if (i == AskClaudeButtonIndex) AskClaudeMenu.Open();
+				else if (i == AskClaudeButtonIndex) ApiKeyPopup.Require(AskClaudeMenu.Open); // no key: asked first
 				else if (i == QuitButtonIndex) ExitToMainMenu();
 			}
 		}
@@ -647,16 +647,17 @@ namespace DLS.Graphics
 			UI.DrawText(label, theme.FontRegular, theme.FontSizeRegular, spin + Vector2.right * (spinnerW / 2f), Anchor.TextCentreLeft, Color.white);
 		}
 
-		// RUN FAST: a pill at the top while the chip runs fast (or is being prepared), and its status as a toast
+		// RUN FAST: a pill at the top only while fast mode is being prepared (user, 2026-10-06: no banner while it runs
+		// fast — it starts by itself now; right-click shows STOP FAST), and its status as a toast
 		static string lastFastStatus;
 		static void DrawFastModeIndicator()
 		{
 			Project p = Project.ActiveProject;
 			if (p == null) return;
 			if (p.FastModeStatus != lastFastStatus) { lastFastStatus = p.FastModeStatus; if (!string.IsNullOrEmpty(lastFastStatus)) ShowToast(lastFastStatus); }
-			if (!p.FastModeActive && !p.FastModePreparing) return;
+			if (!p.FastModePreparing && !p.FastCachePreparing) return;
 			DrawSettings.UIThemeDLS theme = DrawSettings.ActiveUITheme;
-			string label = p.FastModePreparing ? "Preparing fast mode..." : $"FAST MODE  ({p.FastModeModules} modules)  -  right-click > STOP FAST";
+			const string label = "Preparing fast mode...";
 			float w = Draw.CalculateTextBoundsSize(label, theme.FontSizeRegular, theme.FontRegular).x + 2f;
 			const float h = 2.2f;
 			Vector2 centre = new(UI.Width / 2f, UI.Height - 0.5f - h / 2f - (AskClaude.Waiting && !AskClaudeMenu.IsOpen ? h + 0.4f : 0));
@@ -724,7 +725,7 @@ namespace DLS.Graphics
 			{
 				// Space = Claude command bar (when the sim is paused, Space keeps stepping the simulation)
 				if (KeyboardShortcuts.QuickAskShortcutTriggered && UIDrawer.ActiveMenu == UIDrawer.MenuType.None && !Project.ActiveProject.simPaused
-				    && !Project.ActiveProject.CircuitUsesKey(SimKeyboardHelper.Space)) QuickAskBar.Open(); // a KEY on the space bar wins
+				    && !Project.ActiveProject.CircuitUsesKey(SimKeyboardHelper.Space)) ApiKeyPopup.Require(QuickAskBar.Open); // a KEY on the space bar wins
 				if (KeyboardShortcuts.CreateNewChipShortcutTriggered) CreateNewChip();
 				if (KeyboardShortcuts.SaveShortcutTriggered) SaveChip();
 				if (KeyboardShortcuts.LibraryShortcutTriggered) OpenLibraryMenu();

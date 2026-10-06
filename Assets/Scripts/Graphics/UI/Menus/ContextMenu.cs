@@ -185,7 +185,7 @@ namespace DLS.Graphics
 		{
 			new(Format("IN/OUT"), OpenInOutPopup, CanEditCurrentChip),
 			new(Format("CLEAN UP"), BottomBarUI.CleanUp, CanEditCurrentChip),
-			new(Format("ASK CLAUDE"), QuickAskBar.Open, CanEditCurrentChip),
+			new(Format("ASK CLAUDE"), () => ApiKeyPopup.Require(QuickAskBar.Open), CanEditCurrentChip),
 			new(() => Format(Project.ActiveProject != null && Project.ActiveProject.FastModeActive ? "STOP FAST" : "RUN FAST"), ToggleFastMode, () => Project.ActiveProject != null),
 			new(() => Format(Project.ActiveProject != null && Project.ActiveProject.SettleRecording ? "STOP STEPS RECORD" : "RECORD CLOCK STEPS NEEDED"), ToggleSettleRecord, () => Project.ActiveProject != null)
 		};
@@ -202,7 +202,7 @@ namespace DLS.Graphics
 		static void ToggleFastMode()
 		{
 			Project p = Project.ActiveProject;
-			if (p.FastModeActive) p.StopFastMode();
+			if (p.FastModeActive) p.StopFastModeByUser(); // no automatic restart on this chip until RUN FAST
 			else p.StartFastMode();
 		}
 

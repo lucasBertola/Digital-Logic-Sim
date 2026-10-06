@@ -27,6 +27,7 @@ namespace DLS.Bench
             }
             list.Add(("[PC] run fast: ALU8 is built from table models (its ALU4s), the CPU's clock is never inside a model", () => Decisions(lib, chips)));
             list.Add(("[PC] run fast: the CPU micro-program runs on the fast tree", () => CpuProgram(lib, chips)));
+            list.Add(("[PC] automatic run fast: an empty cache is not \"ready\"; after Prepare it is, Build then computes nothing and models exactly the count announced (ALU8, Registre8)", () => PrepareCovers(lib, chips)));
             list.Add(("[PC] run fast: sequential modules get a verified model (Registre8 register, PC counter, RAMs, Bascule D flip-flop)", () => Templates(lib, chips)));
             return list;
         }
@@ -120,6 +121,28 @@ namespace DLS.Bench
             SimChip cpu = FastRoot(chips.First(c => c.Name == "CPU"), lib, cpuInst);
             if (cpu.SubChips.All(s => s.ChipType != ChipType.Clock)) return "the CPU's CLOCK is missing from the fast tree";
             return cpuInst.Count == 0 ? "nothing modelled in the CPU" : null;
+        }
+
+        static string PrepareCovers(ChipLibrary lib, ChipDescription[] chips)
+        {
+            foreach (string name in new[] { "ALU8", "Registre8" })
+            {
+                ChipDescription d = chips.First(c => c.Name == name);
+                var cache = new FastCache(); // its own: the shared one may already hold everything
+                if (FastBuilder.CachedModels(d, lib, cache) != -1) return $"{name}: an empty cache counts as ready";
+                if (FastBuilder.IsDecided(d, lib, cache)) return $"{name}: decided in an empty cache";
+                FastBuilder.Prepare(d, lib, cache);
+                int announced = FastBuilder.CachedModels(d, lib, cache);
+                if (announced < 0) return $"{name}: still not ready after Prepare";
+                if (!FastBuilder.IsDecided(d, lib, cache)) return $"{name}: its own decision (as a module) is not in the cache after Prepare";
+                cache.Changed = false;
+                var inst = new List<FastBuilder.Instance>();
+                FastBuilder.Build(d, lib, cache, inst);
+                if (cache.Changed) return $"{name}: Build still computed decisions after Prepare";
+                if (inst.Count != announced) return $"{name}: {announced} models announced, Build made {inst.Count}";
+                if (announced == 0) return $"{name}: nothing modelled";
+            }
+            return null;
         }
 
         static string Templates(ChipLibrary lib, ChipDescription[] chips)

@@ -14,7 +14,24 @@ namespace DLS.Game
 	// deserialisation needs): per chip its structure hash and "none" / a table / a template spec.
 	public static class FastCacheFile
 	{
-		static string PathFor(string projectName) => Path.Combine(SavePaths.GetProjectPath(projectName), "FastModels.json");
+		static string PathFor(string projectName) => Path.Combine(SavePaths.GetProjectPath(projectName), BundledProjects.FastCacheFileName);
+
+		// Adds to the cache file `to` the chips of `from` it has no entry for (the projects shipped with a release:
+		// a local copy kept by the user receives the shipped decisions, its own entries are left alone)
+		public static void MergeMissing(string from, string to)
+		{
+			try
+			{
+				if (!File.Exists(from) || !Directory.Exists(Path.GetDirectoryName(to))) return;
+				JObject src = JObject.Parse(File.ReadAllText(from));
+				JObject dst = File.Exists(to) ? JObject.Parse(File.ReadAllText(to)) : new JObject();
+				bool changed = false;
+				foreach (JProperty p in src.Properties())
+					if (dst[p.Name] == null) { dst[p.Name] = p.Value.DeepClone(); changed = true; }
+				if (changed) File.WriteAllText(to, dst.ToString());
+			}
+			catch (Exception) { /* a cache: RUN FAST recomputes what is missing */ }
+		}
 
 		public static FastCache Load(string projectName)
 		{
@@ -25,6 +42,7 @@ namespace DLS.Game
 				if (File.Exists(path)) FromJson(File.ReadAllText(path), cache);
 			}
 			catch (Exception) { }
+			cache.Changed = false; // what was read is what the file holds: nothing to write back
 			return cache;
 		}
 

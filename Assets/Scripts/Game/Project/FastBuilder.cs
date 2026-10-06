@@ -57,6 +57,49 @@ namespace DLS.Game
 			return chip;
 		}
 
+		// Automatic RUN FAST: how many modules Build would model if every decision it needs is already in the cache,
+		// -1 when one is missing (Build would have to compute truth tables / verify templates: not done silently).
+		public static int CachedModels(ChipDescription root, ChipLibrary lib, FastCache cache)
+		{
+			var memo = new Dictionary<string, int>(ChipDescription.NameComparer); // per chip type: same answer for every instance
+			return CountCached(root, true, lib, cache, memo);
+		}
+
+		static int CountCached(ChipDescription d, bool isRoot, ChipLibrary lib, FastCache cache, Dictionary<string, int> memo)
+		{
+			if (d == null || d.ChipType != ChipType.Custom) return 0;
+			if (!isRoot && memo.TryGetValue(d.Name, out int memoized)) return memoized;
+			int total = 0;
+			bool known = true, none = true;
+			if (!isRoot) known = cache.TryGet(d.Name, MemoryLayout.StructureHash(d, lib), d, out _, out none);
+			if (!known) total = -1;
+			else if (!none) total = 1;
+			else
+			{
+				foreach (SubChipDescription s in d.SubChips ?? Array.Empty<SubChipDescription>())
+				{
+					int r = CountCached(lib.GetChipDescriptionForSim(s.Name), false, lib, cache, memo);
+					if (r < 0) { total = -1; break; }
+					total += r;
+				}
+			}
+			if (!isRoot) memo[d.Name] = total;
+			return total;
+		}
+
+		// the decision for the chip itself (as a module of its parents) is in the cache
+		public static bool IsDecided(ChipDescription d, ChipLibrary lib, FastCache cache) =>
+			d == null || d.ChipType != ChipType.Custom || cache.TryGet(d.Name, MemoryLayout.StructureHash(d, lib), d, out _, out _);
+
+		// Every decision a chip needs to run fast (as the viewed chip, and as a module of its parents) put in the cache:
+		// at a save (Project) and for the projects shipped with a release (BuildTools), so RUN FAST can start by itself.
+		public static void Prepare(ChipDescription d, ChipLibrary lib, FastCache cache)
+		{
+			if (d == null || d.ChipType != ChipType.Custom) return;
+			Build(d, lib, cache, new List<Instance>());
+			Decide(d, lib, cache);
+		}
+
 		static readonly HashSet<ChipType> LifeOfItsOwn = new()
 		{
 			ChipType.Clock, ChipType.Key, ChipType.Pulse, ChipType.Buzzer, ChipType.Rom_256x16, ChipType.dev_Ram_8Bit, ChipType.Ram65536,

@@ -42,6 +42,9 @@ namespace DLS.Bench
             ("bundled project: install / silent update / ask / do nothing decision table", BundledProjectDecision),
             ("display: an unconnected output shows 0 (no flicker), a disabled buffer still shows floating", DisplayOfUnconnected),
             ("bundled project: content hash ignores deleted chips, the conversation and markers", BundledProjectHash),
+            ("release zip for Mac / Linux: content read back intact, entries made by Unix, the executable 0755, other files 0644, folders 0755, DoNotShip left out", UnixZipKeepsPermissions),
+            ("release: the Claude conversation history and the Anthropic key never reach the bundle (root or subfolder), and are detected if planted in a build", ReleaseNeverShipsPrivateFiles),
+            ("bundled project: the fast-mode cache is shipped but not content (no KEEP / REPLACE question when it grows); a kept local copy receives the shipped entries it lacks, keeps its own", BundledFastCache),
         };
 
         // ---------------- helpers ----------------
@@ -623,6 +626,110 @@ namespace DLS.Bench
                 System.IO.File.WriteAllText(System.IO.Path.Combine(b, "Chips", "Y.json"), "{y}");
                 if (DLS.SaveSystem.BundledProjects.HashDirectory(b) == ha) return "an added chip did not change the hash";
                 return null;
+            }
+            finally { try { System.IO.Directory.Delete(root, true); } catch { } }
+        }
+
+        static string UnixZipKeepsPermissions()
+        {
+            string root = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "dls_unixzip_" + System.Guid.NewGuid().ToString("N"));
+            try
+            {
+                string src = System.IO.Path.Combine(root, "src"), zip = System.IO.Path.Combine(root, "out.zip");
+                System.IO.Directory.CreateDirectory(System.IO.Path.Combine(src, "App.app", "Contents", "MacOS"));
+                System.IO.Directory.CreateDirectory(System.IO.Path.Combine(src, "X_DoNotShip"));
+                var big = new byte[300000];
+                new System.Random(3).NextBytes(big);
+                System.IO.File.WriteAllBytes(System.IO.Path.Combine(src, "App.app", "Contents", "MacOS", "App"), big); // incompressible: stored
+                System.IO.File.WriteAllText(System.IO.Path.Combine(src, "App.app", "Contents", "Info.plist"), new string('x', 5000)); // deflated
+                System.IO.File.WriteAllText(System.IO.Path.Combine(src, "X_DoNotShip", "debug.txt"), "no");
+                System.IO.File.WriteAllBytes(System.IO.Path.Combine(src, "empty.txt"), new byte[0]);
+                UnixZip.Create(src, zip, "Pre/", rel => rel.Contains(".app/Contents/MacOS/"));
+
+                using (var za = System.IO.Compression.ZipFile.OpenRead(zip))
+                {
+                    var names = za.Entries.Select(e => e.FullName).ToList();
+                    if (names.Any(n => n.Contains("DoNotShip"))) return "a DoNotShip folder was zipped";
+                    var exe = za.GetEntry("Pre/App.app/Contents/MacOS/App");
+                    var plist = za.GetEntry("Pre/App.app/Contents/Info.plist");
+                    if (exe == null || plist == null || za.GetEntry("Pre/empty.txt") == null) return "missing entries: " + string.Join(", ", names);
+                    using (var ms = new System.IO.MemoryStream()) { exe.Open().CopyTo(ms); if (!ms.ToArray().SequenceEqual(big)) return "the executable's bytes differ"; }
+                    using (var r = new System.IO.StreamReader(plist.Open())) if (r.ReadToEnd() != new string('x', 5000)) return "a deflated file's content differs";
+                }
+                // central directory: made by Unix (3) and the mode in the high 16 bits of the external attributes
+                byte[] b = System.IO.File.ReadAllBytes(zip);
+                var modes = new Dictionary<string, (int host, uint mode)>();
+                int eocd = b.Length - 22;
+                if (BitConverter.ToUInt32(b, eocd) != 0x06054b50u) return "no end-of-central-directory record";
+                int count = BitConverter.ToUInt16(b, eocd + 10), at = (int)BitConverter.ToUInt32(b, eocd + 16);
+                for (int k = 0; k < count; k++)
+                {
+                    if (BitConverter.ToUInt32(b, at) != 0x02014b50u) return "broken central directory";
+                    int nameLen = BitConverter.ToUInt16(b, at + 28);
+                    modes[System.Text.Encoding.UTF8.GetString(b, at + 46, nameLen)] = (b[at + 5], BitConverter.ToUInt32(b, at + 38) >> 16);
+                    at += 46 + nameLen;
+                }
+                if (modes.Count == 0) return "no central directory entry found";
+                if (modes.Values.Any(m => m.host != 3)) return "an entry is not 'made by Unix': macOS / Linux would ignore its permissions";
+                if (modes["Pre/App.app/Contents/MacOS/App"].mode != 0x81EDu) return $"the executable's mode is {modes["Pre/App.app/Contents/MacOS/App"].mode:X} (expected 0755 file)";
+                if (modes["Pre/App.app/Contents/Info.plist"].mode != 0x81A4u) return "a plain file is not 0644";
+                if (modes["Pre/App.app/"].mode != 0x41EDu) return "a folder is not 0755";
+                return null;
+            }
+            finally { try { System.IO.Directory.Delete(root, true); } catch { } }
+        }
+
+        static string ReleaseNeverShipsPrivateFiles()
+        {
+            string root = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "dls_private_" + System.Guid.NewGuid().ToString("N"));
+            try
+            {
+                string src = System.IO.Path.Combine(root, "src"), dst = System.IO.Path.Combine(root, "dst");
+                System.IO.Directory.CreateDirectory(System.IO.Path.Combine(src, "Chips"));
+                System.IO.File.WriteAllText(System.IO.Path.Combine(src, "ProjectDescription.json"), "{p}");
+                System.IO.File.WriteAllText(System.IO.Path.Combine(src, "Chips", "X.json"), "{x}");
+                foreach (string dir in new[] { src, System.IO.Path.Combine(src, "Chips") })
+                {
+                    System.IO.File.WriteAllText(System.IO.Path.Combine(dir, DLS.SaveSystem.BundledProjects.ConversationFile), "[secret conversation]");
+                    System.IO.File.WriteAllText(System.IO.Path.Combine(dir, DLS.SaveSystem.BundledProjects.KeyFileName), "sk-secret");
+                }
+                if (DLS.SaveSystem.BundledProjects.PrivateFilesUnder(src).Count != 4) return "the 4 planted private files are not all detected";
+                BuildTools.CopyProject(src, dst);
+                if (!System.IO.File.Exists(System.IO.Path.Combine(dst, "Chips", "X.json"))) return "test setup: the project was not copied";
+                var leaked = DLS.SaveSystem.BundledProjects.PrivateFilesUnder(dst);
+                if (leaked.Count > 0) return "copied into the bundle: " + string.Join(", ", leaked);
+                if (DLS.SaveSystem.BundledProjects.IsContentFile(DLS.SaveSystem.BundledProjects.ConversationFile) || DLS.SaveSystem.BundledProjects.IsContentFile("Chips/" + DLS.SaveSystem.BundledProjects.KeyFileName)) return "a private file counts as project content";
+                string bat = System.IO.File.ReadAllText(System.IO.Path.Combine(BenchProject.RepoRoot, "publierRelease.bat"));
+                if (!bat.Contains("AskClaudeConversation.json") || !bat.Contains("anthropic_key.txt")) return "publierRelease.bat no longer checks the zipped folder for private files";
+                return null;
+            }
+            finally { try { System.IO.Directory.Delete(root, true); } catch { } }
+        }
+
+        static string BundledFastCache()
+        {
+            string root = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "dls_bundle_fast_" + System.Guid.NewGuid().ToString("N"));
+            try
+            {
+                string a = System.IO.Path.Combine(root, "A"), b = System.IO.Path.Combine(root, "B"), file = DLS.SaveSystem.BundledProjects.FastCacheFileName;
+                System.IO.Directory.CreateDirectory(a); System.IO.Directory.CreateDirectory(b);
+                System.IO.File.WriteAllText(System.IO.Path.Combine(a, "ProjectDescription.json"), "{p}");
+                System.IO.File.WriteAllText(System.IO.Path.Combine(b, "ProjectDescription.json"), "{p}");
+                System.IO.File.WriteAllText(System.IO.Path.Combine(b, file), "{\"X\":{\"hash\":\"h\",\"kind\":\"none\"}}");
+                if (DLS.SaveSystem.BundledProjects.HashDirectory(a) != DLS.SaveSystem.BundledProjects.HashDirectory(b)) return "the fast cache changes the content hash (a grown cache would look like a user modification)";
+                if (!DLS.SaveSystem.BundledProjects.IsContentFile(file)) return "the fast cache is not copied into the bundle / at install";
+                // merge: the bundle has X (other hash) and Y, the local copy has X
+                System.IO.File.WriteAllText(System.IO.Path.Combine(a, file), "{\"X\":{\"hash\":\"local\",\"kind\":\"none\"},\"Y\":{\"hash\":\"y\",\"kind\":\"none\"}}");
+                DLS.Game.FastCacheFile.MergeMissing(System.IO.Path.Combine(a, file), System.IO.Path.Combine(b, file));
+                var cache = new DLS.Game.FastCache();
+                DLS.Game.FastCacheFile.FromJson(System.IO.File.ReadAllText(System.IO.Path.Combine(b, file)), cache);
+                var e = cache.Entries.ToDictionary(x => x.name, x => x.hash);
+                if (!e.TryGetValue("Y", out string hy) || hy != "y") return "the shipped entry Y did not reach the local cache";
+                if (e["X"] != "h") return "the local entry X was overwritten by the shipped one";
+                // no local cache at all: it gets the shipped one
+                System.IO.File.Delete(System.IO.Path.Combine(b, file));
+                DLS.Game.FastCacheFile.MergeMissing(System.IO.Path.Combine(a, file), System.IO.Path.Combine(b, file));
+                return System.IO.File.Exists(System.IO.Path.Combine(b, file)) ? null : "a local copy without a cache did not get the shipped one";
             }
             finally { try { System.IO.Directory.Delete(root, true); } catch { } }
         }

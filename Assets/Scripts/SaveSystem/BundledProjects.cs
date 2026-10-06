@@ -73,6 +73,8 @@ namespace DLS.SaveSystem
 							toAsk.Add(new Pending { name = name, bundlePath = dir, bundleHash = bundleHash });
 							break;
 					}
+					// the shipped RUN FAST decisions reach a local copy that is kept too (its own entries win: they fit its chips)
+					if (Loader.ProjectExists(name)) DLS.Game.FastCacheFile.MergeMissing(Path.Combine(dir, FastCacheFileName), Path.Combine(localPath, FastCacheFileName));
 				}
 			}
 			catch (Exception e) { Debug.LogWarning("BundledProjects: " + e.Message); }
@@ -124,10 +126,24 @@ namespace DLS.SaveSystem
 		// (private, and not a circuit), markers, hashes, Unity .meta files.
 		public const string DeletedChipsFolder = "Deleted Chips";
 		public const string ConversationFile = "AskClaudeConversation.json";
+		public const string KeyFileName = "anthropic_key.txt"; // the Anthropic key typed in the app (AskClaude.KeyPath)
+
+		// Never in a release, wherever they are (user, 2026-10-06: the Claude conversation history must never ship;
+		// the key neither). BuildTools fails the build and publierRelease.bat refuses to zip if one is found.
+		public static bool IsPrivateFile(string fileName) => fileName == ConversationFile || fileName == KeyFileName;
+
+		public static List<string> PrivateFilesUnder(string root)
+		{
+			if (!Directory.Exists(root)) return new List<string>();
+			return Directory.GetFiles(root, "*", SearchOption.AllDirectories).Where(f => IsPrivateFile(Path.GetFileName(f))).ToList();
+		}
+		// RUN FAST decisions: shipped with the project, but a cache, not content: it grows whenever RUN FAST meets a new
+		// module, which must not make the local copy look "modified by the user" (KEEP / REPLACE question)
+		public const string FastCacheFileName = "FastModels.json";
 		public static bool IsContentFile(string relativePath)
 		{
 			string n = Path.GetFileName(relativePath);
-			if (n == MarkerFileName || n == HashFileName || n == ConversationFile || n.EndsWith(".meta") || n.StartsWith(".")) return false;
+			if (n == MarkerFileName || n == HashFileName || IsPrivateFile(n) || n.EndsWith(".meta") || n.StartsWith(".")) return false;
 			string p = relativePath.Replace('\\', '/');
 			return !p.StartsWith(DeletedChipsFolder + "/") && !p.Contains("/" + DeletedChipsFolder + "/");
 		}
@@ -137,7 +153,7 @@ namespace DLS.SaveSystem
 		{
 			using SHA1 sha = SHA1.Create();
 			var files = Directory.GetFiles(root, "*", SearchOption.AllDirectories)
-				.Where(f => IsContentFile(f.Substring(root.Length).TrimStart('\\', '/')))
+				.Where(f => IsContentFile(f.Substring(root.Length).TrimStart('\\', '/')) && Path.GetFileName(f) != FastCacheFileName)
 				.Select(f => f.Substring(root.Length).Replace('\\', '/').TrimStart('/'))
 				.OrderBy(f => f, StringComparer.Ordinal)
 				.ToList();

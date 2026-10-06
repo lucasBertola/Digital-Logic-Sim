@@ -52,6 +52,7 @@ namespace DLS.Game
 			project = args[i + 1];
 			chip = args[i + 2];
 			gates = args.Any(a => a.Equals("-ratetest-gates", StringComparison.OrdinalIgnoreCase));
+			Project.AutoFastDisabled = gates; // measuring the gates: no automatic RUN FAST
 		}
 
 		// called at the end of Main.Update, after the normal frame

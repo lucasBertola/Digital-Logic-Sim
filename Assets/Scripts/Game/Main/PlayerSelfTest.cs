@@ -464,6 +464,49 @@ namespace DLS.Game
 				FastBuilder.Build(c, lib, back, inst);
 				return inst.Count > 0 && back.Entries.Count() == cache.Entries.Count() ? null : $"cache round trip: {back.Entries.Count()} of {cache.Entries.Count()} entries, {inst.Count} models";
 			});
+			Check("automatic RUN FAST: an empty cache is not ready, Prepare makes the CPU ready from a cache file alone; the cache file is shipped but not hashed", () =>
+			{
+				lib.TryGetChipDescription("CPU", out ChipDescription c);
+				var cache = new FastCache();
+				if (FastBuilder.CachedModels(c, lib, cache) != -1) return "an empty cache counts as ready";
+				FastBuilder.Prepare(c, lib, cache);
+				var back = new FastCache();
+				FastCacheFile.FromJson(FastCacheFile.ToJson(cache), back);
+				int n = FastBuilder.CachedModels(c, lib, back);
+				if (n <= 0) return $"after Prepare and a file round trip: {n} models ready";
+				back.Changed = false;
+				var inst = new List<FastBuilder.Instance>();
+				FastBuilder.Build(c, lib, back, inst);
+				if (back.Changed || inst.Count != n) return $"Build after Prepare: computed {back.Changed}, {inst.Count} models for {n} announced";
+				if (!BundledProjects.IsContentFile(BundledProjects.FastCacheFileName)) return "the cache file is not shipped";
+				return null;
+			});
+			Check("Claude without a key: the key popup instead of the action, CANCEL does nothing, SAVE keeps the key and runs it", () =>
+			{
+				var menuBefore = DLS.Graphics.UIDrawer.ActiveMenu;
+				string tmp = Path.Combine(Application.temporaryCachePath, "selftest_key.txt");
+				AskClaude.KeyPathOverrideForTests = tmp;
+				AskClaude.IgnoreEnvForTests = true;
+				try
+				{
+					if (File.Exists(tmp)) File.Delete(tmp);
+					bool ran = false;
+					DLS.Graphics.ApiKeyPopup.Require(() => ran = true);
+					if (ran || DLS.Graphics.UIDrawer.ActiveMenu != DLS.Graphics.UIDrawer.MenuType.ApiKey) return "no popup without a key";
+					DLS.Graphics.ApiKeyPopup.Cancel();
+					if (ran || File.Exists(tmp)) return "CANCEL did something";
+					DLS.Graphics.ApiKeyPopup.Require(() => ran = true);
+					DLS.Graphics.ApiKeyPopup.Confirm("sk-ant-selftest");
+					return ran && AskClaude.ApiKey == "sk-ant-selftest" ? null : "SAVE did not keep the key / run the action";
+				}
+				finally
+				{
+					AskClaude.IgnoreEnvForTests = false;
+					AskClaude.KeyPathOverrideForTests = null;
+					DLS.Graphics.UIDrawer.SetActiveMenu(menuBefore);
+					try { File.Delete(tmp); } catch { }
+				}
+			});
 			report.AppendLine("      burst experiment: " + BurstBench.Run());
 			foreach (bool fastTree in new[] { false, true })
 			Check(fastTree ? "burst stepper = managed stepper in the built player (CPU RUN FAST tree: models in the kernel, every slot, 1500 steps)" : "burst stepper = managed stepper in the built player (CPU, every slot, 1500 steps)", () =>
