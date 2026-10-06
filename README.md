@@ -6,9 +6,27 @@ what the fork adds on top.
 
 ## What's new in this fork
 
-### Simulation core rewritten: about 46 000 times faster
+![CPU_2, the bundled project's 8-bit computer (RAM, output ports, ST7920 LCD), running a Tetris game](docs/cpu2.png)
 
-The 8-bit CPU of the bundled project, as it is actually used in the app — built-in clock, 70 steps per clock
+### Simulation core rewritten: up to 90 000 times faster
+
+`CPU_2`, the bundled project's current computer (8-bit CPU, 64 KB native RAM, ST7920 LCD, keyboard) running its
+snake game, 70 steps per clock tick, Max speed, same machine (measured 4 Oct 2026):
+
+| | steps per second | clock frequency | speed-up |
+|---|---|---|---|
+| original core | 1 390 | 9.9 Hz | |
+| this fork, gates | 3 700 000 to 4 000 000 | 26 to 29 kHz | × 2 750 |
+| this fork, RUN FAST | 122 000 000 to 133 000 000 | 870 to 950 kHz | **× 90 000** |
+
+The fork's numbers are the real built app (`runRateTest.bat`, screen drawn at 60 fps, the LCD following the game).
+The original core cannot load `CPU_2` as such (the native RAM and the LCD did not exist): it was measured in the
+editor with those two chips replaced by an empty chip with the same pins — its tree walker visits every chip at every
+step whatever they compute, so that does not change its cost, and the editor runs it faster than the built app would,
+so the factor is if anything understated. RUN FAST (right-click on empty space) runs the chip's modules by models of
+what they do; "gates" is the plain compiled simulation.
+
+The older `CPU` chip (RAM built from latches, measured 27 Sep 2026, before RUN FAST), as it is actually used in the app — built-in clock, 70 steps per clock
 tick, the control lines as saved in the chip so that every cycle does A = A + 1 and stores the value in RAM —
 same chip, same settings, same machine:
 
